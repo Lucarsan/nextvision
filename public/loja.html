@@ -18,10 +18,18 @@ function switchView(view){
 }
 document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
 $('logout').addEventListener('click',()=>{sessionStorage.removeItem('nv_token');location.replace('/')});
+const processPresets={
+ 'Pizzaria / delivery':['Pedido recebido','Em preparação','No forno','Embalagem','Saiu para entrega','Finalizado'],
+ 'Assistência técnica':['Recebimento','Diagnóstico','Reparo','Testes','Finalização'],
+ 'Lava-jato':['Recepção','Pré-lavagem','Lavagem','Secagem','Finalização'],
+ 'Pet shop':['Recepção','Banho','Secagem','Tosa','Pronto para retirada'],
+ 'Oficina':['Recepção','Diagnóstico','Serviço','Inspeção','Pronto para retirada']
+};
+const cap=s=>{s=String(s||'').trim();return s?s.charAt(0).toLocaleUpperCase('pt-BR')+s.slice(1):s};
 const notice=(message)=>'<p style="color:var(--nv-muted);font-size:13px">'+safe(message)+'</p>';
 function renderOrders(orders){
  const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
- return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(o.process)+' · '+safe(labels[o.status]||o.status)+'</p></div></div>').join('')||notice('Nenhum pedido cadastrado.');
+ return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div></div>').join('')||notice('Nenhum pedido cadastrado.');
 }
 async function loadSection(view){
  const box=$('sectionContent');box.innerHTML='<div class="nv-card">Carregando...</div>';
@@ -37,13 +45,19 @@ async function loadSection(view){
    box.innerHTML='<section class="nv-card"><h2>Câmeras cadastradas</h2>'+ (cameras.map(x=>'<div class="nv-order"><strong>'+safe(x.name)+'</strong><span class="nv-pill orange">'+safe(x.status||'Não configurada')+'</span></div>').join('')||notice('Nenhuma câmera cadastrada.'))+notice('Streaming e instalação remota ainda não disponíveis.')+'</section>';
   }else if(view==='processes'){
    const processes=await api('/processes');
-   box.innerHTML='<section class="nv-card"><h2>Processos</h2>'+(processes.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+p.steps.map(safe).join(' → ')+'</p></div></div>').join('')||notice('Nenhum processo cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar novos processos</a></p></section>';
+   box.innerHTML='<section class="nv-card"><h2>Cadastrar processo</h2><form id="processForm"><div class="nv-field"><label>Modelo predefinido</label><select id="processPreset"><option value="">Personalizado</option>'+Object.keys(processPresets).map(k=>'<option>'+safe(k)+'</option>').join('')+'</select></div><div class="nv-field"><label>Nome do processo</label><input name="name" required minlength="2" placeholder="Ex.: Montagem da pizza"></div><div class="nv-field"><label>Etapas separadas por vírgulas</label><textarea name="steps" rows="3" placeholder="Recebido, Preparação, Finalização" required></textarea></div><button class="nv-button">Salvar processo</button><p id="processStatus" role="status"></p></form></section><section class="nv-card"><h2>Processos cadastrados</h2>'+(processes.map(p=>'<div class="nv-order"><div><strong>'+safe(cap(p.name))+'</strong><p>'+p.steps.map(x=>safe(cap(x))).join(' → ')+'</p></div></div>').join('')||notice('Nenhum processo cadastrado.'))+'</section>';
+   $('processPreset').onchange=e=>{const v=e.target.value;if(processPresets[v]){$('processForm').elements.name.value=v;$('processForm').elements.steps.value=processPresets[v].join(', ')}};
+   $('processForm').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const name=cap(form.elements.name.value),steps=form.elements.steps.value.split(',').map(cap).filter(Boolean);if(!steps.length){$('processStatus').textContent='Informe uma etapa.';return;}try{await api('/processes','POST',{name,steps});await loadSection('processes');await reload()}catch(err){$('processStatus').textContent=err.message}};
+
   }else if(view==='customers'){
    const customers=await api('/customers');
-   box.innerHTML='<section class="nv-card"><h2>Clientes</h2>'+(customers.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+safe(p.phone||'Sem telefone')+'</p></div></div>').join('')||notice('Nenhum cliente cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar ou editar cliente</a></p></section>';
+   box.innerHTML='<section class="nv-card"><h2>Clientes</h2>'+(customers.map(p=>'<div class="nv-order"><div><strong>'+safe(cap(p.name))+'</strong><p>'+safe(p.phone||'Sem telefone')+'</p></div></div>').join('')||notice('Nenhum cliente cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar ou editar cliente</a></p></section>';
   }else if(view==='settings'){
    const settings=await api('/store/settings');
    box.innerHTML='<section class="nv-card"><h2>Configurações da loja</h2><form id="settingsForm"><div class="nv-field"><label>Nome da loja</label><input name="name" value="'+safe(settings.name)+'" required></div><div class="nv-field"><label>URL HTTPS do logo</label><input name="logo_url" value="'+safe(settings.logo_url||'')+'"></div><button class="nv-button">Salvar</button><p id="settingsStatus" role="status"></p></form><p><a href="/loja-legado.html">Abrir ferramentas adicionais da loja</a></p></section>';
+   const loyalty=await api('/store/loyalty');
+   box.insertAdjacentHTML('beforeend','<section class="nv-card"><h2>Programa de fidelidade</h2><p style="color:var(--nv-muted);font-size:13px">Opcional para clientes cadastrados. Pedidos rápidos não geram check-in.</p><form id="loyaltyForm"><label style="display:flex;gap:9px;align-items:center"><input name="enabled" type="checkbox" style="width:auto" '+(loyalty.loyalty_enabled?'checked':'')+'> Ativar fidelidade</label><div class="nv-field"><label>Check-ins necessários para a recompensa</label><input name="target" type="number" min="2" max="100" required value="'+Number(loyalty.loyalty_target||10)+'"></div><div class="nv-field"><label>Descrição da recompensa</label><textarea name="reward" rows="3" required maxlength="240">'+safe(loyalty.loyalty_reward||'')+'</textarea></div><button class="nv-button">Salvar fidelidade</button><p id="loyaltyStatus" role="status"></p></form></section>');
+   $('loyaltyForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/store/loyalty','PATCH',{loyalty_enabled:f.elements.enabled.checked,loyalty_target:Number(f.elements.target.value),loyalty_reward:f.elements.reward.value.trim()});$('loyaltyStatus').textContent='Programa de fidelidade atualizado.'}catch(err){$('loyaltyStatus').textContent=err.message}};
    $('settingsForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await api('/store/settings','PATCH',{name:String(fd.get('name')).trim(),logo_url:String(fd.get('logo_url')).trim()});$('settingsStatus').textContent='Configurações salvas';document.querySelector('.nv-profile span').textContent=String(fd.get('name'))}catch(err){$('settingsStatus').textContent=err.message}};
   }
  }catch(err){box.innerHTML='<div class="nv-card" role="alert">'+safe(err.message)+'</div>'}
@@ -66,7 +80,7 @@ async function reload(){
  const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
  const action=o.status==='queued'?'start':o.status==='paused'?'resume':o.status==='live'?(o.step_index>=o.steps.length-1?'complete':'advance'):null;
  const actionName={start:'Iniciar',resume:'Retomar',advance:'Próxima etapa',complete:'Concluir'};
- return '<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+' · '+safe(o.customer||o.process)+'</strong><p>'+safe(o.process)+' · '+safe(labels[o.status]||o.status)+'</p></div><div style="display:grid;gap:6px;justify-items:end"><span class="nv-pill '+(o.status==='completed'?'green':o.status==='queued'?'orange':'')+'">'+safe(labels[o.status]||o.status)+'</span>'+(action?'<button class="nv-button secondary" style="min-height:34px;padding:5px 10px;font-size:12px" data-order="'+safe(o.id)+'" data-action="'+action+'">'+actionName[action]+'</button>':'')+'</div></div>';
+ return '<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+' · '+safe(o.customer||o.process)+'</strong><p>'+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div><div style="display:grid;gap:6px;justify-items:end"><span class="nv-pill '+(o.status==='completed'?'green':o.status==='queued'?'orange':'')+'">'+safe(labels[o.status]||o.status)+'</span>'+(action?'<button class="nv-button secondary" style="min-height:34px;padding:5px 10px;font-size:12px" data-order="'+safe(o.id)+'" data-action="'+action+'">'+actionName[action]+'</button>':'')+'</div></div>';
  }).join(''):'<p style="color:var(--nv-muted)">Nenhum pedido cadastrado.</p>';
  $('quickProcess').innerHTML='<option value="">Acompanhamento rápido padrão</option>'+processes.map(p=>'<option value="'+safe(p.id)+'">'+safe(p.name)+'</option>').join('');
  document.querySelectorAll('[data-order]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/orders/'+b.dataset.order+'/transition','POST',{action:b.dataset.action});await reload()}catch(e){$('quickError').textContent=e.message;b.disabled=false}});

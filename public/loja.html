@@ -39,7 +39,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .cv{max-width:480px;margin:0 auto;padding:16px}
 @media(max-width:700px){.app{flex-direction:column}nav{width:100%;display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--bd);padding:8px}nav .brand{display:none}nav button{white-space:nowrap;width:auto}}
 </style></head><body>
-<div id="root"></div><div id="toast"></div>
+<div id="root"><div class="login card"><h2>Carregando NextVision...</h2></div></div><div id="toast"></div>
 <script>
 var S={logged:false,tab:'pedidos',client:null,
 loja:'Minha Loja',
@@ -156,7 +156,7 @@ function render(){
  var tabs=[['pedidos','Pedidos'],['processos','Processos'],['cameras','Câmeras'],['clientes','Clientes'],['financeiro','Financeiro'],['mensagens','Mensagens'],['suporte','Suporte']];
  var fn={pedidos:tabPedidos,processos:tabProcessos,cameras:tabCams,clientes:tabClientes,financeiro:tabFin,suporte:tabSup,mensagens:tabMsg}[S.tab];
  r.innerHTML='<div class="app"><nav><div class="brand"><span class="logo" style="width:30px;height:30px;font-size:14px;margin:0;border-radius:8px">▶</span>'+esc(S.loja)+'</div>'+tabs.map(function(t){return '<button class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'<button onclick="S.logged=false;render()">Sair</button></nav><main>'+fn()+'</main></div>'+modalHtml()}
-render();
+// A página é iniciada pelo adaptador após validar a sessão.
 </script><script>
 /* Adaptador NextVision: preserva a interface original e substitui dados simulados. */
 (function(){

@@ -174,11 +174,11 @@ S.faturas=[];S.cams=[];S.clientes=[];S.procs=[];S.pedidos=[];S.chamados=[];
 link=function(p){return linkMap[p.id]||null};
 wa=function(p){const url=link(p);if(!url)return '#';const c=cli(p.cliente);return zapUrl(c.whats||'', 'Acompanhe seu pedido: '+url);};
 let quickTrackingLink='';
-const copyQuickLink=async function(){
+window.copyQuickLink=async function(){
  if(!quickTrackingLink)return toast('Crie primeiro o pedido');
  try{await navigator.clipboard.writeText(quickTrackingLink);toast('Link copiado!')}catch(e){toast('Selecione o link exibido para copiar')}
 };
-const createQuickOrder=async function(){
+window.createQuickOrder=async function(){
  const input=document.getElementById('quickReference'),select=document.getElementById('quickProcess');
  const reference=input?.value.trim();if(!reference)return toast('Informe o número do pedido');
  const button=document.getElementById('quickCreate');if(button)button.disabled=true;

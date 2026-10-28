@@ -143,7 +143,14 @@ app.put('/api/orders/queue-order',auth,roles('owner','operator'),route(async(req
   await conn.query('COMMIT');res.json({ok:true});
  }catch(e){await conn.query('ROLLBACK');throw e}finally{conn.release()}
 }));
-app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.external_reference,o.source,o.queue_rank,o.share_code,c.name customer,p.id process_id,p.name process,p.steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 ORDER BY CASE WHEN o.status='queued' THEN 0 ELSE 1 END,COALESCE(o.queue_rank,9223372036854775807),o.created_at,o.id",[tid(req)])).rows)));
+app.delete('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Pedido inválido');
+ const r=await q("UPDATE orders SET deleted_at=now() WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND status IN ('queued','completed') RETURNING id",[req.params.id,tid(req)]);
+ if(!r.rowCount)return bad(res,409,'Pedido não encontrado ou em atendimento. Pause e finalize antes de excluir.');
+ await audit(req,'archive','order',req.params.id);
+ res.json({ok:true});
+}));
+app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.external_reference,o.source,o.queue_rank,o.share_code,c.name customer,p.id process_id,p.name process,p.steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY CASE WHEN o.status='queued' THEN 0 ELSE 1 END,COALESCE(o.queue_rank,9223372036854775807),o.created_at,o.id",[tid(req)])).rows)));
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({customer_id:uuid,process_id:uuid}),req,res);if(!v)return;const token=crypto.randomBytes(12).toString('base64url');const hash=crypto.createHash('sha256').update(token).digest('hex');const r=await q('INSERT INTO orders(tenant_id,customer_id,process_id,camera_id,public_token_hash) SELECT $1,$2,$3,(SELECT camera_id FROM processes WHERE id=$3 AND tenant_id=$1),$4 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1) RETURNING id,status',[tid(req),v.customer_id,v.process_id,hash]);if(!r.rowCount)return bad(res,400,'Cliente ou processo inválido');await audit(req,'create','order',r.rows[0].id);res.status(201).json({...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token});}));
 app.post('/api/orders/quick',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({reference:z.string().trim().min(1).max(70),process_id:uuid.optional().nullable()}),req,res);if(!v)return;
@@ -182,7 +189,7 @@ app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,lim
  const hash=crypto.createHash('sha256').update(req.params.token).digest('hex');
  const client=await db.connect();
  try{await client.query('BEGIN');
- const r=await client.query("SELECT o.tenant_id,o.customer_id,t.loyalty_target,t.loyalty_reward FROM orders o JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.customer_id IS NOT NULL AND t.loyalty_enabled=true AND t.status IN ('trial','active')",[hash,req.params.token]);
+ const r=await client.query("SELECT o.tenant_id,o.customer_id,t.loyalty_target,t.loyalty_reward FROM orders o JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.customer_id IS NOT NULL AND t.loyalty_enabled=true AND t.status IN ('trial','active') AND o.deleted_at IS NULL",[hash,req.params.token]);
  const o=r.rows[0];if(!o){await client.query('ROLLBACK');return bad(res,403,'Fidelidade não disponível para este pedido');}
  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[o.tenant_id+':'+o.customer_id]);
  const existing=await client.query("SELECT id FROM loyalty_redemptions WHERE tenant_id=$1 AND customer_id=$2 AND status='issued' LIMIT 1",[o.tenant_id,o.customer_id]);

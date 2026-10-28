@@ -1,11 +1,53 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f7f9fd"><title>NextVision Premium Flow — Prévia</title><link rel="stylesheet" href="/premium-flow.css?v=2"></head><body><div class="nv-shell">
-<aside class="nv-sidebar"><div class="nv-brand"><span class="nv-brandmark">◉</span> NextVision</div><nav class="nv-menu" aria-label="Navegação da prévia"><button class="active">▦ &nbsp;Visão geral</button><button>▤ &nbsp;Pedidos</button><button>≡ &nbsp;Filas</button><button>◉ &nbsp;Câmeras</button><button>◇ &nbsp;Processos</button><button>♙ &nbsp;Clientes</button><button>⚙ &nbsp;Configurações</button></nav><div class="nv-aside-note">Interface em validação. A versão anterior continua disponível em /loja.html.</div></aside>
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f7f9fd"><title>NextVision Premium Flow — Painel</title><link rel="stylesheet" href="/premium-flow.css?v=2"></head><body><div class="nv-shell">
+<aside class="nv-sidebar"><div class="nv-brand"><span class="nv-brandmark">◉</span> NextVision</div><nav class="nv-menu" aria-label="Navegação da painel"><button class="active" data-view="home">▦ &nbsp;Visão geral</button><button data-view="orders">▤ &nbsp;Pedidos</button><button data-view="queues">≡ &nbsp;Filas</button><button data-view="cameras">◉ &nbsp;Câmeras</button><button data-view="processes">◇ &nbsp;Processos</button><button data-view="customers">♙ &nbsp;Clientes</button><button data-view="settings">⚙ &nbsp;Configurações</button><button id="logout" type="button">Sair</button></nav><div class="nv-aside-note">Gerencie pedidos, etapas e clientes. As integrações de câmeras e filas avançadas estão em desenvolvimento.</div></aside>
 <main class="nv-main"><header class="nv-top"><div><div class="nv-eyebrow">Painel da loja · Premium Flow operacional</div><h1>Visão geral</h1></div><div class="nv-profile"><span>Sua loja</span><div class="nv-avatar">LD</div></div></header>
-<div class="nv-grid"><div class="nv-card"><div class="nv-card-label">Pedidos hoje</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Em andamento</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Na fila</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Finalizados</div><div class="nv-number">—</div></div></div>
+<div id="dashboardContent"><div class="nv-grid"><div class="nv-card"><div class="nv-card-label">Pedidos hoje</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Em andamento</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Na fila</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Finalizados</div><div class="nv-number">—</div></div></div>
 <div class="nv-twocol"><section class="nv-card"><div class="nv-heading"><h2>Pedidos recentes</h2><span class="nv-eyebrow">Dados reais</span></div><div class="nv-list" id="ordersList">Carregando pedidos…</div></section>
 <section class="nv-card"><div class="nv-heading"><h2>⚡ Pedido rápido</h2><span class="nv-pill">Sem cadastro</span></div><p style="color:var(--nv-muted);font-size:13px;line-height:1.5">Informe o número emitido pelo sistema da loja para gerar um link individual de acompanhamento.</p><div class="nv-field"><label for="reference">Número do pedido</label><input id="reference" maxlength="70" placeholder="Ex.: 1045" required autocomplete="off"></div><div class="nv-field"><label for="quickProcess">Processo</label><select id="quickProcess" style="width:100%;padding:12px;border:1px solid #dce5f0;border-radius:10px;background:white"><option value="">Acompanhamento rápido padrão</option></select></div><div class="nv-row"><button class="nv-button" id="createQuick">Gerar link</button><a class="nv-button secondary" href="/loja.html" style="text-decoration:none">Pedido completo</a></div><div id="quickResult" hidden style="margin-top:15px"><div class="nv-field"><label for="trackingLink">Link do cliente</label><input id="trackingLink" readonly></div><div class="nv-row"><button class="nv-button" id="copyLink">Copiar link</button><a class="nv-button secondary" id="waLink" href="#" target="_blank" rel="noopener" style="text-decoration:none">WhatsApp</a></div></div><p id="quickError" role="alert" style="color:#b42318;font-size:13px"></p></section></div>
-<div class="nv-twocol"><section class="nv-card"><div class="nv-heading"><h2>Estações e filas</h2><span class="nv-eyebrow">Filas por estação em desenvolvimento</span></div><p style="color:var(--nv-muted);font-size:13px">A configuração de estações e filas ainda não está disponível. Pedidos aguardando aparecem na lista acima.</p></section><section class="nv-card"><div class="nv-heading"><h2>Câmeras</h2><span class="nv-eyebrow">Integração futura</span></div><p style="font-size:14px;color:var(--nv-muted);line-height:1.6">Aqui ficarão os equipamentos vinculados às estações. A transmissão de vídeo ainda depende da integração segura com as câmeras.</p></section></div><div class="nv-footer">NextVision · Premium Flow · Prévia de identidade visual. Dados de pedidos obtidos da API da loja.</div></main></div><nav class="nv-phone-nav" aria-label="Navegação demonstrativa"><button class="active">▦<div>Início</div></button><button>▤<div>Pedidos</div></button><button>≡<div>Filas</div></button><button>◉<div>Câmeras</div></button><button>☰<div>Mais</div></button></nav><script>
+<div class="nv-twocol"><section class="nv-card"><div class="nv-heading"><h2>Estações e filas</h2><span class="nv-eyebrow">Acompanhamento por status</span></div><p style="color:var(--nv-muted);font-size:13px">As filas por estação ainda estão em desenvolvimento. Pedidos aguardando podem ser gerenciados na aba Pedidos.</p></section><section class="nv-card"><div class="nv-heading"><h2>Câmeras</h2><span class="nv-eyebrow">Integração futura</span></div><p style="font-size:14px;color:var(--nv-muted);line-height:1.6">Aqui ficarão os equipamentos vinculados às estações. A transmissão de vídeo ainda depende da integração segura com as câmeras.</p></section></div></div><section id="sectionContent" hidden></section><div class="nv-footer">NextVision · Premium Flow · Painel de identidade visual. Dados operacionais reais; vídeo e filas por estação ainda não disponíveis.</div></main></div><nav class="nv-phone-nav" aria-label="Navegação mobile"><button class="active" data-view="home">▦<div>Início</div></button><button data-view="orders">▤<div>Pedidos</div></button><button data-view="queues">≡<div>Filas</div></button><button data-view="cameras">◉<div>Câmeras</div></button><button data-view="settings">☰<div>Mais</div></button></nav><script>
 const token=sessionStorage.getItem('nv_token');
+let activeView='home';
+function switchView(view){
+ activeView=view;
+ document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+ $('dashboardContent').hidden=view!=='home';$('sectionContent').hidden=view==='home';
+ const names={home:'Visão geral',orders:'Pedidos',queues:'Filas',cameras:'Câmeras',processes:'Processos',customers:'Clientes',settings:'Configurações'};
+ document.querySelector('.nv-top h1').textContent=names[view]||'Visão geral';
+ if(view!=='home')void loadSection(view);
+}
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
+$('logout').addEventListener('click',()=>{sessionStorage.removeItem('nv_token');location.replace('/')});
+const notice=(message)=>'<p style="color:var(--nv-muted);font-size:13px">'+safe(message)+'</p>';
+function renderOrders(orders){
+ const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
+ return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(o.process)+' · '+safe(labels[o.status]||o.status)+'</p></div></div>').join('')||notice('Nenhum pedido cadastrado.');
+}
+async function loadSection(view){
+ const box=$('sectionContent');box.innerHTML='<div class="nv-card">Carregando...</div>';
+ try{
+  if(view==='orders'){
+   const orders=await api('/orders');
+   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div>'+renderOrders(orders)+'</section>';
+  }else if(view==='queues'){
+   const orders=await api('/orders');
+   box.innerHTML='<section class="nv-card"><h2>Pedidos aguardando</h2>'+renderOrders(orders.filter(o=>o.status==='queued'))+notice('Organização por estação e capacidade ainda em desenvolvimento.')+'</section>';
+  }else if(view==='cameras'){
+   const cameras=await api('/cameras');
+   box.innerHTML='<section class="nv-card"><h2>Câmeras cadastradas</h2>'+ (cameras.map(x=>'<div class="nv-order"><strong>'+safe(x.name)+'</strong><span class="nv-pill orange">'+safe(x.status||'Não configurada')+'</span></div>').join('')||notice('Nenhuma câmera cadastrada.'))+notice('Streaming e instalação remota ainda não disponíveis.')+'</section>';
+  }else if(view==='processes'){
+   const processes=await api('/processes');
+   box.innerHTML='<section class="nv-card"><h2>Processos</h2>'+(processes.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+p.steps.map(safe).join(' → ')+'</p></div></div>').join('')||notice('Nenhum processo cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar novos processos</a></p></section>';
+  }else if(view==='customers'){
+   const customers=await api('/customers');
+   box.innerHTML='<section class="nv-card"><h2>Clientes</h2>'+(customers.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+safe(p.phone||'Sem telefone')+'</p></div></div>').join('')||notice('Nenhum cliente cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar ou editar cliente</a></p></section>';
+  }else if(view==='settings'){
+   const settings=await api('/store/settings');
+   box.innerHTML='<section class="nv-card"><h2>Configurações da loja</h2><form id="settingsForm"><div class="nv-field"><label>Nome da loja</label><input name="name" value="'+safe(settings.name)+'" required></div><div class="nv-field"><label>URL HTTPS do logo</label><input name="logo_url" value="'+safe(settings.logo_url||'')+'"></div><button class="nv-button">Salvar</button><p id="settingsStatus" role="status"></p></form><p><a href="/loja-legado.html">Abrir ferramentas adicionais da loja</a></p></section>';
+   $('settingsForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await api('/store/settings','PATCH',{name:String(fd.get('name')).trim(),logo_url:String(fd.get('logo_url')).trim()});$('settingsStatus').textContent='Configurações salvas';document.querySelector('.nv-profile span').textContent=String(fd.get('name'))}catch(err){$('settingsStatus').textContent=err.message}};
+  }
+ }catch(err){box.innerHTML='<div class="nv-card" role="alert">'+safe(err.message)+'</div>'}
+}
+
 const $=id=>document.getElementById(id);
 const safe=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 async function api(path,method='GET',body){

@@ -155,7 +155,7 @@ function render(){
  if(S.client){r.innerHTML=clientView();return}
  var tabs=[['pedidos','Pedidos'],['processos','Processos'],['cameras','Câmeras'],['clientes','Clientes'],['financeiro','Financeiro'],['mensagens','Mensagens'],['suporte','Suporte'],['configuracoes','Configurações']];
  var fn={pedidos:tabPedidos,processos:tabProcessos,cameras:tabCams,clientes:tabClientes,financeiro:tabFin,suporte:tabSup,mensagens:tabMsg,configuracoes:tabSettings}[S.tab];
- r.innerHTML='<div class="app"><nav><div class="brand"><span class="logo" style="width:30px;height:30px;font-size:14px;margin:0;border-radius:8px">▶</span>'+esc(S.loja)+'</div>'+tabs.map(function(t){return '<button class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'<button onclick="S.logged=false;render()">Sair</button></nav><main>'+fn()+'</main></div>'+modalHtml()}
+ r.innerHTML='<div class="app"><nav><div class="brand"><span class="logo" style="width:30px;height:30px;font-size:14px;margin:0;border-radius:8px">▶</span>'+esc(S.loja)+'</div>'+tabs.map(function(t){return '<button class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'<button style="background:#eaf2ff;color:#1d4ed8;font-weight:700" onclick="location.href=\'/loja-preview.html?v=2\'">✦ Novo painel Premium Flow</button><button onclick="S.logged=false;render()">Sair</button></nav><main>'+fn()+'</main></div>'+modalHtml()}
 // A página é iniciada pelo adaptador após validar a sessão.
 </script><script>
 /* Adaptador NextVision: preserva a interface original e substitui dados simulados. */

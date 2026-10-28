@@ -1,278 +1,81 @@
-<!DOCTYPE html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Rastreio ao vivo – Painel da loja</title>
-<style>
-:root{color-scheme:light;--bg:#f5f7fa;--card:#fff;--tx:#1b2430;--mut:#6b7788;--bd:#e3e8ef;--pr:#2563eb;--ok:#16a34a;--er:#dc2626;--wa:#25d366;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
-body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-button,input,select,textarea{font:inherit}
-.btn{background:var(--pr);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
-.btn.s{background:#fff;color:var(--tx);border:1px solid var(--bd)}.btn.r{background:var(--er)}.btn.w{background:var(--wa);color:#073b1c}.btn.sm{padding:5px 10px;font-size:13px}
-input,select,textarea{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;width:100%;background:#fff;color:var(--tx)}
-label{display:block;font-size:13px;color:var(--mut);margin:8px 0 3px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:14px}
-h2{margin:0 0 12px;font-size:20px}h3{margin:0 0 8px;font-size:16px}
-.login{max-width:360px;margin:12vh auto;padding:0 16px}
-.logo{width:56px;height:56px;border-radius:14px;background:var(--pr);color:#fff;display:grid;place-items:center;font-size:26px;margin-bottom:12px}
-.app{display:flex;min-height:100vh}
-nav{width:200px;background:#fff;border-right:1px solid var(--bd);padding:14px 10px;flex-shrink:0}
-nav .brand{font-weight:700;margin:0 8px 14px;display:flex;gap:8px;align-items:center}
-nav button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--tx)}
-nav button.on{background:#e8f0fe;color:var(--pr);font-weight:600}
-main{flex:1;padding:18px;max-width:900px;min-width:0}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.sp{justify-content:space-between}
-.tag{font-size:12px;border-radius:99px;padding:2px 9px;background:#eef2f7;color:var(--mut)}
-.tag.ok{background:#dcfce7;color:#166534}.tag.er{background:#fee2e2;color:#991b1b}.tag.live{background:#fee2e2;color:#b91c1c;font-weight:700}.tag.cur{background:#dbeafe;color:#1d4ed8;font-weight:700}
-.feed{background:repeating-linear-gradient(90deg,#27303d 0 30px,#2d3746 30px 60px);animation:mv 2s linear infinite}@keyframes mv{to{background-position:60px 0}}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}.grid .card{margin:0}
-.alert{background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px;margin-bottom:14px}
-.tl{list-style:none;margin:0;padding:0}.tl li{border-left:3px solid var(--bd);padding:0 0 14px 14px;position:relative;margin-left:6px}
-.tl li:before{content:"";position:absolute;left:-8px;top:2px;width:13px;height:13px;border-radius:50%;background:#fff;border:3px solid var(--bd)}
-.tl li.done{border-color:var(--ok)}.tl li.done:before{border-color:var(--ok);background:var(--ok)}
-.tl li.cur{border-color:var(--pr)}.tl li.cur:before{border-color:var(--pr)}
-.vid{margin-top:6px;border-radius:10px;background:#1b2430;color:#cbd5e1;height:90px;display:grid;place-items:center;font-size:13px;position:relative;max-width:300px}
-.vid.live{background:#3b1d1d}.vid span{position:absolute;top:6px;left:8px}
-table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd)}th{color:var(--mut);font-weight:500}
-.wrap{overflow-x:auto}
-#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#1b2430;color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:90vw}
-.cv{max-width:480px;margin:0 auto;padding:16px}
-@media(max-width:700px){.app{flex-direction:column}nav{width:100%;display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--bd);padding:8px}nav .brand{display:none}nav button{white-space:nowrap;width:auto}}
-@media(max-width:700px){main{padding:12px;max-width:none}nav{gap:4px;overflow-x:auto;scrollbar-width:thin}nav button{padding:11px 13px;min-height:44px} .card{padding:14px;border-radius:12px} .grid{grid-template-columns:1fr} .row{align-items:stretch} .row .btn,.row button{min-height:42px} input,select,textarea{min-height:44px;font-size:16px} .wrap{overflow-x:auto} .cv{padding:10px} h2{font-size:19px}}\n</style></head><body>
-<div id="root"><div class="login card"><h2>Carregando NextVision...</h2></div></div><div id="toast"></div>
-<script>
-var S={logged:false,tab:'pedidos',client:null,
-loja:'Minha Loja',
-procs:[
-{id:1,nome:'Troca de tela',subs:['Desmontagem do aparelho','Inspeção','Limpeza','Troca','Finalização']},
-{id:2,nome:'Montagem da pizza',subs:['Forno','Embalagem']}],
-cams:[{id:1,nome:'Bancada 1',on:true},{id:2,nome:'Forno',on:true}],
-clientes:[{nome:'Maria Souza',email:'maria@email.com',whats:'85999990000',end:'Rua das Flores, 100'}],
-pedidos:[{id:'A1B2C3',cliente:'Maria Souza',proc:1,passo:2,fim:false}],
-faturas:[{mes:'Nov/2026',valor:149,st:'falhou'},{mes:'Out/2026',valor:149,st:'paga'},{mes:'Set/2026',valor:149,st:'paga'}],
-cartao:'Visa final 4417',
-chamados:[],nc:false,modal:null,
-msgs:[{id:'avanco',nome:'Etapa avançada',txt:'Olá {cliente}! Seu pedido ({processo}) avançou para a etapa: {etapa}. Acompanhe ao vivo: {link}'},
-{id:'volta',nome:'Etapa revertida',txt:'Olá {cliente}, fizemos um ajuste no seu pedido e voltamos para a etapa: {etapa}. Acompanhe: {link}'},
-{id:'entrega',nome:'Saiu para entrega',txt:'Olá {cliente}! Seu pedido saiu para entrega. Acompanhe o trajeto: {link}'},
-{id:'final',nome:'Pedido finalizado',txt:'Olá {cliente}! Seu pedido está finalizado. Obrigado por escolher a {loja}! Detalhes: {link}'}]};
-var PRESETS={'Assistência':[{nome:'Troca de bateria',subs:['Desmontagem','Troca','Teste','Finalização']},{nome:'Reparo de placa',subs:['Diagnóstico','Microsoldagem','Teste','Finalização']}],
-'Pizzaria':[{nome:'Entrega',subs:['Embalagem','Saída','Entrega ao cliente']}],
-'Lava-jato':[{nome:'Lavagem completa',subs:['Pré-lavagem','Lavagem','Secagem','Enceramento']}]};
-function $(h){return h}
-function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-function toast(m){var t=document.getElementById('toast');t.textContent=m;t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(function(){t.style.display='none'},3200)}
-function proc(id){return S.procs.find(function(p){return p.id==id})}
-function link(p){return 'https://rastreio.app/p/'+p.id}
-function wa(p){var c=S.clientes.find(function(x){return x.nome==p.cliente});var n=c?c.whats:'';return 'https://wa.me/'+n+'?text='+encodeURIComponent('Olá '+p.cliente+'! Acompanhe seu pedido ao vivo: '+link(p))}
-function go(t){S.tab=t;S.client=null;render()}
-function cli(n){return S.clientes.find(function(x){return x.nome==n})||{}}
-function ped(id){return S.pedidos.find(function(x){return x.id==id})}
-function fill(t,p,et){var pr=proc(p.proc);return t.replace(/\{cliente\}/g,p.cliente).replace(/\{processo\}/g,pr?pr.nome:'').replace(/\{etapa\}/g,et).replace(/\{link\}/g,link(p)).replace(/\{loja\}/g,S.loja)}
-function zapUrl(n,t){return 'https://wa.me/'+n+'?text='+encodeURIComponent(t)}
-function tplTxt(id){return S.msgs.find(function(m){return m.id==id}).txt}
-function ncForm(){return '<div style="border-top:1px solid var(--bd);margin-top:8px;padding-top:8px"><h3>Cadastrar cliente</h3><div class="row"><div style="flex:1;min-width:160px"><label>Nome</label><input id="nn"></div><div style="flex:1;min-width:160px"><label>WhatsApp</label><input id="nw" placeholder="85999990000"></div></div><div class="row"><div style="flex:1;min-width:160px"><label>E-mail</label><input id="ne"></div><div style="flex:1;min-width:160px"><label>Endereço de entrega</label><input id="nd"></div></div><p class="row"><button class="btn" onclick="saveNC()">Salvar cliente</button><button class="btn s" onclick="S.nc=false;render()">Cancelar</button></p></div>'}
-function saveNC(){var n=document.getElementById('nn').value.trim();if(!n)return toast('Informe o nome');S.clientes.push({nome:n,email:document.getElementById('ne').value.trim(),whats:document.getElementById('nw').value.replace(/\D/g,''),end:document.getElementById('nd').value.trim()});S.nc=false;toast('Cliente cadastrado');render()}
-function tabPedidos(){
- var h='<h2>Pedidos</h2><div class="card"><h3>Novo pedido</h3><div class="row"><div style="flex:1;min-width:160px"><label>Cliente</label><select id="npc">'+S.clientes.map(function(c){return '<option>'+esc(c.nome)+'</option>'}).join('')+'</select></div><div style="flex:1;min-width:160px"><label>Processo</label><select id="npp">'+S.procs.map(function(p){return '<option value="'+p.id+'">'+esc(p.nome)+'</option>'}).join('')+'</select></div></div><p class="row"><button class="btn" onclick="novoPed()">Criar pedido</button><button class="btn s" onclick="S.nc=!S.nc;render()">+ Cadastrar cliente</button></p>'+(S.nc?ncForm():'')+'</div>';
- S.pedidos.forEach(function(p){var pr=proc(p.proc);if(!pr)return;var atual=p.fim?'Finalizado':pr.subs[p.passo];
- h+='<div class="card"><div class="row sp"><b>#'+p.id+' · '+esc(p.cliente)+'</b><span class="tag '+(p.fim?'ok':'cur')+'">'+esc(atual)+'</span></div><div style="color:var(--mut);margin:4px 0 8px">'+esc(pr.nome)+' · etapa '+(p.fim?pr.subs.length:p.passo+1)+' de '+pr.subs.length+'</div><div class="row" style="margin-bottom:10px">'+pr.subs.map(function(s,i){var c=p.fim||i<p.passo?'ok':(i==p.passo?'cur':'');return '<span class="tag '+c+'">'+(c=='ok'?'✓ ':(i+1)+'. ')+esc(s)+'</span>'}).join('')+'</div><div class="row"><button class="btn s sm" '+((p.passo==0&&!p.fim)?'disabled style="opacity:.4"':'')+' onclick="abre(\''+p.id+'\',-1)">← Voltar etapa</button>'+(p.fim?'':'<button class="btn sm" onclick="abre(\''+p.id+'\',1)">'+(p.passo==pr.subs.length-1?'Finalizar':'Avançar etapa →')+'</button>')+'<button class="btn s sm" onclick="S.client=\''+p.id+'\';render()">Ver como cliente</button><a class="btn w sm" style="text-decoration:none" target="_blank" href="'+wa(p)+'">WhatsApp</a></div></div>'});
- return h}
-function abre(id,d){var p=ped(id),pr=proc(p.proc),last=pr.subs.length-1,et,t;if(d>0){if(p.passo>=last){et='Finalizado';t='final'}else{et=pr.subs[p.passo+1];t='avanco'}}else{if(p.passo==0&&!p.fim)return;et=pr.subs[p.fim?last:p.passo-1];t='volta'}S.modal={id:id,d:d,tpl:t,et:et,email:true,txt:fill(tplTxt(t),p,et)};render()}
-function mTpl(v){var m=S.modal;m.tpl=v;m.txt=fill(tplTxt(v),ped(m.id),m.et);render()}
-function confirma(zap){var m=S.modal,p=ped(m.id),last=proc(p.proc).subs.length-1;if(m.d>0){if(p.passo>=last)p.fim=true;else p.passo++}else{if(p.fim)p.fim=false;else p.passo--}if(zap)window.open(zapUrl(cli(p.cliente).whats||'',m.txt),'_blank');S.modal=null;toast('Etapa atualizada.'+(m.email?' E-mail automático enviado ao cliente.':''));render()}
-function modalHtml(){var m=S.modal;if(!m)return '';var p=ped(m.id);return '<div style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:grid;place-items:center;z-index:8;padding:16px"><div class="card" style="max-width:480px;width:100%;max-height:90vh;overflow:auto;margin:0"><h2>Avisar o cliente</h2><div style="color:var(--mut);margin-bottom:6px">'+esc(p.cliente)+' · nova etapa: <b>'+esc(m.et)+'</b></div><label>Mensagem pré-cadastrada</label><select onchange="mTpl(this.value)">'+S.msgs.map(function(x){return '<option value="'+x.id+'"'+(x.id==m.tpl?' selected':'')+'>'+esc(x.nome)+'</option>'}).join('')+'</select><label>Texto (editável)</label><textarea rows="5" oninput="S.modal.txt=this.value">'+esc(m.txt)+'</textarea><label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" style="width:auto" '+(m.email?'checked':'')+' onchange="S.modal.email=this.checked"> Enviar também por e-mail automático ('+esc(cli(p.cliente).email||'sem e-mail')+')</label><p class="row"><button class="btn w" onclick="confirma(true)">Confirmar e abrir WhatsApp</button><button class="btn" onclick="confirma(false)">Só confirmar</button><button class="btn s" onclick="S.modal=null;render()">Cancelar</button></p></div></div>'}
-function tabMsg(){var h='<h2>Mensagens</h2><div class="card" style="color:var(--mut);font-size:13px">Mensagens usadas no WhatsApp e no e-mail automático. Variáveis: {cliente} {processo} {etapa} {link} {loja}. Você pode editar o texto na hora de enviar.</div>';S.msgs.forEach(function(m,i){h+='<div class="card"><input value="'+esc(m.nome)+'" oninput="S.msgs['+i+'].nome=this.value" style="font-weight:600;margin-bottom:6px"><textarea rows="3" oninput="S.msgs['+i+'].txt=this.value">'+esc(m.txt)+'</textarea></div>'});return h+'<p class="row"><button class="btn s" onclick="S.msgs.push({id:\'c\'+Date.now(),nome:\'Nova mensagem\',txt:\'\'});render()">+ Nova mensagem</button><button class="btn" onclick="toast(\'Mensagens salvas\')">Salvar</button></p>'}
-function tabCams(){
- var h='<h2>Câmeras</h2><div class="card"><div class="row"><input id="cn" placeholder="Nome da câmera (ex.: Bancada 2)" style="flex:1;min-width:180px"><button class="btn" onclick="addCam()">+ Adicionar câmera</button></div></div><div class="grid">';
- S.cams.forEach(function(c){h+='<div class="card"><div class="vid '+(c.on?'feed':'')+'" style="height:140px;max-width:none;'+(c.on?'':'background:#e5e9f0;color:#6b7788')+'"><span>'+(c.on?'● AO VIVO':'desligada')+'</span>'+(c.on?'transmitindo agora':'câmera desligada')+'</div><div class="row sp" style="margin-top:10px"><b>'+esc(c.nome)+'</b><div class="row"><button class="btn s sm" onclick="togCam('+c.id+')">'+(c.on?'Desligar':'Ligar')+'</button><button class="btn r sm" onclick="delCam('+c.id+')">Remover</button></div></div></div>'});
- return h+'</div>'}
-
-function login(){return '<div class="login card"><div class="logo">▶</div><h2>Entrar na sua loja</h2><label>E-mail</label><input id="em" value="loja@exemplo.com"><label>Senha</label><input id="pw" type="password" value="123456"><p><button class="btn" style="width:100%" onclick="S.logged=true;render()">Entrar</button></p><p style="color:var(--mut);font-size:13px;text-align:center">Cada loja tem seu ambiente próprio.</p></div>'}
-
-function tabPedidosOld(){
- var h='';
- S.pedidos.forEach(function(p){var pr=proc(p.proc);if(!pr)return;var atual=p.fim?'Finalizado':pr.subs[p.passo];
- h+='<div class="card"><div class="row sp"><b>#'+p.id+' · '+esc(p.cliente)+'</b><span class="tag '+(p.fim?'ok':'')+'">'+esc(atual)+'</span></div><div style="color:var(--mut);margin:4px 0 10px">'+esc(pr.nome)+' · etapa '+(p.fim?pr.subs.length:p.passo+1)+' de '+pr.subs.length+'</div><div class="row">'+(p.fim?'':'<button class="btn sm" onclick="avanca(\''+p.id+'\')">'+(p.passo==pr.subs.length-1?'Finalizar e enviar e-mail':'Avançar etapa')+'</button>')+'<button class="btn s sm" onclick="S.client=\''+p.id+'\';render()">Ver como cliente</button><a class="btn w sm" style="text-decoration:none" target="_blank" href="'+wa(p)+'">WhatsApp</a></div></div>'});
- return h}
-function novoPed(){var n=document.getElementById('npc').value,pid=+document.getElementById('npp').value;if(!n)return toast('Cadastre um cliente primeiro');var id=Math.random().toString(36).slice(2,8).toUpperCase();S.pedidos.unshift({id:id,cliente:n,proc:pid,passo:0,fim:false});toast('Pedido criado. Link enviado ao cliente por WhatsApp.');render()}
-function avancaOld(id){var p=S.pedidos.find(function(x){return x.id==id}),pr=proc(p.proc);if(p.passo>=pr.subs.length-1){p.fim=true;toast('Finalizado. E-mail automático com os detalhes enviado ao cliente.')}else{p.passo++;toast('Etapa avançada. Cliente notificado.')}render()}
-
-function tabProcessos(){
- var h='<h2>Processos</h2><div class="card"><h3>Cadastrar processo</h3><label>Nome do processo</label><input id="pn" placeholder="Ex.: Troca de tela, Montagem da pizza"><label>Subprocessos (separe por vírgula, na ordem)</label><textarea id="ps" rows="2" placeholder="Desmontagem, Inspeção, Limpeza, Troca, Finalização"></textarea><p class="row"><button class="btn" onclick="addProc()">Salvar processo</button></p><div style="color:var(--mut);font-size:13px">Modelos prontos: '+Object.keys(PRESETS).map(function(k){return '<button class="btn s sm" onclick="preset(\''+k+'\')">+ '+k+'</button>'}).join(' ')+'</div></div>';
- S.procs.forEach(function(p){h+='<div class="card"><div class="row sp"><b>'+esc(p.nome)+'</b><button class="btn s sm" onclick="delProc('+p.id+')">Remover</button></div><div class="row" style="margin-top:8px">'+p.subs.map(function(s,i){return '<span class="tag">'+(i+1)+'. '+esc(s)+'</span>'}).join('')+'</div></div>'});
- return h}
-function addProc(){var n=document.getElementById('pn').value.trim(),s=document.getElementById('ps').value.split(',').map(function(x){return x.trim()}).filter(Boolean);if(!n||!s.length)return toast('Informe o nome e ao menos um subprocesso');S.procs.push({id:Date.now(),nome:n,subs:s});render()}
-function preset(k){PRESETS[k].forEach(function(p){S.procs.push({id:Date.now()+Math.random(),nome:p.nome,subs:p.subs.slice()})});render()}
-function delProc(id){S.procs=S.procs.filter(function(p){return p.id!=id});render()}
-
-function tabCamsOld(){
- var h='';
- S.cams.forEach(function(c){h+='<div class="card row sp"><div><b>'+esc(c.nome)+'</b> <span class="tag '+(c.on?'live':'')+'">'+(c.on?'● ao vivo':'desligada')+'</span><div style="color:var(--mut);font-size:13px">Grava cada etapa e transmite em tempo real</div></div><div class="row"><button class="btn s sm" onclick="togCam('+c.id+')">'+(c.on?'Desligar':'Ligar')+'</button><button class="btn r sm" onclick="delCam('+c.id+')">Remover</button></div></div>'});
- return h}
-function addCam(){var n=document.getElementById('cn').value.trim()||'Câmera '+(S.cams.length+1);S.cams.push({id:Date.now(),nome:n,on:true});render()}
-function togCam(id){var c=S.cams.find(function(x){return x.id==id});c.on=!c.on;render()}
-function delCam(id){S.cams=S.cams.filter(function(x){return x.id!=id});render()}
-
-function tabClientes(){
- var h='<h2>Clientes</h2><div class="card"><h3>Importar planilha</h3><p style="color:var(--mut);margin:0 0 8px;font-size:13px">Colunas: nome, e-mail, whatsapp, endereço de entrega (CSV, separado por vírgula ou ponto e vírgula)</p><input type="file" id="fi" accept=".csv,.txt" onchange="lerArq(this)"><label>ou cole aqui</label><textarea id="ci" rows="3" placeholder="João Lima, joao@email.com, 85988887777, Av. Beira Mar 500"></textarea><p><button class="btn" onclick="imp(document.getElementById(\'ci\').value)">Importar</button></p></div><div class="card wrap"><table><tr><th>Nome</th><th>E-mail</th><th>WhatsApp</th><th>Endereço</th></tr>';
- S.clientes.forEach(function(c){h+='<tr><td>'+esc(c.nome)+'</td><td>'+esc(c.email)+'</td><td>'+(c.whats?'<a href="'+zapUrl(c.whats,'Olá '+c.nome+'!')+'" target="_blank" style="color:#15803d;font-weight:600">'+esc(c.whats)+'</a>':'')+'</td><td>'+esc(c.end)+'</td></tr>'});
- return h+'</table></div>'}
-function lerArq(i){var f=i.files[0];if(!f)return;var r=new FileReader();r.onload=function(){imp(r.result)};r.readAsText(f)}
-function imp(t){var n=0;t.split(/\r?\n/).forEach(function(l,i){var p=l.split(/[;,]/).map(function(x){return x.trim()});if(p.length<2||!p[0]||(i==0&&/nome/i.test(p[0])))return;S.clientes.push({nome:p[0],email:p[1]||'',whats:(p[2]||'').replace(/\D/g,''),end:p.slice(3).join(', ')});n++});toast(n+' cliente(s) importado(s)');render()}
-
-function tabFin(){
- var falha=S.faturas.some(function(f){return f.st=='falhou'});
- var h='<h2>Financeiro</h2>';
- if(falha)h+='<div class="alert"><b>A cobrança recorrente falhou.</b> Não conseguimos cobrar a mensalidade no cartão atual ('+esc(S.cartao)+'). Pague a fatura abaixo ou cadastre outra forma de pagamento para evitar a suspensão.<p class="row" style="margin:8px 0 0"><button class="btn sm" onclick="novoCartao()">Adicionar forma de pagamento</button></p></div>';
- h+='<div class="card row sp"><div><h3 style="margin:0">Forma de pagamento</h3><span style="color:var(--mut)">'+esc(S.cartao)+'</span></div><button class="btn s sm" onclick="novoCartao()">Trocar</button></div>';
- h+='<div class="card wrap"><h3>Faturas</h3><table><tr><th>Mês</th><th>Valor</th><th>Status</th><th></th></tr>';
- S.faturas.forEach(function(f,i){h+='<tr><td>'+f.mes+'</td><td>R$ '+f.valor+',00</td><td><span class="tag '+(f.st=='paga'?'ok':'er')+'">'+(f.st=='paga'?'Paga':'Em aberto')+'</span></td><td>'+(f.st=='paga'?'<button class="btn s sm" onclick="toast(\'Recibo baixado\')">Recibo</button>':'<button class="btn sm" onclick="pagar('+i+')">Pagar agora</button>')+'</td></tr>'});
- return h+'</table></div>'}
-function pagar(i){S.faturas[i].st='paga';toast('Pagamento confirmado');render()}
-function novoCartao(){var c=prompt('Final do novo cartão (4 dígitos):');if(c&&/^\d{4}$/.test(c)){S.cartao='Cartão final '+c;toast('Forma de pagamento atualizada. Nova tentativa de cobrança agendada.');render()}else if(c)toast('Informe 4 dígitos')}
-
-function tabSup(){
- var h='<h2>Suporte</h2><div class="card"><h3>Abrir chamado</h3><label>Assunto</label><input id="sa"><label>Descrição</label><textarea id="sd" rows="3"></textarea><p class="row"><button class="btn" onclick="chamado()">Enviar</button><a class="btn w" style="text-decoration:none" target="_blank" href="https://wa.me/5585000000000">Falar no WhatsApp</a></p></div>';
- S.chamados.forEach(function(c){h+='<div class="card row sp"><b>'+esc(c)+'</b><span class="tag">Aberto</span></div>'});
- return h}
-function chamado(){var a=document.getElementById('sa').value.trim();if(!a)return toast('Informe o assunto');S.chamados.unshift(a);toast('Chamado aberto');render()}
-
-function clientView(){
- var p=S.pedidos.find(function(x){return x.id==S.client}),pr=proc(p.proc);
- var h='<div class="cv"><button class="btn s sm" onclick="S.client=null;render()">← Voltar ao painel</button><div class="card" style="margin-top:12px"><div class="row" style="margin-bottom:8px"><div class="logo" style="margin:0;width:40px;height:40px;font-size:18px">▶</div><div><b>'+esc(S.loja)+'</b><div style="color:var(--mut);font-size:13px">Pedido #'+p.id+'</div></div></div><h2 style="margin-bottom:2px">'+esc(pr.nome)+'</h2><div style="color:var(--mut);margin-bottom:14px">Olá, '+esc(p.cliente)+'! Acompanhe cada etapa abaixo.</div><ul class="tl">';
- pr.subs.forEach(function(s,i){var st=p.fim||i<p.passo?'done':(i==p.passo?'cur':'');
- h+='<li class="'+st+'"><b>'+esc(s)+'</b> '+(st=='done'?'<span class="tag ok">concluída</span>':st=='cur'?'<span class="tag live">● ao vivo</span>':'<span class="tag">aguardando</span>');
- if(st=='done')h+='<div class="vid"><span>▶ Gravação da etapa</span>assistir de novo</div>';
- if(st=='cur')h+='<div class="vid live"><span>● AO VIVO</span>transmitindo agora</div>';
- h+='</li>'});
- h+='</ul>'+(p.fim?'<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0">Pedido finalizado! Enviamos os detalhes para o seu e-mail.</div>':'')+'<div class="row"><a class="btn w" style="text-decoration:none" target="_blank" href="'+wa(p)+'">Compartilhar no WhatsApp</a><button class="btn s" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+link(p)+'\');toast(\'Link copiado\')">Copiar link</button></div><div style="color:var(--mut);font-size:12px;margin-top:8px">'+link(p)+'</div></div></div>';
- return h}
-
-function render(){
- var r=document.getElementById('root');
- if(!S.logged){r.innerHTML=login();return}
- if(S.client){r.innerHTML=clientView();return}
- var tabs=[['pedidos','Pedidos'],['processos','Processos'],['cameras','Câmeras'],['clientes','Clientes'],['financeiro','Financeiro'],['mensagens','Mensagens'],['suporte','Suporte'],['configuracoes','Configurações']];
- var fn={pedidos:tabPedidos,processos:tabProcessos,cameras:tabCams,clientes:tabClientes,financeiro:tabFin,suporte:tabSup,mensagens:tabMsg,configuracoes:tabSettings}[S.tab];
- r.innerHTML='<div class="app"><nav><div class="brand"><span class="logo" style="width:30px;height:30px;font-size:14px;margin:0;border-radius:8px">▶</span>'+esc(S.loja)+'</div>'+tabs.map(function(t){return '<button class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'<button style="background:#eaf2ff;color:#1d4ed8;font-weight:700" onclick="location.href=\'/loja-preview.html?v=2\'">✦ Novo painel Premium Flow</button><button onclick="S.logged=false;render()">Sair</button></nav><main>'+fn()+'</main></div>'+modalHtml()}
-// A página é iniciada pelo adaptador após validar a sessão.
-</script><script>
-/* Adaptador NextVision: preserva a interface original e substitui dados simulados. */
-(function(){
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f7f9fd"><title>NextVision | Painel da loja</title><link rel="stylesheet" href="/premium-flow.css?v=3"></head><body><div class="nv-shell">
+<aside class="nv-sidebar"><div class="nv-brand"><span class="nv-brandmark">◉</span> NextVision</div><nav class="nv-menu" aria-label="Navegação da painel"><button class="active" data-view="home">▦ &nbsp;Visão geral</button><button data-view="orders">▤ &nbsp;Pedidos</button><button data-view="queues">≡ &nbsp;Filas</button><button data-view="cameras">◉ &nbsp;Câmeras</button><button data-view="processes">◇ &nbsp;Processos</button><button data-view="customers">♙ &nbsp;Clientes</button><button data-view="settings">⚙ &nbsp;Configurações</button><button id="logout" type="button">Sair</button></nav><div class="nv-aside-note">Gerencie pedidos, etapas e clientes. As integrações de câmeras e filas avançadas estão em desenvolvimento.</div></aside>
+<main class="nv-main"><header class="nv-top"><div><div class="nv-eyebrow">Painel da loja · Premium Flow operacional</div><h1>Visão geral</h1></div><div class="nv-profile"><span>Sua loja</span><div class="nv-avatar">LD</div></div></header>
+<div id="dashboardContent"><div class="nv-grid"><div class="nv-card"><div class="nv-card-label">Pedidos hoje</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Em andamento</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Na fila</div><div class="nv-number">—</div></div><div class="nv-card"><div class="nv-card-label">Finalizados</div><div class="nv-number">—</div></div></div>
+<div class="nv-twocol"><section class="nv-card"><div class="nv-heading"><h2>Pedidos recentes</h2><span class="nv-eyebrow">Dados reais</span></div><div class="nv-list" id="ordersList">Carregando pedidos…</div></section>
+<section class="nv-card"><div class="nv-heading"><h2>⚡ Pedido rápido</h2><span class="nv-pill">Sem cadastro</span></div><p style="color:var(--nv-muted);font-size:13px;line-height:1.5">Informe o número emitido pelo sistema da loja para gerar um link individual de acompanhamento.</p><div class="nv-field"><label for="reference">Número do pedido</label><input id="reference" maxlength="70" placeholder="Ex.: 1045" required autocomplete="off"></div><div class="nv-field"><label for="quickProcess">Processo</label><select id="quickProcess" style="width:100%;padding:12px;border:1px solid #dce5f0;border-radius:10px;background:white"><option value="">Acompanhamento rápido padrão</option></select></div><div class="nv-row"><button class="nv-button" id="createQuick">Gerar link</button><a class="nv-button secondary" href="/loja.html" style="text-decoration:none">Pedido completo</a></div><div id="quickResult" hidden style="margin-top:15px"><div class="nv-field"><label for="trackingLink">Link do cliente</label><input id="trackingLink" readonly></div><div class="nv-row"><button class="nv-button" id="copyLink">Copiar link</button><a class="nv-button secondary" id="waLink" href="#" target="_blank" rel="noopener" style="text-decoration:none">WhatsApp</a></div></div><p id="quickError" role="alert" style="color:#b42318;font-size:13px"></p></section></div>
+<div class="nv-twocol"><section class="nv-card"><div class="nv-heading"><h2>Estações e filas</h2><span class="nv-eyebrow">Acompanhamento por status</span></div><p style="color:var(--nv-muted);font-size:13px">As filas por estação ainda estão em desenvolvimento. Pedidos aguardando podem ser gerenciados na aba Pedidos.</p></section><section class="nv-card"><div class="nv-heading"><h2>Câmeras</h2><span class="nv-eyebrow">Integração futura</span></div><p style="font-size:14px;color:var(--nv-muted);line-height:1.6">Aqui ficarão os equipamentos vinculados às estações. A transmissão de vídeo ainda depende da integração segura com as câmeras.</p></section></div></div><section id="sectionContent" hidden></section><div class="nv-footer">NextVision · Premium Flow · Painel de identidade visual. Dados operacionais reais; vídeo e filas por estação ainda não disponíveis.</div></main></div><nav class="nv-phone-nav" aria-label="Navegação mobile"><button class="active" data-view="home">▦<div>Início</div></button><button data-view="orders">▤<div>Pedidos</div></button><button data-view="queues">≡<div>Filas</div></button><button data-view="cameras">◉<div>Câmeras</div></button><button data-view="settings">☰<div>Mais</div></button></nav><script>
 const token=sessionStorage.getItem('nv_token');
-let user=null, linkMap={};
-const call=async(path,method='GET',body)=>{
- const r=await fetch('/api'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
- const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Falha na operação');return data;
-};
-const error=e=>toast(e.message||'Falha no servidor');
-const initialRender=render;
-S.logged=true;
-S.loja='Minha Loja';
-S.faturas=[];S.cams=[];S.clientes=[];S.procs=[];S.pedidos=[];S.chamados=[];
-link=function(p){return linkMap[p.id]||null};
-wa=function(p){const url=link(p);if(!url)return '#';const c=cli(p.cliente);return zapUrl(c.whats||'', 'Acompanhe seu pedido: '+url);};
-let quickTrackingLink='';
-window.copyQuickLink=async function(){
- if(!quickTrackingLink)return toast('Crie primeiro o pedido');
- try{await navigator.clipboard.writeText(quickTrackingLink);toast('Link copiado!')}catch(e){toast('Selecione o link exibido para copiar')}
-};
-window.createQuickOrder=async function(){
- const input=document.getElementById('quickReference'),select=document.getElementById('quickProcess');
- const reference=input?.value.trim();if(!reference)return toast('Informe o número do pedido');
- const button=document.getElementById('quickCreate');if(button)button.disabled=true;
+let activeView='home';
+function switchView(view){
+ activeView=view;
+ document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+ $('dashboardContent').hidden=view!=='home';$('sectionContent').hidden=view==='home';
+ const names={home:'Visão geral',orders:'Pedidos',queues:'Filas',cameras:'Câmeras',processes:'Processos',customers:'Clientes',settings:'Configurações'};
+ document.querySelector('.nv-top h1').textContent=names[view]||'Visão geral';
+ if(view!=='home')void loadSection(view);
+}
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
+$('logout').addEventListener('click',()=>{sessionStorage.removeItem('nv_token');location.replace('/')});
+const notice=(message)=>'<p style="color:var(--nv-muted);font-size:13px">'+safe(message)+'</p>';
+function renderOrders(orders){
+ const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
+ return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(o.process)+' · '+safe(labels[o.status]||o.status)+'</p></div></div>').join('')||notice('Nenhum pedido cadastrado.');
+}
+async function loadSection(view){
+ const box=$('sectionContent');box.innerHTML='<div class="nv-card">Carregando...</div>';
  try{
-  const result=await call('/orders/quick','POST',{reference,process_id:select?.value||null});
-  quickTrackingLink=result.tracking_url;
-  linkMap[result.id]=result.tracking_url;
-  await reload();
-  toast('Pedido rápido criado. Copie o link para compartilhar.');
- }catch(e){error(e)}finally{const b=document.getElementById('quickCreate');if(b)b.disabled=false}
-};
-const originalPedidos=tabPedidos;
-tabPedidos=function(){
- let html=originalPedidos();
- const options=S.procs.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.nome)+'</option>').join('');
- const quick='<div class="card" style="border-color:#bfdbfe;background:#f8fbff"><div class="row sp"><h3>⚡ Pedido rápido</h3><span class="tag">Sem cadastro de cliente</span></div><p style="color:var(--mut);margin-top:0">Informe o número do pedido emitido pelo sistema da loja e gere um link de acompanhamento.</p><div class="row"><div style="flex:1;min-width:170px"><label>Número do pedido</label><input id="quickReference" maxlength="70" placeholder="Ex.: 1042" autocomplete="off"></div><div style="flex:1;min-width:170px"><label>Processo (opcional)</label><select id="quickProcess"><option value="">Acompanhamento rápido padrão</option>'+options+'</select></div></div><p class="row"><button class="btn" id="quickCreate" onclick="createQuickOrder()">Gerar link rápido</button></p>'+(quickTrackingLink?'<div class="card" style="background:#fff;margin-bottom:0"><b>Link gerado</b><input aria-label="Link público para compartilhar" readonly value="'+esc(quickTrackingLink)+'" onclick="this.select()"><p class="row"><button class="btn" onclick="copyQuickLink()">Copiar link</button><a class="btn w" style="text-decoration:none" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent('Acompanhe seu pedido: '+quickTrackingLink)+'">Compartilhar no WhatsApp</a></p></div>':'')+'</div>';
- return html.replace('<h2>Pedidos</h2>','<h2>Pedidos</h2>'+quick).replaceAll('href="#"','href="#" onclick="event.preventDefault();toast(\'Link indisponível nesta sessão\')"');
-};
+  if(view==='orders'){
+   const orders=await api('/orders');
+   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div>'+renderOrders(orders)+'</section>';
+  }else if(view==='queues'){
+   const orders=await api('/orders');
+   box.innerHTML='<section class="nv-card"><h2>Pedidos aguardando</h2>'+renderOrders(orders.filter(o=>o.status==='queued'))+notice('Organização por estação e capacidade ainda em desenvolvimento.')+'</section>';
+  }else if(view==='cameras'){
+   const cameras=await api('/cameras');
+   box.innerHTML='<section class="nv-card"><h2>Câmeras cadastradas</h2>'+ (cameras.map(x=>'<div class="nv-order"><strong>'+safe(x.name)+'</strong><span class="nv-pill orange">'+safe(x.status||'Não configurada')+'</span></div>').join('')||notice('Nenhuma câmera cadastrada.'))+notice('Streaming e instalação remota ainda não disponíveis.')+'</section>';
+  }else if(view==='processes'){
+   const processes=await api('/processes');
+   box.innerHTML='<section class="nv-card"><h2>Processos</h2>'+(processes.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+p.steps.map(safe).join(' → ')+'</p></div></div>').join('')||notice('Nenhum processo cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar novos processos</a></p></section>';
+  }else if(view==='customers'){
+   const customers=await api('/customers');
+   box.innerHTML='<section class="nv-card"><h2>Clientes</h2>'+(customers.map(p=>'<div class="nv-order"><div><strong>'+safe(p.name)+'</strong><p>'+safe(p.phone||'Sem telefone')+'</p></div></div>').join('')||notice('Nenhum cliente cadastrado.'))+'<p><a href="/loja-legado.html">Cadastrar ou editar cliente</a></p></section>';
+  }else if(view==='settings'){
+   const settings=await api('/store/settings');
+   box.innerHTML='<section class="nv-card"><h2>Configurações da loja</h2><form id="settingsForm"><div class="nv-field"><label>Nome da loja</label><input name="name" value="'+safe(settings.name)+'" required></div><div class="nv-field"><label>URL HTTPS do logo</label><input name="logo_url" value="'+safe(settings.logo_url||'')+'"></div><button class="nv-button">Salvar</button><p id="settingsStatus" role="status"></p></form><p><a href="/loja-legado.html">Abrir ferramentas adicionais da loja</a></p></section>';
+   $('settingsForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await api('/store/settings','PATCH',{name:String(fd.get('name')).trim(),logo_url:String(fd.get('logo_url')).trim()});$('settingsStatus').textContent='Configurações salvas';document.querySelector('.nv-profile span').textContent=String(fd.get('name'))}catch(err){$('settingsStatus').textContent=err.message}};
+  }
+ }catch(err){box.innerHTML='<div class="nv-card" role="alert">'+safe(err.message)+'</div>'}
+}
+
+const $=id=>document.getElementById(id);
+const safe=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+async function api(path,method='GET',body){
+ const r=await fetch('/api'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,cache:'no-store'});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||'Falha na operação');return j;
+}
+function stats(orders){
+ const today=new Date().toDateString();const counts=[orders.filter(o=>new Date(o.created_at).toDateString()===today).length,orders.filter(o=>o.status==='live').length,orders.filter(o=>o.status==='queued').length,orders.filter(o=>o.status==='completed').length];
+ document.querySelectorAll('.nv-number').forEach((el,i)=>el.textContent=String(counts[i]??0).padStart(2,'0'));
+}
 async function reload(){
- try{
- const [customers,processes,cameras,orders]=await Promise.all([call('/customers'),call('/processes'),call('/cameras'),call('/orders')]);
- S.clientes=customers.map(c=>({id:c.id,nome:c.name,email:c.email||'',whats:c.phone||'',end:c.address||''}));
- S.procs=processes.map(p=>({id:p.id,nome:p.name,subs:p.steps}));
- S.cams=cameras.map(c=>({id:c.id,nome:c.name,on:false,status:c.status}));
- S.pedidos=orders.map(o=>({id:o.id,cliente:o.customer||('Pedido '+(o.external_reference||o.id.slice(0,8))),proc:o.process_id||processes.find(p=>p.name===o.process)?.id,passo:o.step_index,fim:o.status==='completed',status:o.status,cam:o.camera_id}));
- S.modal=null;render();
- }catch(e){error(e)}
+ const [orders,processes]=await Promise.all([api('/orders'),api('/processes')]);
+ stats(orders);
+ $('ordersList').innerHTML=orders.length?orders.slice(0,12).map(o=>{
+ const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
+ const action=o.status==='queued'?'start':o.status==='paused'?'resume':o.status==='live'?(o.step_index>=o.steps.length-1?'complete':'advance'):null;
+ const actionName={start:'Iniciar',resume:'Retomar',advance:'Próxima etapa',complete:'Concluir'};
+ return '<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+' · '+safe(o.customer||o.process)+'</strong><p>'+safe(o.process)+' · '+safe(labels[o.status]||o.status)+'</p></div><div style="display:grid;gap:6px;justify-items:end"><span class="nv-pill '+(o.status==='completed'?'green':o.status==='queued'?'orange':'')+'">'+safe(labels[o.status]||o.status)+'</span>'+(action?'<button class="nv-button secondary" style="min-height:34px;padding:5px 10px;font-size:12px" data-order="'+safe(o.id)+'" data-action="'+action+'">'+actionName[action]+'</button>':'')+'</div></div>';
+ }).join(''):'<p style="color:var(--nv-muted)">Nenhum pedido cadastrado.</p>';
+ $('quickProcess').innerHTML='<option value="">Acompanhamento rápido padrão</option>'+processes.map(p=>'<option value="'+safe(p.id)+'">'+safe(p.name)+'</option>').join('');
+ document.querySelectorAll('[data-order]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/orders/'+b.dataset.order+'/transition','POST',{action:b.dataset.action});await reload()}catch(e){$('quickError').textContent=e.message;b.disabled=false}});
 }
-saveNC=async function(){
- const name=document.getElementById('nn')?.value.trim();if(!name)return toast('Informe o nome');
- try{await call('/customers','POST',{name,email:document.getElementById('ne').value.trim(),phone:document.getElementById('nw').value.trim(),address:document.getElementById('nd').value.trim()});S.nc=false;await reload();toast('Cliente cadastrado')}catch(e){error(e)}
+$('createQuick').onclick=async()=>{
+ const ref=$('reference').value.trim();$('quickError').textContent='';if(!ref){$('quickError').textContent='Informe o número do pedido.';return;}
+ $('createQuick').disabled=true;
+ try{const result=await api('/orders/quick','POST',{reference:ref,process_id:$('quickProcess').value||null});$('trackingLink').value=result.tracking_url;$('waLink').href='https://wa.me/?text='+encodeURIComponent('Acompanhe seu pedido: '+result.tracking_url);$('quickResult').hidden=false;$('reference').value='';await reload();}
+ catch(e){$('quickError').textContent=e.message;}finally{$('createQuick').disabled=false;}
 };
-novoPed=async function(){
- const name=document.getElementById('npc')?.value;const c=S.clientes.find(c=>c.nome===name),p=document.getElementById('npp')?.value;
- if(!c||!p)return toast('Cadastre cliente e processo');
- try{const result=await call('/orders','POST',{customer_id:c.id,process_id:p,camera_id:S.cams.length===1?S.cams[0].id:null});linkMap[result.id]=result.tracking_url;await reload();toast('Pedido criado. Clique em Ver como cliente para acompanhar.')}catch(e){error(e)}
-};
-addProc=async function(){
- const name=document.getElementById('pn')?.value.trim(),steps=(document.getElementById('ps')?.value||'').split(',').map(x=>x.trim()).filter(Boolean);
- if(!name||!steps.length)return toast('Informe processo e etapas');
- try{await call('/processes','POST',{name,steps});await reload();toast('Processo cadastrado')}catch(e){error(e)}
-};
-preset=async function(key){try{for(const p of PRESETS[key])await call('/processes','POST',{name:p.nome,steps:p.subs});await reload()}catch(e){error(e)}};
-delProc=function(){toast('Exclusão de processos será disponibilizada após validação de dependências.')};
-addCam=async function(){const name=document.getElementById('cn')?.value.trim();if(!name)return toast('Informe o nome');try{await call('/cameras','POST',{name});await reload();toast('Câmera cadastrada; integração NVR pendente')}catch(e){error(e)}};
-togCam=function(){toast('Transmissão indisponível: integração NVR ainda não configurada')};
-delCam=function(){toast('Remoção da câmera ainda não disponível')};
-confirma=async function(zap){
- const m=S.modal,p=ped(m.id);if(!m||!p)return;
- const action=m.d<0?null:(p.passo>=proc(p.proc).subs.length-1?'complete':p.status==='queued'?'start':'advance');
- if(!action)return toast('Retornar etapa não está habilitado na API');
- try{await call('/orders/'+p.id+'/transition','POST',{action});if(zap&&link(p))window.open(wa(p),'_blank','noopener');S.modal=null;S.client=null;await reload();toast('Pedido atualizado no banco')}catch(e){error(e)}
-};
-const oldAbre=abre;
-abre=function(id,d){const p=ped(id);if(d<0)return toast('Voltar etapa requer histórico auditável e ainda não foi implementado.');if(p.status==='queued')return startOrder(id);if(p.status==='paused')return toast('Retome primeiro o pedido');oldAbre(id,d);};
-async function startOrder(id){try{await call('/orders/'+id+'/transition','POST',{action:'start'});await reload();toast('Serviço iniciado; vídeo ainda indisponível')}catch(e){error(e)}}
-tabCams=function(){
- let h='<h2>Câmeras</h2><div class="card"><p style="color:var(--mut)">Cadastro de equipamentos. Vídeo ao vivo e controle NVR serão integrados posteriormente.</p><div class="row"><input id="cn" placeholder="Nome da câmera, ex.: Bancada 2"><button class="btn" onclick="addCam()">+ Adicionar câmera</button></div></div><div class="grid">';
- for(const c of S.cams)h+='<div class="card"><div class="vid" style="height:140px;max-width:none">Sem transmissão configurada</div><b>'+esc(c.nome)+'</b><p class="tag">NVR pendente</p></div>';
- return h+'</div>';
-};
-const oldTabClientes=tabClientes;
-tabClientes=function(){let html=oldTabClientes();return html.replace('</table></div>','</table><p style="color:var(--mut);font-size:13px">Para atualizar um endereço, clique em Editar endereço ao lado do cliente.</p><div>'+S.clientes.map(c=>'<div class="row sp" style="margin:8px 0"><span>'+esc(c.nome)+'</span><button class="btn s sm" data-client="'+esc(c.id)+'" onclick="editAddress(this.dataset.client)">Editar endereço</button></div>').join('')+'</div></div>')};
-editAddress=async function(id){const c=S.clientes.find(x=>x.id===id);if(!c)return;const address=prompt('Endereço do cliente '+c.nome,c.end||'');if(address===null)return;try{await call('/customers/'+id,'PATCH',{address:address.trim()});await reload();toast('Endereço atualizado')}catch(e){error(e)}};
-tabClientes=function(){return '<h2>Clientes</h2><div class="card"><h3>Novo cliente</h3>'+ncForm()+'</div><div class="grid">'+S.clientes.map(c=>'<div class="card"><div class="row sp"><b>'+esc(c.nome)+'</b><button class="btn s sm" data-id="'+esc(c.id)+'" onclick="toggleClientEdit(this.dataset.id)">Editar</button></div><div style="color:var(--mut)">'+esc(c.email||'Sem e-mail')+' · '+esc(c.whats||'Sem telefone')+'</div><div style="margin-top:5px">'+esc(c.end||'Endereço não informado')+'</div><div id="edit-'+esc(c.id)+'" hidden></div></div>').join('')+'</div>'};
-toggleClientEdit=function(id){const c=S.clientes.find(x=>x.id===id),box=document.getElementById('edit-'+id);if(!c||!box)return;if(!box.hidden){box.hidden=true;return;}box.hidden=false;box.innerHTML='<div style="margin-top:12px"><label>Nome</label><input data-field="name" value="'+esc(c.nome)+'"><label>E-mail</label><input data-field="email" type="email" value="'+esc(c.email)+'"><label>WhatsApp</label><input data-field="phone" value="'+esc(c.whats)+'"><label>Endereço</label><input data-field="address" value="'+esc(c.end)+'"><p class="row"><button class="btn sm" data-id="'+esc(id)+'" onclick="saveClientEdit(this.dataset.id)">Salvar alterações</button><button class="btn s sm" data-id="'+esc(id)+'" onclick="toggleClientEdit(this.dataset.id)">Cancelar</button></p></div>';};
-saveClientEdit=async function(id){const box=document.getElementById('edit-'+id),get=f=>box.querySelector('[data-field="'+f+'"]').value.trim();try{await call('/customers/'+id,'PATCH',{name:get('name'),email:get('email'),phone:get('phone'),address:get('address')});await reload();toast('Cliente atualizado')}catch(e){error(e)}};
-tabSettings=function(){return '<h2>Configurações da loja</h2><div class="card"><label>Nome da loja</label><input id="storeName" value="'+esc(S.loja)+'"><label>URL HTTPS do logo</label><input id="storeLogo" placeholder="https://..." value="'+esc(S.logoUrl||'')+'"><p style="color:var(--mut)">Por enquanto o logo deve estar hospedado em uma URL HTTPS. Upload de imagem será implementado com armazenamento de arquivos.</p><label>Notificações por e-mail</label><select id="mailMode">'+[['off','Desativado'],['steps','A cada avanço de etapa'],['completed','Somente na conclusão'],['all','Início, etapas e conclusão']].map(([v,n])=>'<option value="'+v+'" '+(S.emailNotifications===v?'selected':'')+'>'+n+'</option>').join('')+'</select><p style="color:var(--mut)">A preferência será salva, mas o disparo automático só funcionará quando o provedor de e-mail estiver conectado e testado.</p><button class="btn" onclick="saveSettings()">Salvar configurações</button></div>'};
-saveSettings=async function(){try{const result=await call('/store/settings','PATCH',{name:document.getElementById('storeName').value.trim(),logo_url:document.getElementById('storeLogo').value.trim(),email_notifications:document.getElementById('mailMode').value});S.loja=result.name;S.logoUrl=result.logo_url||'';S.emailNotifications=result.email_notifications;render();toast('Configurações salvas')}catch(e){error(e)}};
-const baseRender=render;
-render=function(){baseRender();if(user&&S.logoUrl&&!S.client){const brand=document.querySelector('nav .brand .logo');if(brand){brand.textContent='';const im=document.createElement('img');im.src=S.logoUrl;im.alt='Logo';im.style.cssText='max-width:100%;max-height:100%;object-fit:contain';im.onerror=()=>{brand.textContent='▶'};brand.appendChild(im)}}};
-tabFin=function(){return '<h2>Financeiro</h2><div class="card">A integração com a plataforma de cobrança está em desenvolvimento. Não há cobranças ou faturas simuladas nesta tela.</div>'};
-tabMsg=function(){return '<h2>Mensagens</h2><div class="card">Notificações automáticas serão configuradas após a integração com o provedor de mensagens.</div>'};
-tabSup=function(){return '<h2>Suporte</h2><div class="card">O sistema de chamados está em desenvolvimento.</div>'};
-clientView=function(){
- const p=ped(S.client),pr=p&&proc(p.proc);if(!p||!pr)return '<div class="cv">Pedido não encontrado</div>';
- const url=link(p);
- return '<div class="cv"><button class="btn s sm" onclick="S.client=null;render()">← Voltar ao painel</button><div class="card" style="margin-top:12px"><h2>'+esc(S.loja)+'</h2><h3>'+esc(pr.nome)+'</h3><p>Status: '+esc(({queued:'Na fila',live:'Em andamento',paused:'Pausado',completed:'Finalizado'})[p.status]||p.status)+'</p><ul class="tl">'+pr.subs.map((s,i)=>'<li class="'+(p.fim||i<p.passo?'done':i===p.passo?'cur':'')+'"><b>'+esc(s)+'</b> '+(p.fim||i<p.passo?'✓ Concluída':i===p.passo?'Etapa atual':'Aguardando')+'</li>').join('')+'</ul><div class="vid" style="max-width:none;height:120px">Vídeo indisponível até integração da câmera</div><p>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener">Abrir link público do cliente</a>':'Link público não disponível nesta sessão; solicite novo link pelo painel')+'</p></div></div>';
-};
-const originalRender=render;
-render=function(){
- if(!user){document.getElementById('root').innerHTML='<div class="login card"><h2>Conectando ao NextVision...</h2></div>';return;}
- originalRender();
- document.querySelectorAll('a[href="#"]').forEach(a=>a.addEventListener('click',e=>e.preventDefault()));
-};
-const oldGo=go;go=function(t){oldGo(t)};
-async function initialize(){
- if(!token){location.replace('/');return}
- try{user=await call('/me');if(user.role==='master'){location.replace('/');return}
- const oldExit=()=>{sessionStorage.removeItem('nv_token');location.replace('/')};
- const originalRender2=render;
- render=function(){originalRender2();for(const b of document.querySelectorAll('nav button')){if(b.textContent==='Sair')b.onclick=oldExit;}};
- const settings=await call('/store/settings');S.loja=settings.name||'Minha Loja';S.logoUrl=settings.logo_url||'';S.emailNotifications=settings.email_notifications||'off';await reload();
- }catch(e){sessionStorage.removeItem('nv_token');location.replace('/')}
-}
-initialize();
-})();</script></body></html>
+$('copyLink').onclick=async()=>{try{await navigator.clipboard.writeText($('trackingLink').value);$('copyLink').textContent='Copiado!'}catch{$('trackingLink').select()}};
+(async()=>{if(!token){location.replace('/');return;}try{const me=await api('/me');if(!['owner','operator'].includes(me.role)){location.replace('/');return;}const settings=await api('/store/settings');document.querySelector('.nv-profile span').textContent=settings.name||'Minha loja';await reload();}catch(e){$('ordersList').textContent='Não foi possível carregar: '+e.message;}})();
+</script></body></html>

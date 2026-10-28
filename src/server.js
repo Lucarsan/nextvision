@@ -178,7 +178,7 @@ app.post('/api/store/loyalty/redeem',auth,roles('owner','operator'),route(async(
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }));
 app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,limit:8}),route(async(req,res)=>{
- if(!/^[\\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Pedido não encontrado');
+ if(!/^[A-Za-z0-9_-]{16,100}$/.test(req.params.token))return bad(res,404,'Pedido não encontrado');
  const hash=crypto.createHash('sha256').update(req.params.token).digest('hex');
  const client=await db.connect();
  try{await client.query('BEGIN');

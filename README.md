@@ -1,19 +1,30 @@
-# NextVision
+# NextVision — MVP no GitHub
 
-Plataforma SaaS multi-tenant para acompanhamento visual de serviços e pedidos.
+Aplicação SaaS multi-tenant para acompanhamento de pedidos de lojas e serviços.
 
-## Arquitetura
-- API: Node.js + Express
-- Banco: PostgreSQL (Neon)
-- Hospedagem: Render
-- Streaming: acesso remoto direto à câmera via NVR/ONVIF/RTSP, condicionado a comprovar conectividade segura a partir do servidor; sem gateway local
-- Interfaces: painel Master, painel da loja, link público do pedido
+## Arquivos
+- `src/server.js`: API Express, autenticação JWT, lojas, usuários, câmeras, clientes, processos, pedidos e rastreio público.
+- `src/db.js`, `src/migrate.js`, `src/bootstrap.js`: PostgreSQL, migração e criação inicial do master.
+- `sql/001_init.sql`: estrutura do banco.
+- `public/index.html`, `public/app.js`, `public/ui.css`: painel web Master e Loja.
+- `public/tracking.html`: acompanhamento do cliente por token.
+- `render.yaml`: configuração inicial do serviço no Render.
 
-## Estado
-Repositório iniciado. O protótipo HTML original ainda é demonstrativo. Backend, banco e autenticação precisam ser provisionados e testados antes da produção. O streaming não consegue usar um IP privado da câmera diretamente a partir do Render. Validar primeiro conectividade remota do modelo Yoosee LEY-19, sem exposição insegura de portas.
+## Configuração
+```bash
+npm install
+cp .env.example .env
+# configure DATABASE_URL, JWT_SECRET, BOOTSTRAP_ADMIN_EMAIL e BOOTSTRAP_ADMIN_PASSWORD
+npm run db:migrate
+npm run db:bootstrap
+npm start
+```
 
-## Segurança e implantação
-Nunca incluir `DATABASE_URL`, senhas de câmeras, RTSP ou segredos no Git. Configure variáveis no Render. Use HTTPS, isolamento por tenant, tokens públicos aleatórios e controle de acesso. A integração financeira deve validar webhooks assinados; não marcar faturas como pagas somente por ação do navegador.
+Abra `http://localhost:3000`. No Render, conecte o repositório e configure os segredos. O banco Neon ainda precisa ser provisionado e migrado.
 
-## Próximas integrações
-Neon, Render, conectividade remota NVR/ONVIF/RTSP da LEY-19, armazenamento de vídeos, provedor WhatsApp e pagamento.
+## Limitações
+Esta é uma **primeira base de desenvolvimento, ainda não validada em produção**. Falta testar integração real com PostgreSQL, verificar permissões e cenários de erro, implantar em Render, provisionar Neon, integração de pagamentos e webhooks, envio WhatsApp/e-mail, recuperação de conta, cookies seguros de autenticação, monitoramento e LGPD.
+
+**Integração das câmeras Yoosee LEY-19 ainda não existe.** A conexão NVR liberada no app é local (LAN), e o método remoto seguro não foi validado. Não incluir URL RTSP com senha no banco nem no navegador. O streaming e gravações serão integrados posteriormente sem gateway local, caso haja conectividade remota segura.
+
+Nenhuma credencial deve ser versionada. O cadastro da câmera no MVP é apenas cadastral; não indica vídeo online.

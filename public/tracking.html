@@ -1,1 +1,38 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Acompanhar pedido | NextVision</title><link rel="stylesheet" href="/ui.css"></head><body><header><strong>◉ NextVision</strong></header><main class="tracking"><section class="card"><p class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.1em">Acompanhamento de serviço</p><h1>Acompanhe seu pedido</h1><div id="tracking">Carregando...</div></section><p class="muted">A transmissão de vídeo estará disponível após a integração das câmeras.</p></main><script>const box=document.getElementById('tracking');const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function load(){try{let t=location.pathname.split('/').pop(),r=await fetch('/api/public/orders/'+encodeURIComponent(t),{cache:'no-store'});if(!r.ok)throw Error('Pedido não encontrado');let p=await r.json();box.innerHTML='<h2>'+safe(p.store)+'</h2><p>'+safe(p.process)+'</p><div class="card" style="background:#f5f8ff;padding:14px"><b>Status:</b> '+safe(({queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'})[p.status])+'</div>'+(p.status==='queued'?'<p>Posição na fila: '+Number(p.queue_position)+'</p>':'')+'<h3>Etapas do pedido</h3><ol>'+p.steps.map((s,i)=>'<li>'+safe(s)+' — '+(p.status==='completed'||i<p.step_index?'Concluída':i===p.step_index&&p.status==='live'?'Em andamento':'Aguardando')+'</li>').join('')+'</ol><div class="card" style="background:#f8fafc"><b>Vídeo do serviço</b><p class="muted">A transmissão ao vivo e os replays serão disponibilizados quando a câmera desta etapa estiver conectada.</p></div>'; }catch(e){box.textContent=e.message;}}load();setInterval(load,10000);</script></body></html>
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#102e57">
+<title>Acompanhe seu pedido | NextVision</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#15243a;background:#f3f6fb;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;min-height:100vh}header{background:#102e57;color:white;padding:18px max(18px,calc((100vw - 720px)/2));font-weight:700}
+main{max-width:720px;margin:24px auto;padding:0 16px 56px}.panel{background:white;border:1px solid #dfe7f1;border-radius:18px;padding:24px;box-shadow:0 8px 28px #102e570b}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#5c708a;font-weight:700}h1{font-size:clamp(24px,5vw,32px);margin:8px 0 18px}h2{font-size:20px;margin:0 0 5px}h3{font-size:17px;margin:24px 0 14px}p{line-height:1.5}.muted{color:#62738a}.status{background:#ecf3ff;border:1px solid #cee0ff;border-radius:14px;padding:16px;margin:20px 0}.status strong{font-size:18px}.bar{background:#e8edf4;height:10px;border-radius:20px;overflow:hidden;margin:14px 0 6px}.bar>div{height:100%;background:#2365de;transition:width .25s}.steps{list-style:none;margin:0;padding:0}.steps li{position:relative;padding:0 0 23px 34px;border-left:2px solid #dce4ed;margin-left:11px}.steps li:last-child{border-color:transparent;padding-bottom:0}.steps li:before{content:"";position:absolute;left:-12px;top:0;width:20px;height:20px;border-radius:50%;background:#fff;border:2px solid #b8c6d7}.steps li.done:before{background:#15803d;border-color:#15803d}.steps li.active:before{background:#2563eb;border-color:#2563eb;box-shadow:0 0 0 4px #dbeafe}.step-label{font-weight:650}.detail{display:block;color:#63718a;font-size:13px;margin-top:3px}.video{background:#182538;color:#e4eaf2;border-radius:14px;padding:25px 18px;text-align:center}.video p{color:#c4cfdd;margin-bottom:0}.small{font-size:13px}.error{color:#9f2222;background:#fff0f0;border:1px solid #fecaca;padding:16px;border-radius:12px}button{border:1px solid #d4dfeb;background:#fff;color:#173c75;border-radius:10px;padding:11px 16px;font:inherit;font-weight:650;cursor:pointer;min-height:44px}.toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:20px}
+@media(max-width:520px){main{margin:12px auto;padding:0 10px 42px}.panel{padding:18px;border-radius:14px}header{padding:15px 18px}.toolbar{align-items:stretch}.toolbar button{width:100%}}
+</style></head><body>
+<header>◉ NextVision</header><main><div class="panel"><div class="eyebrow">Acompanhamento de serviço</div><h1>Acompanhe seu pedido</h1><div id="tracking" role="status" aria-live="polite">Carregando informações…</div><div class="toolbar"><span id="updated" class="muted small">Atualização automática a cada 15 segundos</span><button id="refresh" type="button">Atualizar agora</button></div></div></main>
+<script>
+const box=document.getElementById('tracking'),updated=document.getElementById('updated'),refresh=document.getElementById('refresh');
+const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const labels={queued:'Na fila',live:'Em atendimento',paused:'Atendimento pausado',completed:'Finalizado'};
+let loading=false,lastData='';
+async function load(){
+ if(loading||document.hidden)return;loading=true;refresh.disabled=true;
+ try{
+  const token=location.pathname.split('/').filter(Boolean).pop();
+  const r=await fetch('/api/public/orders/'+encodeURIComponent(token),{cache:'no-store'});
+  if(!r.ok)throw Error(r.status===404?'Este link de acompanhamento não foi encontrado.':'Não foi possível consultar o pedido.');
+  const p=await r.json(),steps=Array.isArray(p.steps)?p.steps:[],index=Math.max(0,Number(p.step_index)||0);
+  const completed=p.status==='completed',done=completed?steps.length:Math.min(index,steps.length);
+  const percent=steps.length?Math.round(done/steps.length*100):0;
+  const html='<h2>'+safe(p.store||'Estabelecimento')+'</h2><p class="muted">'+safe(p.process||'Serviço')+'</p>'+
+   '<div class="status"><span class="small muted">Situação atual</span><p style="margin:4px 0"><strong>'+safe(labels[p.status]||'Em atualização')+'</strong></p>'+
+   (p.status==='queued'&&Number.isFinite(Number(p.queue_position))&&Number(p.queue_position)>0?'<p>Posição na fila: <strong>'+Number(p.queue_position)+'</strong></p>':'')+
+   '<div class="bar" role="progressbar" aria-label="Etapas concluídas" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+percent+'"><div style="width:'+percent+'%"></div></div><span class="small muted">'+done+' de '+steps.length+' etapas concluídas</span></div>'+
+   '<h3>Etapas do serviço</h3><ol class="steps">'+steps.map((s,i)=>{const finished=completed||i<index,active=!completed&&i===index;return '<li class="'+(finished?'done':active?'active':'')+'"><span class="step-label">'+safe(s)+'</span><span class="detail">'+(finished?'Concluída':active?(p.status==='live'?'Em andamento':p.status==='paused'?'Pausada':'Aguardando início'):'Aguardando')+'</span></li>'}).join('')+'</ol>'+
+   '<h3>Vídeo da etapa</h3><div class="video"><strong>Transmissão ainda não disponível</strong><p class="small">A integração segura das câmeras e os replays ainda estão em desenvolvimento. O progresso acima é atualizado com os dados do serviço.</p></div>';
+  if(html!==lastData){box.innerHTML=html;lastData=html;}
+  updated.textContent='Atualizado às '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' · atualização automática a cada 15 segundos';
+ }catch(e){if(!lastData){box.innerHTML='<div class="error">'+safe(e.message)+'</div>';}updated.textContent='Falha na atualização. Tente novamente.'}
+ finally{loading=false;refresh.disabled=false;}
+}
+refresh.addEventListener('click',load);document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});load();setInterval(load,15000);
+</script></body></html>

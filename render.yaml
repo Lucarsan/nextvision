@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: nextvision-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

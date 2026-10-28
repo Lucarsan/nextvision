@@ -153,8 +153,8 @@ function render(){
  var r=document.getElementById('root');
  if(!S.logged){r.innerHTML=login();return}
  if(S.client){r.innerHTML=clientView();return}
- var tabs=[['pedidos','Pedidos'],['processos','Processos'],['cameras','Câmeras'],['clientes','Clientes'],['financeiro','Financeiro'],['mensagens','Mensagens'],['suporte','Suporte']];
- var fn={pedidos:tabPedidos,processos:tabProcessos,cameras:tabCams,clientes:tabClientes,financeiro:tabFin,suporte:tabSup,mensagens:tabMsg}[S.tab];
+ var tabs=[['pedidos','Pedidos'],['processos','Processos'],['cameras','Câmeras'],['clientes','Clientes'],['financeiro','Financeiro'],['mensagens','Mensagens'],['suporte','Suporte'],['configuracoes','Configurações']];
+ var fn={pedidos:tabPedidos,processos:tabProcessos,cameras:tabCams,clientes:tabClientes,financeiro:tabFin,suporte:tabSup,mensagens:tabMsg,configuracoes:tabSettings}[S.tab];
  r.innerHTML='<div class="app"><nav><div class="brand"><span class="logo" style="width:30px;height:30px;font-size:14px;margin:0;border-radius:8px">▶</span>'+esc(S.loja)+'</div>'+tabs.map(function(t){return '<button class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\')">'+t[1]+'</button>'}).join('')+'<button onclick="S.logged=false;render()">Sair</button></nav><main>'+fn()+'</main></div>'+modalHtml()}
 // A página é iniciada pelo adaptador após validar a sessão.
 </script><script>
@@ -178,7 +178,7 @@ tabPedidos=function(){let html=originalPedidos();return html.replaceAll('href="#
 async function reload(){
  try{
  const [customers,processes,cameras,orders]=await Promise.all([call('/customers'),call('/processes'),call('/cameras'),call('/orders')]);
- S.clientes=customers.map(c=>({id:c.id,nome:c.name,email:c.email||'',whats:c.phone||'',end:''}));
+ S.clientes=customers.map(c=>({id:c.id,nome:c.name,email:c.email||'',whats:c.phone||'',end:c.address||''}));
  S.procs=processes.map(p=>({id:p.id,nome:p.name,subs:p.steps}));
  S.cams=cameras.map(c=>({id:c.id,nome:c.name,on:false,status:c.status}));
  S.pedidos=orders.map(o=>({id:o.id,cliente:o.customer,proc:processes.find(p=>p.name===o.process)?.id,passo:o.step_index,fim:o.status==='completed',status:o.status,cam:o.camera_id}));
@@ -187,7 +187,7 @@ async function reload(){
 }
 saveNC=async function(){
  const name=document.getElementById('nn')?.value.trim();if(!name)return toast('Informe o nome');
- try{await call('/customers','POST',{name,email:document.getElementById('ne').value.trim(),phone:document.getElementById('nw').value.trim()});S.nc=false;await reload();toast('Cliente cadastrado')}catch(e){error(e)}
+ try{await call('/customers','POST',{name,email:document.getElementById('ne').value.trim(),phone:document.getElementById('nw').value.trim(),address:document.getElementById('nd').value.trim()});S.nc=false;await reload();toast('Cliente cadastrado')}catch(e){error(e)}
 };
 novoPed=async function(){
  const name=document.getElementById('npc')?.value;const c=S.clientes.find(c=>c.nome===name),p=document.getElementById('npp')?.value;
@@ -218,6 +218,10 @@ tabCams=function(){
  for(const c of S.cams)h+='<div class="card"><div class="vid" style="height:140px;max-width:none">Sem transmissão configurada</div><b>'+esc(c.nome)+'</b><p class="tag">NVR pendente</p></div>';
  return h+'</div>';
 };
+tabSettings=function(){return '<h2>Configurações da loja</h2><div class="card"><label>Nome da loja</label><input id="storeName" value="'+esc(S.loja)+'"><label>URL HTTPS do logo</label><input id="storeLogo" placeholder="https://..." value="'+esc(S.logoUrl||'')+'"><p style="color:var(--mut)">Por enquanto o logo deve estar hospedado em uma URL HTTPS. Upload de imagem será implementado com armazenamento de arquivos.</p><label>Notificações por e-mail</label><select id="mailMode">'+[['off','Desativado'],['steps','A cada avanço de etapa'],['completed','Somente na conclusão'],['all','Início, etapas e conclusão']].map(([v,n])=>'<option value="'+v+'" '+(S.emailNotifications===v?'selected':'')+'>'+n+'</option>').join('')+'</select><p style="color:var(--mut)">A preferência será salva, mas o disparo automático só funcionará quando o provedor de e-mail estiver conectado e testado.</p><button class="btn" onclick="saveSettings()">Salvar configurações</button></div>'};
+saveSettings=async function(){try{const result=await call('/store/settings','PATCH',{name:document.getElementById('storeName').value.trim(),logo_url:document.getElementById('storeLogo').value.trim(),email_notifications:document.getElementById('mailMode').value});S.loja=result.name;S.logoUrl=result.logo_url||'';S.emailNotifications=result.email_notifications;render();toast('Configurações salvas')}catch(e){error(e)}};
+const baseRender=render;
+render=function(){baseRender();if(user&&S.logoUrl&&!S.client){const brand=document.querySelector('nav .brand .logo');if(brand){brand.textContent='';const im=document.createElement('img');im.src=S.logoUrl;im.alt='Logo';im.style.cssText='max-width:100%;max-height:100%;object-fit:contain';im.onerror=()=>{brand.textContent='▶'};brand.appendChild(im)}}};
 tabFin=function(){return '<h2>Financeiro</h2><div class="card">A integração com a plataforma de cobrança está em desenvolvimento. Não há cobranças ou faturas simuladas nesta tela.</div>'};
 tabMsg=function(){return '<h2>Mensagens</h2><div class="card">Notificações automáticas serão configuradas após a integração com o provedor de mensagens.</div>'};
 tabSup=function(){return '<h2>Suporte</h2><div class="card">O sistema de chamados está em desenvolvimento.</div>'};
@@ -239,7 +243,7 @@ async function initialize(){
  const oldExit=()=>{sessionStorage.removeItem('nv_token');location.replace('/')};
  const originalRender2=render;
  render=function(){originalRender2();for(const b of document.querySelectorAll('nav button')){if(b.textContent==='Sair')b.onclick=oldExit;}};
- const tenantName='Minha Loja';S.loja=tenantName;await reload();
+ const settings=await call('/store/settings');S.loja=settings.name||'Minha Loja';S.logoUrl=settings.logo_url||'';S.emailNotifications=settings.email_notifications||'off';await reload();
  }catch(e){sessionStorage.removeItem('nv_token');location.replace('/')}
 }
 initialize();

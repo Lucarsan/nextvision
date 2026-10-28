@@ -1,0 +1,1 @@
+import 'dotenv/config';import pg from 'pg';if(!process.env.DATABASE_URL)throw new Error('Defina DATABASE_URL');export const db=new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DB_SSL==='disable'?false:{rejectUnauthorized:true},max:10});export const q=(sql,values=[])=>db.query(sql,values);

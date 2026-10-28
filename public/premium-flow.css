@@ -15,3 +15,6 @@ body{font-family:"Plus Jakarta Sans",system-ui,sans-serif;font-weight:400;letter
 .nv-menu button{font-weight:500;letter-spacing:-.01em}
 .nv-menu button.active,.nv-button{font-weight:700}
 .nv-order strong,.nv-station strong{font-weight:700;letter-spacing:-.025em}
+
+/* Formulários Premium Flow: processos e fidelidade */
+.nv-field textarea,.nv-field select{display:block;width:100%;min-height:46px;padding:12px 13px;background:#fff;border:1px solid #dce5f0;border-radius:10px;color:var(--nv-ink);font:inherit;resize:vertical}.nv-field textarea:focus,.nv-field select:focus,.nv-field input:focus{outline:2px solid #bdd2ff;outline-offset:1px}.nv-card form>label{font-size:14px;color:var(--nv-text);font-weight:600;margin:12px 0}.nv-order button{flex-shrink:0}@media(max-width:520px){.nv-order{flex-wrap:wrap}.nv-order button{width:100%}}

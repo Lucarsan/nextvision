@@ -48,7 +48,7 @@ app.put('/api/store/logo',auth,roles('owner'),route(async(req,res)=>{
  const signatures={'image/png':bin.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),'image/jpeg':bin[0]===255&&bin[1]===216&&bin[2]===255,'image/webp':bin.toString('ascii',0,4)==='RIFF'&&bin.toString('ascii',8,12)==='WEBP'};
  if(!signatures[v.mime_type])return bad(res,400,'Formato de imagem inválido');
  await q('INSERT INTO tenant_logos(tenant_id,mime_type,image_data) VALUES($1,$2,$3) ON CONFLICT(tenant_id) DO UPDATE SET mime_type=EXCLUDED.mime_type,image_data=EXCLUDED.image_data,updated_at=now()',[tid(req),v.mime_type,bin]);
- await audit(req,'upload','tenant_logo',tid(req));res.json({logo_url:baseUrl()+'/api/public/store-logo/'+tid(req)});
+ const logoUrl=baseUrl()+'/api/public/store-logo/'+tid(req);await q('UPDATE tenants SET logo_url=$1 WHERE id=$2',[logoUrl,tid(req)]);await audit(req,'upload','tenant_logo',tid(req));res.json({logo_url:logoUrl});
 }));
 app.get('/api/public/store-logo/:id',rateLimit({windowMs:60000,limit:120}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,404,'Não encontrado');

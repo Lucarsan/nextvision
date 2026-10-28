@@ -29,15 +29,14 @@ const cap=s=>{s=String(s||'').trim();return s?s.charAt(0).toLocaleUpperCase('pt-
 const notice=(message)=>'<p style="color:var(--nv-muted);font-size:13px">'+safe(message)+'</p>';
 function renderOrders(orders){
  const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
- return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div>'+(o.status==='completed'&&o.customer?'<button class="nv-button secondary" data-checkin="'+safe(o.id)+'">Registrar check-in</button>':'')+'</div>').join('')||notice('Nenhum pedido cadastrado.');
+ return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div>'+'</div>').join('')||notice('Nenhum pedido cadastrado.');
 }
 async function loadSection(view){
  const box=$('sectionContent');box.innerHTML='<div class="nv-card">Carregando...</div>';
  try{
   if(view==='orders'){
    const orders=await api('/orders');
-   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div><p id="orderFeedback" role="status"></p>'+renderOrders(orders)+'</section>';document.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/orders/'+b.dataset.checkin+'/checkin','POST',{});$('orderFeedback').textContent='Check-in registrado!';b.remove()}catch(err){$('orderFeedback').textContent=err.message;b.disabled=false}});
-  }else if(view==='queues'){
+   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div><p id="orderFeedback" role="status"></p>'+renderOrders(orders)+'</section>';  }else if(view==='queues'){
    const orders=await api('/orders');
    box.innerHTML='<section class="nv-card"><h2>Pedidos aguardando</h2>'+renderOrders(orders.filter(o=>o.status==='queued'))+notice('Organização por estação e capacidade ainda em desenvolvimento.')+'</section>';
   }else if(view==='cameras'){
@@ -56,6 +55,8 @@ async function loadSection(view){
   }else if(view==='settings'){
    const settings=await api('/store/settings');
    box.innerHTML='<section class="nv-card"><h2>Configurações da loja</h2><form id="settingsForm"><div class="nv-field"><label>Nome da loja</label><input name="name" value="'+safe(settings.name)+'" required></div><div class="nv-field"><label>URL HTTPS do logo</label><input name="logo_url" value="'+safe(settings.logo_url||'')+'"></div><button class="nv-button">Salvar</button><p id="settingsStatus" role="status"></p></form><p><a href="/loja-legado.html">Abrir ferramentas adicionais da loja</a></p></section>';
+   box.insertAdjacentHTML('beforeend','<section class="nv-card"><h2>Validar cupom de fidelidade</h2><p class="nv-card-label">Digite o código apresentado pelo cliente. Um cupom só pode ser utilizado uma vez.</p><form id="redeemForm"><div class="nv-field"><label>Código do cupom</label><input name="code" maxlength="8" required placeholder="Ex.: A1B2C3D4"></div><button class="nv-button">Validar e resgatar</button><p id="redeemFeedback" role="status"></p></form></section>');
+   $('redeemForm').onsubmit=async e=>{e.preventDefault();const code=e.currentTarget.elements.code.value.trim().toUpperCase();try{const r=await api('/store/loyalty/redeem','POST',{code});$('redeemFeedback').textContent='Cupom validado. Recompensa: '+r.reward;e.currentTarget.reset()}catch(err){$('redeemFeedback').textContent=err.message}};
    const loyalty=await api('/store/loyalty');
    box.insertAdjacentHTML('beforeend','<section class="nv-card"><h2>Programa de fidelidade</h2><p style="color:var(--nv-muted);font-size:13px">Opcional para clientes cadastrados. Pedidos rápidos não geram check-in.</p><form id="loyaltyForm"><label style="display:flex;gap:9px;align-items:center"><input name="enabled" type="checkbox" style="width:auto" '+(loyalty.loyalty_enabled?'checked':'')+'> Ativar fidelidade</label><div class="nv-field"><label>Check-ins necessários para a recompensa</label><input name="target" type="number" min="2" max="100" required value="'+Number(loyalty.loyalty_target||10)+'"></div><div class="nv-field"><label>Descrição da recompensa</label><textarea name="reward" rows="3" required maxlength="240">'+safe(loyalty.loyalty_reward||'')+'</textarea></div><button class="nv-button">Salvar fidelidade</button><p id="loyaltyStatus" role="status"></p></form></section>');
    $('loyaltyForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/store/loyalty','PATCH',{loyalty_enabled:f.elements.enabled.checked,loyalty_target:Number(f.elements.target.value),loyalty_reward:f.elements.reward.value.trim()});$('loyaltyStatus').textContent='Programa de fidelidade atualizado.'}catch(err){$('loyaltyStatus').textContent=err.message}};

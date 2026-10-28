@@ -29,14 +29,14 @@ const cap=s=>{s=String(s||'').trim();return s?s.charAt(0).toLocaleUpperCase('pt-
 const notice=(message)=>'<p style="color:var(--nv-muted);font-size:13px">'+safe(message)+'</p>';
 function renderOrders(orders){
  const labels={queued:'Na fila',live:'Em atendimento',paused:'Pausado',completed:'Finalizado'};
- return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div></div>').join('')||notice('Nenhum pedido cadastrado.');
+ return orders.map(o=>'<div class="nv-order"><div><strong>#'+safe(o.external_reference||o.id.slice(0,8))+'</strong><p>'+safe(o.customer||'Sem cadastro de cliente')+' · '+safe(cap(o.process))+' · '+safe(labels[o.status]||o.status)+'</p></div>'+(o.status==='completed'&&o.customer?'<button class="nv-button secondary" data-checkin="'+safe(o.id)+'">Registrar check-in</button>':'')+'</div>').join('')||notice('Nenhum pedido cadastrado.');
 }
 async function loadSection(view){
  const box=$('sectionContent');box.innerHTML='<div class="nv-card">Carregando...</div>';
  try{
   if(view==='orders'){
    const orders=await api('/orders');
-   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div>'+renderOrders(orders)+'</section>';
+   box.innerHTML='<section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><a href="/loja-legado.html" style="font-size:13px">Cadastro completo e ferramentas adicionais</a></div><p id="orderFeedback" role="status"></p>'+renderOrders(orders)+'</section>';document.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/orders/'+b.dataset.checkin+'/checkin','POST',{});$('orderFeedback').textContent='Check-in registrado!';b.remove()}catch(err){$('orderFeedback').textContent=err.message;b.disabled=false}});
   }else if(view==='queues'){
    const orders=await api('/orders');
    box.innerHTML='<section class="nv-card"><h2>Pedidos aguardando</h2>'+renderOrders(orders.filter(o=>o.status==='queued'))+notice('Organização por estação e capacidade ainda em desenvolvimento.')+'</section>';

@@ -34,14 +34,62 @@ app.patch('/api/store/loyalty',auth,roles('owner'),route(async(req,res)=>{
 app.get('/api/store/loyalty/customers',auth,roles('owner','operator'),route(async(req,res)=>{
  const r=await q('SELECT c.id,c.name,count(l.id)::int checkins FROM customers c LEFT JOIN loyalty_checkins l ON l.customer_id=c.id AND l.tenant_id=c.tenant_id WHERE c.tenant_id=$1 GROUP BY c.id,c.name ORDER BY c.name',[tid(req)]);res.json(r.rows);
 }));
+
+const baseUrl=()=>process.env.PUBLIC_BASE_URL||'http://localhost:3000';
+app.get('/api/store/logo',auth,roles('owner','operator'),route(async(req,res)=>{
+ const r=await q('SELECT mime_type,image_data FROM tenant_logos WHERE tenant_id=$1',[tid(req)]);
+ if(!r.rowCount)return bad(res,404,'Logo não cadastrado');
+ res.type(r.rows[0].mime_type).set('Cache-Control','private, max-age=300').send(r.rows[0].image_data);
+}));
+app.put('/api/store/logo',auth,roles('owner'),route(async(req,res)=>{
+ const v=valid(z.object({mime_type:z.enum(['image/png','image/jpeg','image/webp']),base64:z.string().min(10).max(360000)}),req,res);if(!v)return;
+ const bin=Buffer.from(v.base64,'base64');
+ if(bin.length>262144||bin.length===0||bin.toString('base64').replace(/=+$/,'')!==v.base64.replace(/=+$/,''))return bad(res,400,'Imagem inválida ou maior que 256 KB');
+ const signatures={'image/png':bin.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),'image/jpeg':bin[0]===255&&bin[1]===216&&bin[2]===255,'image/webp':bin.toString('ascii',0,4)==='RIFF'&&bin.toString('ascii',8,12)==='WEBP'};
+ if(!signatures[v.mime_type])return bad(res,400,'Formato de imagem inválido');
+ await q('INSERT INTO tenant_logos(tenant_id,mime_type,image_data) VALUES($1,$2,$3) ON CONFLICT(tenant_id) DO UPDATE SET mime_type=EXCLUDED.mime_type,image_data=EXCLUDED.image_data,updated_at=now()',[tid(req),v.mime_type,bin]);
+ await audit(req,'upload','tenant_logo',tid(req));res.json({logo_url:baseUrl()+'/api/public/store-logo/'+tid(req)});
+}));
+app.get('/api/public/store-logo/:id',rateLimit({windowMs:60000,limit:120}),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,404,'Não encontrado');
+ const r=await q("SELECT l.mime_type,l.image_data FROM tenant_logos l JOIN tenants t ON t.id=l.tenant_id WHERE l.tenant_id=$1 AND t.status IN ('trial','active')",[req.params.id]);
+ if(!r.rowCount)return bad(res,404,'Imagem não encontrada');res.type(r.rows[0].mime_type).set('Cache-Control','public, max-age=300').send(r.rows[0].image_data);
+}));
 app.get('/api/cameras',auth,roles('master','owner','operator'),route(async(req,res)=>res.json((await q(req.user.role==='master'?'SELECT id,tenant_id,name,station,status,created_at FROM cameras ORDER BY created_at DESC':'SELECT id,tenant_id,name,station,status,created_at FROM cameras WHERE tenant_id=$1 ORDER BY created_at DESC',req.user.role==='master'?[]:[tid(req)])).rows)));
 app.post('/api/cameras',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),station:z.string().max(120).optional()}),req,res);if(!v)return;const r=await q('INSERT INTO cameras(tenant_id,name,station) VALUES($1,$2,$3) RETURNING id,name,station,status',[tid(req),v.name,v.station||null]);res.status(201).json(r.rows[0]);}));
+app.patch('/api/cameras/:id',auth,roles('owner'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
+ const v=valid(z.object({name:z.string().trim().min(2).max(120),station:z.string().max(120)}),req,res);if(!v)return;
+ const r=await q('UPDATE cameras SET name=$1,station=$2 WHERE id=$3 AND tenant_id=$4 RETURNING id,name,station,status',[v.name,v.station,req.params.id,tid(req)]);
+ if(!r.rowCount)return bad(res,404,'Câmera não encontrada');await audit(req,'update','camera',req.params.id);res.json(r.rows[0]);
+}));
 app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM customers WHERE tenant_id=$1 ORDER BY created_at DESC',[tid(req)])).rows)));
 app.post('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),email:z.string().email().optional().or(z.literal('')),phone:z.string().max(30).optional(),address:z.string().max(500).optional()}),req,res);if(!v)return;const r=await q('INSERT INTO customers(tenant_id,name,email,phone,address) VALUES($1,$2,$3,$4,$5) RETURNING *',[tid(req),v.name,v.email||null,v.phone||null,v.address||null]);res.status(201).json(r.rows[0]);}));
 app.patch('/api/customers/:id',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({name:z.string().min(2).max(120),email:z.union([z.string().email(),z.literal('')]),phone:z.string().max(30),address:z.string().max(500)}),req,res);if(!v)return;const r=await q('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4 WHERE id=$5 AND tenant_id=$6 RETURNING id,name,email,phone,address',[v.name,v.email||null,v.phone,v.address,req.params.id,tid(req)]);if(!r.rowCount)return bad(res,404,'Cliente não encontrado');await audit(req,'update','customer',req.params.id);res.json(r.rows[0]);}));
+app.patch('/api/processes/:id',auth,roles('owner'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
+ const v=valid(z.object({name:z.string().trim().min(2).max(120),steps:z.array(z.string().trim().min(1).max(120)).min(1).max(30)}),req,res);if(!v)return;
+ const active=await q("SELECT 1 FROM orders WHERE tenant_id=$1 AND process_id=$2 AND status!='completed' LIMIT 1",[tid(req),req.params.id]);
+ if(active.rowCount)return bad(res,409,'Conclua os pedidos ativos deste processo antes de editar suas etapas');
+ const r=await q('UPDATE processes SET name=$1,steps=$2 WHERE id=$3 AND tenant_id=$4 RETURNING *',[v.name,JSON.stringify(v.steps),req.params.id,tid(req)]);
+ if(!r.rowCount)return bad(res,404,'Processo não encontrado');await audit(req,'update','process',req.params.id);res.json(r.rows[0]);
+}));
 app.get('/api/processes',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM processes WHERE tenant_id=$1 ORDER BY created_at DESC',[tid(req)])).rows)));
 app.post('/api/processes',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),steps:z.array(z.string().min(1)).min(1).max(30)}),req,res);if(!v)return;const r=await q('INSERT INTO processes(tenant_id,name,steps) VALUES($1,$2,$3) RETURNING *',[tid(req),v.name,JSON.stringify(v.steps)]);res.status(201).json(r.rows[0]);}));
-app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.external_reference,o.source,c.name customer,p.id process_id,p.name process,p.steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 ORDER BY o.created_at DESC',[tid(req)])).rows)));
+app.put('/api/orders/queue-order',auth,roles('owner','operator'),route(async(req,res)=>{
+ const v=valid(z.object({ids:z.array(uuid).max(500)}),req,res);if(!v)return;
+ if(new Set(v.ids).size!==v.ids.length)return bad(res,400,'Há pedidos repetidos');
+ const conn=await db.connect();
+ try{
+  await conn.query('BEGIN');
+  await conn.query('SELECT pg_advisory_xact_lock(hashtext($1))',[tid(req)+':order-queue']);
+  const r=await conn.query("SELECT id FROM orders WHERE tenant_id=$1 AND status='queued' ORDER BY COALESCE(queue_rank,9223372036854775807),created_at,id FOR UPDATE",[tid(req)]);
+  if(r.rowCount!==v.ids.length||r.rows.some(x=>!v.ids.includes(x.id))){await conn.query('ROLLBACK');return bad(res,409,'A fila mudou. Atualize antes de reordenar');}
+  for(let i=0;i<v.ids.length;i++)await conn.query('UPDATE orders SET queue_rank=$1 WHERE id=$2 AND tenant_id=$3',[(i+1)*1000,v.ids[i],tid(req)]);
+  await conn.query('COMMIT');res.json({ok:true});
+ }catch(e){await conn.query('ROLLBACK');throw e}finally{conn.release()}
+}));
+app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.external_reference,o.source,o.queue_rank,c.name customer,p.id process_id,p.name process,p.steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 ORDER BY CASE WHEN o.status='queued' THEN 0 ELSE 1 END,COALESCE(o.queue_rank,9223372036854775807),o.created_at,o.id',[tid(req)])).rows)));
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({customer_id:uuid,process_id:uuid,camera_id:uuid.optional().nullable()}),req,res);if(!v)return;if(v.camera_id){const cr=await q('SELECT id FROM cameras WHERE id=$1 AND tenant_id=$2',[v.camera_id,tid(req)]);if(!cr.rowCount)return bad(res,400,'Câmera não pertence à loja');}const token=crypto.randomBytes(32).toString('base64url');const hash=crypto.createHash('sha256').update(token).digest('hex');const r=await q('INSERT INTO orders(tenant_id,customer_id,process_id,camera_id,public_token_hash) SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1) RETURNING id,status',[tid(req),v.customer_id,v.process_id,v.camera_id||null,hash]);if(!r.rowCount)return bad(res,400,'Cliente ou processo inválido');await audit(req,'create','order',r.rows[0].id);res.status(201).json({...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token});}));
 app.post('/api/orders/quick',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({reference:z.string().trim().min(1).max(70),process_id:uuid.optional().nullable()}),req,res);if(!v)return;

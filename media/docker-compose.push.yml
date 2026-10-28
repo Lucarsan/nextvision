@@ -1,0 +1,16 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    environment:
+      MTX_RTSPTRANSPORTS: tcp
+      MTX_PATHS_CAMERA_SOURCE: publisher
+      MTX_HLS: "yes"
+      MTX_WEBRTC: "no"
+      MTX_RTMP: "no"
+      MTX_SRT: "no"
+      MTX_API: "no"
+      MTX_METRICS: "no"
+    ports:
+      - "127.0.0.1:8554:8554"
+      - "127.0.0.1:8888:8888"

@@ -173,15 +173,37 @@ S.loja='Minha Loja';
 S.faturas=[];S.cams=[];S.clientes=[];S.procs=[];S.pedidos=[];S.chamados=[];
 link=function(p){return linkMap[p.id]||null};
 wa=function(p){const url=link(p);if(!url)return '#';const c=cli(p.cliente);return zapUrl(c.whats||'', 'Acompanhe seu pedido: '+url);};
+let quickTrackingLink='';
+const copyQuickLink=async function(){
+ if(!quickTrackingLink)return toast('Crie primeiro o pedido');
+ try{await navigator.clipboard.writeText(quickTrackingLink);toast('Link copiado!')}catch(e){toast('Selecione o link exibido para copiar')}
+};
+const createQuickOrder=async function(){
+ const input=document.getElementById('quickReference'),select=document.getElementById('quickProcess');
+ const reference=input?.value.trim();if(!reference)return toast('Informe o número do pedido');
+ const button=document.getElementById('quickCreate');if(button)button.disabled=true;
+ try{
+  const result=await call('/orders/quick','POST',{reference,process_id:select?.value||null});
+  quickTrackingLink=result.tracking_url;
+  linkMap[result.id]=result.tracking_url;
+  await reload();
+  toast('Pedido rápido criado. Copie o link para compartilhar.');
+ }catch(e){error(e)}finally{const b=document.getElementById('quickCreate');if(b)b.disabled=false}
+};
 const originalPedidos=tabPedidos;
-tabPedidos=function(){let html=originalPedidos();return html.replaceAll('href="#"','href="#" onclick="event.preventDefault();toast(\'Use Ver como cliente ou Gere link para acompanhar\')"');};
+tabPedidos=function(){
+ let html=originalPedidos();
+ const options=S.procs.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.nome)+'</option>').join('');
+ const quick='<div class="card" style="border-color:#bfdbfe;background:#f8fbff"><div class="row sp"><h3>⚡ Pedido rápido</h3><span class="tag">Sem cadastro de cliente</span></div><p style="color:var(--mut);margin-top:0">Informe o número do pedido emitido pelo sistema da loja e gere um link de acompanhamento.</p><div class="row"><div style="flex:1;min-width:170px"><label>Número do pedido</label><input id="quickReference" maxlength="70" placeholder="Ex.: 1042" autocomplete="off"></div><div style="flex:1;min-width:170px"><label>Processo (opcional)</label><select id="quickProcess"><option value="">Acompanhamento rápido padrão</option>'+options+'</select></div></div><p class="row"><button class="btn" id="quickCreate" onclick="createQuickOrder()">Gerar link rápido</button></p>'+(quickTrackingLink?'<div class="card" style="background:#fff;margin-bottom:0"><b>Link gerado</b><input aria-label="Link público para compartilhar" readonly value="'+esc(quickTrackingLink)+'" onclick="this.select()"><p class="row"><button class="btn" onclick="copyQuickLink()">Copiar link</button><a class="btn w" style="text-decoration:none" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent('Acompanhe seu pedido: '+quickTrackingLink)+'">Compartilhar no WhatsApp</a></p></div>':'')+'</div>';
+ return html.replace('<h2>Pedidos</h2>','<h2>Pedidos</h2>'+quick).replaceAll('href="#"','href="#" onclick="event.preventDefault();toast(\'Link indisponível nesta sessão\')"');
+};
 async function reload(){
  try{
  const [customers,processes,cameras,orders]=await Promise.all([call('/customers'),call('/processes'),call('/cameras'),call('/orders')]);
  S.clientes=customers.map(c=>({id:c.id,nome:c.name,email:c.email||'',whats:c.phone||'',end:c.address||''}));
  S.procs=processes.map(p=>({id:p.id,nome:p.name,subs:p.steps}));
  S.cams=cameras.map(c=>({id:c.id,nome:c.name,on:false,status:c.status}));
- S.pedidos=orders.map(o=>({id:o.id,cliente:o.customer,proc:processes.find(p=>p.name===o.process)?.id,passo:o.step_index,fim:o.status==='completed',status:o.status,cam:o.camera_id}));
+ S.pedidos=orders.map(o=>({id:o.id,cliente:o.customer||('Pedido '+(o.external_reference||o.id.slice(0,8))),proc:o.process_id||processes.find(p=>p.name===o.process)?.id,passo:o.step_index,fim:o.status==='completed',status:o.status,cam:o.camera_id}));
  S.modal=null;render();
  }catch(e){error(e)}
 }

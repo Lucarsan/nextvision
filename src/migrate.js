@@ -1,0 +1,1 @@
+import {readFile} from 'node:fs/promises';import {db} from './db.js';try{await db.query(await readFile(new URL('../sql/001_init.sql',import.meta.url),'utf8'));console.log('Migração concluída');}finally{await db.end();}

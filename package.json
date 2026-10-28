@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/start.js",
     "dev": "node --watch src/server.js",
     "db:migrate": "node src/migrate.js",
     "db:bootstrap": "node src/bootstrap.js",

@@ -1,0 +1,22 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    environment:
+      MTX_RTSPTRANSPORTS: tcp
+      MTX_PATHS_CAMERA_SOURCE: ${CAMERA_RTSP_URL:?Set CAMERA_RTSP_URL in .env}
+      MTX_PATHS_CAMERA_SOURCEONDEMAND: "yes"
+      MTX_HLS: "yes"
+      MTX_WEBRTC: "no"
+      MTX_RTMP: "no"
+      MTX_SRT: "no"
+      MTX_API: "no"
+      MTX_METRICS: "no"
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:8554:8554"
+    networks:
+      - media
+networks:
+  media:
+    driver: bridge

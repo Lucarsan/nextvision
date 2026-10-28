@@ -1,1 +1,1 @@
-import {readFile} from 'node:fs/promises';import {db} from './db.js';try{await db.query(await readFile(new URL('../sql/001_init.sql',import.meta.url),'utf8'));console.log('Migração concluída');}finally{await db.end();}
+import {readFile} from 'node:fs/promises';import {db} from './db.js';try{for(const file of ['001_init.sql','002_store_settings.sql'])await db.query(await readFile(new URL('../sql/'+file,import.meta.url),'utf8'));console.log('Migração concluída');}finally{await db.end();}

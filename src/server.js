@@ -65,6 +65,13 @@ app.patch('/api/cameras/:id',auth,roles('owner'),route(async(req,res)=>{
 }));
 app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM customers WHERE tenant_id=$1 ORDER BY created_at DESC',[tid(req)])).rows)));
 app.post('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),email:z.string().email().optional().or(z.literal('')),phone:z.string().max(30).optional(),address:z.string().max(500).optional()}),req,res);if(!v)return;const r=await q('INSERT INTO customers(tenant_id,name,email,phone,address) VALUES($1,$2,$3,$4,$5) RETURNING *',[tid(req),v.name,v.email||null,v.phone||null,v.address||null]);res.status(201).json(r.rows[0]);}));
+app.post('/api/customers/import',auth,roles('owner','operator'),route(async(req,res)=>{
+ const row=z.object({name:z.string().trim().min(2).max(120),email:z.union([z.string().email(),z.literal('')]).default(''),phone:z.string().max(30).default(''),address:z.string().max(500).default('')});
+ const v=valid(z.object({customers:z.array(row).min(1).max(300)}),req,res);if(!v)return;
+ const conn=await db.connect();
+ try{await conn.query('BEGIN');for(const x of v.customers)await conn.query('INSERT INTO customers(tenant_id,name,email,phone,address) VALUES($1,$2,$3,$4,$5)',[tid(req),x.name,x.email||null,x.phone,x.address]);await conn.query('COMMIT');res.status(201).json({imported:v.customers.length})}
+ catch(e){await conn.query('ROLLBACK');throw e}finally{conn.release()}
+}));
 app.patch('/api/customers/:id',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({name:z.string().min(2).max(120),email:z.union([z.string().email(),z.literal('')]),phone:z.string().max(30),address:z.string().max(500)}),req,res);if(!v)return;const r=await q('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4 WHERE id=$5 AND tenant_id=$6 RETURNING id,name,email,phone,address',[v.name,v.email||null,v.phone,v.address,req.params.id,tid(req)]);if(!r.rowCount)return bad(res,404,'Cliente não encontrado');await audit(req,'update','customer',req.params.id);res.json(r.rows[0]);}));
 async function checkCameraMapping(tenant,cameraId,mapping){
  const ids=[cameraId,...Object.values(mapping||{})].filter(Boolean);

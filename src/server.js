@@ -190,7 +190,7 @@ app.get('/api/public/store-logo/:id',rateLimit({windowMs:60000,limit:120}),route
  const r=await q("SELECT l.mime_type,l.image_data FROM tenant_logos l JOIN tenants t ON t.id=l.tenant_id WHERE l.tenant_id=$1 AND t.status IN ('trial','active')",[req.params.id]);
  if(!r.rowCount)return bad(res,404,'Imagem não encontrada');res.type(r.rows[0].mime_type).set('Cache-Control','public, max-age=300').send(r.rows[0].image_data);
 }));
-app.get('/api/cameras',auth,roles('master','owner','operator'),route(async(req,res)=>res.json((await q(req.user.role==='master'?'SELECT id,tenant_id,name,station,status,created_at FROM cameras ORDER BY created_at DESC':'SELECT id,tenant_id,name,station,status,created_at FROM cameras WHERE tenant_id=$1 ORDER BY created_at DESC',req.user.role==='master'?[]:[tid(req)])).rows)));
+app.get('/api/cameras',auth,roles('master','owner','operator'),route(async(req,res)=>res.json((await q(req.user.role==='master'?'SELECT id,tenant_id,name,station,status,device_id,created_at FROM cameras ORDER BY created_at DESC':'SELECT id,tenant_id,name,station,status,device_id,created_at FROM cameras WHERE tenant_id=$1 ORDER BY created_at DESC',req.user.role==='master'?[]:[tid(req)])).rows)));
 app.post('/api/cameras',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),station:z.string().max(120).optional()}),req,res);if(!v)return;const r=await q('INSERT INTO cameras(tenant_id,name,station) VALUES($1,$2,$3) RETURNING id,name,station,status',[tid(req),v.name,v.station||null]);res.status(201).json(r.rows[0]);}));
 app.patch('/api/cameras/:id',auth,roles('owner'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');

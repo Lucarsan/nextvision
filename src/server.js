@@ -49,6 +49,48 @@ app.get('/api/connect/status',deviceAuth,route(async(req,res)=>{
  await q("UPDATE shop_devices SET last_seen_at=now() WHERE id=$1",[req.device.id]);
  res.set('Cache-Control','no-store');res.json({device_id:req.device.id,tenant_id:req.device.tenant_id,enabled:true,tenant_status:req.device.tenant_status,heartbeat_seconds:30});
 }));
+app.patch('/api/master/tenants/:id/cameras/:cameraId/device',auth,roles('master'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success||!uuid.safeParse(req.params.cameraId).success)return bad(res,400,'ID inválido');
+ const v=valid(z.object({device_id:uuid.nullable()}),req,res);if(!v)return;
+ if(v.device_id){
+  const d=await q("SELECT id FROM shop_devices WHERE id=$1 AND tenant_id=$2 AND enabled=true AND revoked_at IS NULL",[v.device_id,req.params.id]);
+  if(!d.rowCount)return bad(res,400,'Dispositivo não autorizado para esta loja');
+ }
+ const assigned=await q("UPDATE cameras SET device_id=$1 WHERE id=$2 AND tenant_id=$3 RETURNING id,name,device_id",[v.device_id,req.params.cameraId,req.params.id]);
+ if(!assigned.rowCount)return bad(res,404,'Câmera não encontrada');
+ await audit(req,'assign_device','camera',req.params.cameraId,req.params.id);
+ res.json(assigned.rows[0]);
+}));
+app.get('/api/connect/recording-jobs',deviceAuth,route(async(req,res)=>{
+ await q("UPDATE shop_devices SET last_seen_at=now() WHERE id=$1",[req.device.id]);
+ const jobs=await q(`SELECT r.id recording_id,r.order_id,r.step_index,r.camera_id,r.status,r.started_at,r.ended_at,
+ o.status order_status,o.step_index current_step
+ FROM recordings r JOIN orders o ON o.id=r.order_id AND o.tenant_id=r.tenant_id
+ JOIN cameras ca ON ca.id=r.camera_id AND ca.tenant_id=r.tenant_id
+ WHERE r.tenant_id=$1 AND ca.device_id=$2 AND r.status IN ('pending','recording','paused','finalizing')
+ ORDER BY r.id LIMIT 100`,[req.device.tenant_id,req.device.id]);
+ res.set('Cache-Control','no-store');res.json({device_id:req.device.id,tenant_id:req.device.tenant_id,poll_seconds:5,jobs:jobs.rows});
+}));
+app.post('/api/connect/recording-jobs/:id/event',deviceAuth,route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Gravação inválida');
+ const v=valid(z.object({event:z.enum(['started','stopped','failed']),error:z.string().max(300).optional()}),req,res);if(!v)return;
+ const connection=await db.connect();try{
+  await connection.query('BEGIN');
+  const r=await connection.query(`SELECT r.id,r.status,r.order_id,r.step_index,r.ended_at,o.status order_status,o.step_index current_step
+  FROM recordings r JOIN cameras ca ON ca.id=r.camera_id AND ca.tenant_id=r.tenant_id
+  JOIN orders o ON o.id=r.order_id AND o.tenant_id=r.tenant_id
+  WHERE r.id=$1 AND r.tenant_id=$2 AND ca.device_id=$3 FOR UPDATE OF r`,[req.params.id,req.device.tenant_id,req.device.id]);
+  if(!r.rowCount){await connection.query('ROLLBACK');return bad(res,404,'Gravação não encontrada')}
+  const job=r.rows[0];
+  const allowed=v.event==='started'?job.status==='pending'&&job.order_status==='live'&&job.current_step===job.step_index:
+    v.event==='stopped'?['finalizing','paused'].includes(job.status):
+    ['pending','recording','finalizing','paused'].includes(job.status);
+  if(!allowed){await connection.query('ROLLBACK');return bad(res,409,'Evento incompatível com o estado atual')}
+  const target=v.event==='started'?'recording':v.event==='failed'?'failed':job.status==='paused'?'paused':'upload_pending';
+  const updated=await connection.query("UPDATE recordings SET status=$1,started_at=CASE WHEN $1='recording' THEN COALESCE(started_at,now()) ELSE started_at END,ended_at=CASE WHEN $1 IN ('upload_pending','failed') THEN COALESCE(ended_at,now()) ELSE ended_at END,error_message=CASE WHEN $1='failed' THEN $3 ELSE NULL END,device_id=$4,updated_at=now() WHERE id=$2 RETURNING id,status,started_at,ended_at",[target,job.id,v.error||null,req.device.id]);
+  await connection.query('COMMIT');res.json(updated.rows[0]);
+ }catch(e){await connection.query('ROLLBACK');throw e}finally{connection.release()}
+}));
 app.get('/api/master/tenants/:id/devices',auth,roles('master'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
  res.json((await q("SELECT id,tenant_id,name,enabled,created_at,last_seen_at,revoked_at FROM shop_devices WHERE tenant_id=$1 ORDER BY created_at DESC",[req.params.id])).rows);

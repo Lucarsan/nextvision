@@ -34,7 +34,7 @@ async function setupLivePlayer(){
   hlsPlayer=new Hls({enableWorker:true,lowLatencyMode:true});
   hlsPlayer.loadSource(src);hlsPlayer.attachMedia(video);
   hlsPlayer.on(Hls.Events.MANIFEST_PARSED,()=>video.play().catch(()=>{}));
-  hlsPlayer.on(Hls.Events.ERROR,(_event,data)=>{if(data.fatal){video.insertAdjacentText('afterend','Vídeo indisponível ou acesso não autorizado.');hlsPlayer.destroy();hlsPlayer=null}});
+  hlsPlayer.on(Hls.Events.ERROR,(_event,data)=>{if(data.fatal){const status=data.response?.code||data.networkDetails?.status||0;const message=status===404?'Pedido ou câmera sem autorização':status===409?'Câmera ocupada por outro pedido':status===503?'Transmissão ainda não configurada':status===502?'Túnel/MediaMTX indisponível':status===429?'Muitas requisições de vídeo':status?'Falha HTTP '+status:'Falha no carregamento do vídeo';video.insertAdjacentText('afterend',' '+message+'. Atualize a página após corrigir.');hlsPlayer.destroy();hlsPlayer=null}});
  }
 }
 function showCoupon(){const v=sessionStorage.getItem('nv_coupon_'+token),area=document.getElementById('couponArea');if(!v||!area)return;area.innerHTML='<div class="coupon"><div class="small muted">Apresente este código à loja</div><code>'+safe(v)+'</code><p class="small muted">Guarde o cupom até a validação.</p></div>'}

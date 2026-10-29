@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import pg from 'pg';
+import jwt from 'jsonwebtoken';
 
 // Requires a verified MediaMTX 1.21.3 binary, FFmpeg/ffprobe, OpenSSL and local
 // PostgreSQL. Only a disposable schema is created; application data is untouched.
@@ -68,7 +69,9 @@ test('HLS sessions through the real NextVision API and MediaMTX', {
       ALTER TABLE tenants ADD name text DEFAULT 'Test store', ADD logo_url text,
         ADD loyalty_enabled boolean DEFAULT false, ADD loyalty_target integer DEFAULT 10, ADD loyalty_reward text;
       ALTER TABLE processes ADD name text DEFAULT 'Test service', ADD steps jsonb DEFAULT '["Reception","Repair"]';
-      ALTER TABLE orders ADD customer_id uuid, ADD external_reference text, ADD created_at timestamptz DEFAULT now();
+      ALTER TABLE orders ADD customer_id uuid, ADD external_reference text, ADD created_at timestamptz DEFAULT now(), ADD started_at timestamptz, ADD completed_at timestamptz;
+      CREATE TABLE recordings(id uuid DEFAULT gen_random_uuid(),tenant_id uuid,order_id uuid,step_index integer,camera_id uuid,status text,started_at timestamptz,ended_at timestamptz,updated_at timestamptz DEFAULT now(),UNIQUE(order_id,step_index));
+      CREATE TABLE audit_events(tenant_id uuid,actor_id uuid,action text,target_type text,target_id uuid);
       CREATE TABLE loyalty_checkins(tenant_id uuid,customer_id uuid,redemption_id uuid);
       CREATE TABLE loyalty_redemptions(tenant_id uuid,customer_id uuid,status text,reward_snapshot text,issued_at timestamptz,redeemed_at timestamptz);
     `);
@@ -128,16 +131,18 @@ paths:
       try { await mediaGet('/camera/'); break; }
       catch { assert.ok(attempt < 40, 'MediaMTX must start'); await sleep(100); }
     }
-    start('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-re', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-g', '15', '-keyint_min', '15', '-sc_threshold', '0', '-f', 'rtsp', '-rtsp_transport', 'tcp', `rtsp://127.0.0.1:${rtspPort}/camera`]);
+    const publisherArgs = ['-hide_banner', '-loglevel', 'error', '-re', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-g', '15', '-keyint_min', '15', '-sc_threshold', '0', '-f', 'rtsp', '-rtsp_transport', 'tcp', `rtsp://127.0.0.1:${rtspPort}/camera`];
+    let publisher=start('ffmpeg',publisherArgs);
     for (let attempt = 0; ; attempt++) {
       const result = await mediaGet('/camera/index.m3u8?cookieCheck=1');
       if (result.status === 200) break;
       assert.ok(attempt < 30, 'Synthetic source must publish'); await sleep(200);
     }
     databaseURL.searchParams.set('options', '-c search_path=' + schema);
+    const jwtSecret=crypto.randomBytes(32).toString('hex');
     start(process.execPath, ['src/server.js'], {
       cwd: resolve(process.env.NEXTVISION_TEST_SERVER_ROOT || '.'),
-      env: { ...process.env, DATABASE_URL: databaseURL.toString(), DB_SSL: 'disable', JWT_SECRET: crypto.randomBytes(32).toString('hex'), PORT: String(apiPort), MEDIA_UPSTREAM_URL: origin, MEDIA_USERNAME: 'reader', MEDIA_PASSWORD: password, LIVE_CAMERA_ID: camera, NODE_EXTRA_CA_CERTS: root + '/trust.pem' }
+      env: { ...process.env, DATABASE_URL: databaseURL.toString(), DB_SSL: 'disable', JWT_SECRET: jwtSecret, PORT: String(apiPort), MEDIA_UPSTREAM_URL: origin, MEDIA_USERNAME: 'reader', MEDIA_PASSWORD: password, LIVE_CAMERA_ID: camera, NODE_EXTRA_CA_CERTS: root + '/trust.pem' }
     });
     const base = `http://127.0.0.1:${apiPort}`;
     const get = path => fetch(new URL(path, base), { signal: AbortSignal.timeout(10000) });
@@ -186,18 +191,23 @@ paths:
       assert.equal((await get(live(foreignToken))).status, 404);
       assert.equal((await get(live('not-a-valid-token'))).status, 404);
     });
-    await t.test('the real tracking page plays continuously for 60 seconds in Chromium', {
+    await t.test('the tracking page recovers automatically and plays for 60 seconds ('+(process.env.TEST_HLS_ENGINE||'native')+')', {
       skip: process.env.BROWSER_EXECUTABLE && process.env.HLS_JS_PATH ? false : 'Set BROWSER_EXECUTABLE and HLS_JS_PATH for browser validation'
     }, async () => {
       const { chromium } = createRequire(import.meta.url)('playwright');
       const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox'] });
       try {
         const page = await browser.newPage();
+        if(process.env.TEST_HLS_ENGINE==='hlsjs')await page.addInitScript(()=>{const original=HTMLMediaElement.prototype.canPlayType;HTMLMediaElement.prototype.canPlayType=function(type){return /mpegurl/i.test(type)?'':original.call(this,type);};});
         await page.route('https://fonts.googleapis.com/**', route => route.abort());
         await page.route('https://fonts.gstatic.com/**', route => route.abort());
         await page.route('https://cdn.jsdelivr.net/npm/hls.js@1.6.15/dist/hls.min.js', route => route.fulfill({ path: process.env.HLS_JS_PATH, contentType: 'application/javascript' }));
+        let initialOutage=true;
+        await page.route('**/api/public/orders/*/live/*',route=>initialOutage?route.fulfill({status:502,contentType:'application/json',body:'{"error":"Synthetic initial outage"}'}):route.continue());
         await page.goto(base + '/p/' + token);
-        await page.waitForFunction(() => document.querySelector('video')?.currentTime > 0, { timeout: 20000 });
+        await page.waitForFunction(()=>document.querySelector('.nv-live-message')?.textContent.includes('Reconectando em'),{},{timeout:45000});
+        initialOutage=false;
+        await page.waitForFunction(() => document.querySelector('video')?.currentTime > 0, {}, { timeout: 45000 });
         const startTime = await page.locator('video').evaluate(video => video.currentTime);
         for (let sample = 0; sample < 6; sample++) {
           await sleep(10000);
@@ -205,12 +215,51 @@ paths:
           assert.equal(state.error, false); assert.equal(state.paused, false);
           assert.ok(state.time > startTime + (sample + 1) * 8, 'Playback must continue advancing through automatic metadata refreshes');
         }
+        publisher.kill('SIGTERM');await once(publisher,'exit');
+        await page.waitForFunction(()=>document.querySelector('.nv-live-message')?.textContent.includes('Reconectando'),{},{timeout:45000});
+        publisher=start('ffmpeg',publisherArgs);
+        await page.waitForFunction(()=>document.querySelector('.nv-live-message')?.textContent==='Ao vivo',{},{timeout:45000});
+        const recovered=await page.locator('video').evaluate(video=>video.currentTime);
+        await sleep(2500);assert.ok(await page.locator('video').evaluate((video,time)=>video.currentTime>time,recovered),'Video must resume without F5 after a real publisher restart');
         await db.query("UPDATE orders SET status='paused' WHERE id=$1", [orderID]);
         await page.getByRole('button', { name: 'Atualizar agora' }).click();
         await page.waitForFunction(() => !document.querySelector('video.nv-live-player'));
         assert.equal((await get(live(token))).status, 404);
         await db.query("UPDATE orders SET status='live' WHERE id=$1", [orderID]);
       } finally { await browser.close(); }
+    });
+    await t.test('starting competing orders reserves the camera atomically; resume and stage changes preserve existing video',async()=>{
+      const first=crypto.randomUUID(),second=crypto.randomUUID(),other=crypto.randomUUID(),otherProcess=crypto.randomUUID();
+      const ownerToken=jwt.sign({id:crypto.randomUUID(),tenant_id:tenant,role:'owner'},jwtSecret,{algorithm:'HS256'});
+      const move=async(id,action)=>{
+        const response=await fetch(base+'/api/orders/'+id+'/transition',{method:'POST',headers:{Authorization:'Bearer '+ownerToken,'Content-Type':'application/json'},body:JSON.stringify({action}),signal:AbortSignal.timeout(10000)});
+        return {status:response.status,data:await response.json()};
+      };
+      await db.query("UPDATE orders SET status='paused' WHERE id=$1",[orderID]);
+      await db.query("INSERT INTO processes(id,tenant_id,camera_id,step_cameras,steps,name) VALUES($1,$2,$3,'{}','[\"Other station\"]','Other process')",[otherProcess,tenant,otherCamera]);
+      await db.query("INSERT INTO orders(id,tenant_id,process_id,camera_id,step_index,status) VALUES($1,$3,$4,$5,0,'queued'),($2,$3,$4,$5,0,'queued'),($6,$3,$7,$8,0,'queued')",[first,second,tenant,processID,camera,other,otherProcess,otherCamera]);
+      try{
+        const attempts=await Promise.all([move(first,'start'),move(second,'start')]);
+        assert.deepEqual(attempts.map(r=>r.status).sort(),[200,409]);
+        const winner=attempts[0].status===200?first:second,loser=winner===first?second:first;
+        const state=await db.query('SELECT id,status FROM orders WHERE id=ANY($1::uuid[])',[[winner,loser]]);
+        assert.equal(state.rows.find(r=>r.id===winner).status,'live');assert.equal(state.rows.find(r=>r.id===loser).status,'queued');
+        assert.equal((await db.query('SELECT count(*)::int n FROM recordings WHERE order_id=$1',[loser])).rows[0].n,0);
+        assert.equal((await move(other,'start')).status,200,'Another camera remains independently usable');
+        assert.equal((await move(winner,'advance')).status,409,'Cannot enter the occupied second station');
+        assert.equal((await db.query('SELECT step_index FROM orders WHERE id=$1',[winner])).rows[0].step_index,0);
+        await db.query("UPDATE orders SET public_token_hash=$1 WHERE id=$2",[hash('winner-token-for-testing'),winner]);
+        const stream=await get(live('winner-token-for-testing'));assert.equal(stream.status,200);await stream.text();
+        assert.equal((await move(winner,'pause')).status,200);assert.equal((await move(loser,'start')).status,200);
+        assert.equal((await move(winner,'resume')).status,409);
+        assert.equal((await db.query('SELECT status FROM orders WHERE id=$1',[winner])).rows[0].status,'paused');
+        assert.equal((await move(loser,'pause')).status,200);assert.equal((await move(winner,'resume')).status,200);
+      }finally{
+        await db.query('DELETE FROM recordings WHERE order_id=ANY($1::uuid[])',[[first,second,other]]);
+        await db.query('DELETE FROM orders WHERE id=ANY($1::uuid[])',[[first,second,other]]);
+        await db.query('DELETE FROM processes WHERE id=$1',[otherProcess]);
+        await db.query("UPDATE orders SET status='live',step_index=0 WHERE id=$1",[orderID]);
+      }
     });
     await t.test('another active order using the same camera blocks concurrent viewing', async () => {
       const competitor = crypto.randomUUID();

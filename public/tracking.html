@@ -16,28 +16,65 @@ function render(p){
  const claimable=loyalty&&Number(p.loyalty_checkins)>=Number(p.loyalty_target)&&!history.some(h=>h.status==='issued');
  return '<div class="merchant">'+(p.logo_url?'<img class="merchant-logo" alt="Logo da loja" src="'+safe(p.logo_url)+'">':'<span class="merchant-symbol">◉</span>')+'<div><h2>'+safe(cap(p.store||'Estabelecimento'))+'</h2><p class="muted">'+(p.external_reference?'Pedido #'+safe(p.external_reference)+' · ':'')+safe(cap(p.process||'Serviço'))+'</p></div></div>'+
  '<section class="status"><div class="status-label">Situação atual</div><div class="status-value">'+safe(currentLabel(p))+'</div>'+(p.status==='queued'&&Number(p.queue_position)>0?'<p class="small muted">Posição na fila: '+Number(p.queue_position)+'</p>':'')+'<div class="bar" role="progressbar" aria-label="Etapas concluídas" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+percent+'"><div style="width:'+percent+'%"></div></div><div class="between small muted" style="margin-top:8px"><span>Progresso do serviço</span><span>'+done+' de '+steps.length+' etapas</span></div></section>'+
- '<h3>Etapas do atendimento</h3><ol class="steps">'+steps.map((step,i)=>{const finished=p.status==='completed'||i<done,active=p.status!=='completed'&&i===Number(p.step_index);const record=(p.recordings||[]).find(r=>Number(r.step_index)===i&&r.status==='ready'&&r.download_url);return '<li><details class="step-panel" data-step="'+i+'" '+(active?'open':'')+'><summary><span><span class="step-name">'+(i+1)+'. '+safe(cap(step))+'</span><span class="step-meta" style="display:block">'+(finished?'Concluída':active?p.status==='live'?'Em andamento':p.status==='paused'?'Pausada':'Aguardando início':'Aguardando')+'</span></span><span class="small muted">'+(finished?'✓':active?'●':'○')+'</span></summary><div class="step-body"><div class="step-video">'+(record?'<video controls preload="metadata" src="'+safe(record.download_url)+'"></video><a class="step-download" href="'+safe(record.download_url)+'" download>Baixar vídeo da etapa</a>':active&&p.status==='live'?'<video class="nv-live-player" data-live="1" muted autoplay playsinline controls preload="none"></video><div class="small muted">Ao vivo · carregando vídeo autorizado…</div>':'Nenhuma gravação disponível para esta etapa.')+'</div></div></details></li>'}).join('')+'</ol>'+
+ '<h3>Etapas do atendimento</h3><ol class="steps">'+steps.map((step,i)=>{const finished=p.status==='completed'||i<done,active=p.status!=='completed'&&i===Number(p.step_index);const record=(p.recordings||[]).find(r=>Number(r.step_index)===i&&r.status==='ready'&&r.download_url);return '<li><details class="step-panel" data-step="'+i+'" '+(active?'open':'')+'><summary><span><span class="step-name">'+(i+1)+'. '+safe(cap(step))+'</span><span class="step-meta" style="display:block">'+(finished?'Concluída':active?p.status==='live'?'Em andamento':p.status==='paused'?'Pausada':'Aguardando início':'Aguardando')+'</span></span><span class="small muted">'+(finished?'✓':active?'●':'○')+'</span></summary><div class="step-body"><div class="step-video">'+(record?'<video controls preload="metadata" src="'+safe(record.download_url)+'"></video><a class="step-download" href="'+safe(record.download_url)+'" download>Baixar vídeo da etapa</a>':active&&p.status==='live'?'<video class="nv-live-player" data-live="1" muted autoplay playsinline controls preload="none"></video><div class="small muted nv-live-message" role="status">Ao vivo · carregando vídeo autorizado…</div>':'Nenhuma gravação disponível para esta etapa.')+'</div></div></details></li>'}).join('')+'</ol>'+
  (loyalty?'<section class="loyalty"><h3>★ Sua fidelidade</h3><p class="small">Você tem <strong>'+Number(p.loyalty_checkins)+'</strong> check-in(s) disponíveis de <strong>'+Number(p.loyalty_target)+'</strong> necessários.</p><div class="bar"><div style="width:'+Math.min(100,Math.round(Number(p.loyalty_checkins)/Math.max(1,Number(p.loyalty_target))*100))+'%"></div></div><p class="small">Recompensa: '+safe(p.loyalty_reward||'Benefício da loja')+'</p>'+(claimable?'<button class="primary" id="claim">Solicitar recompensa</button>':'')+'<div id="couponArea"></div><details><summary>Histórico de recompensas</summary>'+(history.length?history.map(h=>'<p class="small">'+safe(h.reward)+' · '+(h.status==='redeemed'?'Resgatada':'Cupom emitido')+' · '+new Date(h.issued_at).toLocaleDateString('pt-BR')+'</p>').join(''):'<p class="small">Nenhuma recompensa solicitada até agora.</p>')+'</details></section>':'');
 }
-let hlsPlayer=null;
+let hlsPlayer=null,liveVideo=null,liveRetryTimer=null,liveGeneration=0,liveRetryDelay=5000,liveFailed=false,hlsLibraryPromise=null;
+let liveProgress={generation:0,frames:null,time:0,at:Date.now()};
+setInterval(()=>{
+ const video=liveVideo;
+ if(!video||!video.isConnected||document.hidden||liveFailed)return;
+ const frames=video.getVideoPlaybackQuality?.().totalVideoFrames??null;
+ if(liveProgress.generation!==liveGeneration||video.seeking||(video.paused&&!video.ended&&video.readyState>=2)){
+  liveProgress={generation:liveGeneration,frames,time:video.currentTime,at:Date.now()};return;
+ }
+ const progressed=frames===null?video.currentTime>liveProgress.time:frames>liveProgress.frames;
+ if(progressed){liveProgress={generation:liveGeneration,frames,time:video.currentTime,at:Date.now()};return;}
+ if(Date.now()-liveProgress.at>15000){if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null;}retryLive(video,'A imagem parou de receber novos quadros.');}
+},3000);
+const liveMessage=(video,text)=>{const node=video.parentElement?.querySelector('.nv-live-message');if(node)node.textContent=text;};
+function retryLive(video,message){
+ liveFailed=true;
+ if(!video.isConnected)return;
+ const delay=liveRetryDelay;liveRetryDelay=Math.min(30000,delay*2);
+ liveMessage(video,message+' Reconectando em '+Math.round(delay/1000)+' segundos…');
+ clearTimeout(liveRetryTimer);
+ liveRetryTimer=setTimeout(()=>{liveRetryTimer=null;if(video.isConnected&&!document.hidden)void setupLivePlayer();},delay);
+}
 async function setupLivePlayer(){
- const video=content.querySelector('video.nv-live-player');
+ const video=content.querySelector('video.nv-live-player'),generation=++liveGeneration;
+ clearTimeout(liveRetryTimer);liveRetryTimer=null;
+ if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null}
+ if(liveVideo){liveVideo.onerror=null;liveVideo.onplaying=null;liveVideo.onended=null;if(liveVideo!==video){liveVideo.pause();liveVideo.removeAttribute('src');liveVideo.load();}}
+ liveVideo=video;liveFailed=false;
  if(!video)return;
  const src='/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8';
- if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null}
- if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=src;video.play().catch(()=>{});return;}
+ liveMessage(video,'Conectando à transmissão autorizada…');
+ video.onended=()=>{if(generation===liveGeneration)retryLive(video,'A transmissão foi interrompida.');};
+ video.onplaying=()=>{if(generation===liveGeneration){liveRetryDelay=5000;liveFailed=false;liveMessage(video,'Ao vivo');}};
+ if(video.canPlayType('application/vnd.apple.mpegurl')){
+  video.onerror=()=>{if(generation===liveGeneration)retryLive(video,'Transmissão temporariamente indisponível.');};
+  video.src=src;video.play().catch(()=>{});return;
+ }
  if(!window.Hls){
-  try{await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/hls.js@1.6.15/dist/hls.min.js';script.onload=resolve;script.onerror=reject;document.head.appendChild(script)})}catch{video.insertAdjacentText('afterend','Reprodução indisponível neste navegador.');return}
+  if(!hlsLibraryPromise)hlsLibraryPromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/hls.js@1.6.15/dist/hls.min.js';script.onload=resolve;script.onerror=()=>{script.remove();hlsLibraryPromise=null;reject(Error('Player unavailable'));};document.head.appendChild(script);});
+  try{await hlsLibraryPromise}catch{if(generation===liveGeneration)retryLive(video,'Não foi possível carregar o player.');return;}
  }
- if(!video.isConnected)return;
- if(window.Hls?.isSupported()){
-  hlsPlayer=new Hls({enableWorker:true,lowLatencyMode:true});
-  hlsPlayer.loadSource(src);hlsPlayer.attachMedia(video);
-  hlsPlayer.on(Hls.Events.MANIFEST_PARSED,()=>video.play().catch(()=>{}));
-  hlsPlayer.on(Hls.Events.ERROR,(_event,data)=>{if(data.fatal){const status=data.response?.code||data.networkDetails?.status||0;const message=status===404?'Pedido ou câmera sem autorização':status===409?'Câmera ocupada por outro pedido':status===503?'Transmissão ainda não configurada':status===502?'Túnel/MediaMTX indisponível':status===429?'Muitas requisições de vídeo':status?'Falha HTTP '+status:'Falha no carregamento do vídeo';video.insertAdjacentText('afterend',' '+message+'. Atualize a página após corrigir.');hlsPlayer.destroy();hlsPlayer=null}});
- }
+ if(!video.isConnected||generation!==liveGeneration)return;
+ if(!window.Hls?.isSupported()){liveMessage(video,'Reprodução de vídeo não suportada neste navegador.');return;}
+ const player=new Hls({enableWorker:true,lowLatencyMode:true});hlsPlayer=player;
+ player.on(Hls.Events.MANIFEST_PARSED,()=>{if(generation===liveGeneration)video.play().catch(()=>{});});
+ player.on(Hls.Events.FRAG_BUFFERED,()=>{if(generation===liveGeneration){liveMessage(video,'Ao vivo');liveRetryDelay=5000;}});
+ player.on(Hls.Events.ERROR,(_event,data)=>{
+  if(generation!==liveGeneration)return;
+  if(!data.fatal){if(data.type===Hls.ErrorTypes.NETWORK_ERROR)liveMessage(video,'Conexão instável. Reconectando…');return;}
+  const status=data.response?.code||data.networkDetails?.status||0;
+  const message=status===404?'Aguardando câmera autorizada.':status===409?'Câmera ocupada por outro pedido.':status===503?'Transmissão ainda não configurada.':status===502?'Origem do vídeo indisponível.':status===429?'Aguardando liberação de novas requisições.':'Conexão de vídeo interrompida.';
+  player.destroy();if(hlsPlayer===player)hlsPlayer=null;retryLive(video,message);
+ });
+ player.loadSource(src);player.attachMedia(video);
 }
 function showCoupon(){const v=sessionStorage.getItem('nv_coupon_'+token),area=document.getElementById('couponArea');if(!v||!area)return;area.innerHTML='<div class="coupon"><div class="small muted">Apresente este código à loja</div><code>'+safe(v)+'</code><p class="small muted">Guarde o cupom até a validação.</p></div>'}
 async function load(){if(updating||document.hidden)return;updating=true;refresh.disabled=true;try{const r=await fetch('/api/public/orders/'+encodeURIComponent(token),{cache:'no-store'});if(!r.ok)throw Error(r.status===404?'Pedido não encontrado. Confira o link recebido.':'Não foi possível consultar este pedido.');const p=await r.json(),html=render(p);if(html!==lastHtml){content.innerHTML=html;lastHtml=html;void setupLivePlayer();const key=p.status+':'+p.step_index;if(key!==lastStepKey){lastStepKey=key;openSteps.clear();if(p.status!=='completed')openSteps.add(Number(p.step_index));content.querySelectorAll('.step-panel').forEach(el=>{el.open=Number(el.dataset.step)===Number(p.step_index)&&p.status!=='completed'})}else{content.querySelectorAll('.step-panel').forEach(el=>{el.open=openSteps.has(Number(el.dataset.step))})}const claim=document.getElementById('claim');if(claim)claim.onclick=async()=>{claim.disabled=true;try{const result=await fetch('/api/public/orders/'+encodeURIComponent(token)+'/loyalty/claim',{method:'POST'});const data=await result.json();if(!result.ok)throw Error(data.error||'Não foi possível solicitar a recompensa');sessionStorage.setItem('nv_coupon_'+token,data.code);showCoupon()}catch(e){claim.insertAdjacentHTML('afterend','<p class="error">'+safe(e.message)+'</p>');claim.disabled=false}};showCoupon();content.querySelectorAll('.step-panel').forEach(el=>el.addEventListener('toggle',()=>{const i=Number(el.dataset.step);if(el.open)openSteps.add(i);else openSteps.delete(i)}))}updated.textContent='Atualizado às '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' · atualização automática a cada 15 segundos'}catch(e){if(!lastHtml)content.innerHTML='<div class="error">'+safe(e.message)+'</div>';updated.textContent='Falha na atualização. Tente novamente.'}finally{updating=false;refresh.disabled=false}}
-refresh.addEventListener('click',load);document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});load();setInterval(load,15000);
+refresh.addEventListener('click',load);document.addEventListener('visibilitychange',()=>{if(!document.hidden){load();if(liveFailed&&liveVideo?.isConnected)void setupLivePlayer();}});load();setInterval(load,15000);
 </script></body></html>

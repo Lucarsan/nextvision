@@ -14,6 +14,7 @@ namespace NextVision {
     private long progressTicks = DateTime.UtcNow.Ticks;
     private string lastTime;
     private volatile bool hasProgress;
+    private volatile string errorCategory = "";
     private IntPtr job = IntPtr.Zero;
     [StructLayout(LayoutKind.Sequential)] struct BasicLimit {
       public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
@@ -30,6 +31,7 @@ namespace NextVision {
     [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     public bool HasProgress { get { return hasProgress; } }
+    public string ErrorCategory { get { return errorCategory; } }
     public double IdleSeconds { get { return (DateTime.UtcNow - new DateTime(System.Threading.Interlocked.Read(ref progressTicks), DateTimeKind.Utc)).TotalSeconds; } }
     public bool HasExited { get { return Process.HasExited; } }
     public int ExitCode { get { return Process.ExitCode; } }
@@ -64,7 +66,14 @@ namespace NextVision {
           if (time != "N/A" && time != lastTime) { lastTime = time; System.Threading.Interlocked.Exchange(ref progressTicks, DateTime.UtcNow.Ticks); }
         }
       };
-      Process.ErrorDataReceived += delegate { }; // Diagnostics can contain an RTSP password.
+      Process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+        // Persist only a fixed category. Raw diagnostics can contain passwords.
+        if (e.Data == null) return;
+        string line = System.Text.RegularExpressions.Regex.Replace(e.Data, @"rtsps?://\S+", "[source]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).ToLowerInvariant();
+        if (line.Contains("401 unauthorized") || line.Contains("unauthorized") || line.Contains("authentication failed")) errorCategory = "falha de autenticacao";
+        else if (errorCategory == "" && (line.Contains("timed out") || line.Contains("connection refused") || line.Contains("no route") || line.Contains("network is unreachable"))) errorCategory = "camera/rede indisponivel";
+        else if (errorCategory == "" && (line.Contains("could not write header") || line.Contains("error opening output") || line.Contains("broken pipe"))) errorCategory = "falha ao publicar no relay";
+      };
       try {
         if (!Process.Start()) throw new InvalidOperationException("FFmpeg did not start");
         if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
@@ -85,6 +94,22 @@ namespace NextVision {
   }
 }
 '@
+}
+
+function Assert-NvLocalPortAvailable([int]$Port) {
+  # A bind probe incorrectly treats sockets in TIME_WAIT as active listeners.
+  # Check for a listening service; MediaMTX still validates its own actual bind.
+  $client=[Net.Sockets.TcpClient]::new()
+  try {
+    $pending=$client.BeginConnect([Net.IPAddress]::Loopback,$Port,$null,$null)
+    if (-not $pending.AsyncWaitHandle.WaitOne(300)) { throw 'Nao foi possivel confirmar o estado da porta local.' }
+    try { $client.EndConnect($pending) }
+    catch [Net.Sockets.SocketException] {
+      if ($_.Exception.SocketErrorCode -eq [Net.Sockets.SocketError]::ConnectionRefused) { return }
+      throw 'Nao foi possivel confirmar o estado da porta local.'
+    }
+    throw 'Porta local em uso. Encerre o servico externo correspondente antes de ativar o gerenciamento.'
+  } finally { $client.Dispose() }
 }
 
 function Assert-NvId([string]$Id) {
@@ -149,10 +174,11 @@ function Sync-NvPublishers {
     $entry = $State[$item.Id]
     if ($null -ne $entry.Media) {
       if ($entry.Media.HasExited -or $entry.Media.IdleSeconds -gt $StallSeconds) {
+        $reason=$(if (-not $entry.Media.HasExited) {'sem progresso de video'} elseif ($entry.Media.ErrorCategory) {$entry.Media.ErrorCategory} else {'processo encerrou'})
         Stop-NvMedia $entry.Media; $entry.Media = $null
         $entry.Failures = [Math]::Min(6, $entry.Failures + 1)
         $entry.NextAttempt = $Now.AddSeconds([Math]::Min(60, [Math]::Pow(2,$entry.Failures)))
-        $entry.Status = 'reconectando'
+        $entry.Status = 'reconectando: '+$reason
       } elseif (($Now - $entry.StartedAt).TotalSeconds -gt 60) { $entry.Failures = 0 }
     }
     if ($null -eq $entry.Media -and $Now -ge $entry.NextAttempt) {

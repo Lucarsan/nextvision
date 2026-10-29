@@ -11,9 +11,10 @@ function Test-NvAgentRunning([string]$Directory) {
   catch [IO.IOException] { return $true }
 }
 function Install-NvStartup {
-  param([string]$SourceDirectory,[string]$AgentDirectory,[string]$TaskName=(Get-NvStartupTaskName))
+  param([string]$SourceDirectory,[string]$AgentDirectory,[string]$TaskName=(Get-NvStartupTaskName),[ValidatePattern('^[A-Za-z0-9-]+\.ps1$')][string]$EntryPoint='nextvision-connect.ps1')
   if ($env:OS -ne 'Windows_NT') { throw 'Inicio automatico requer Windows.' }
-  $files=@('nextvision-connect.ps1','NextVision.Core.psm1','NextVision.Runtime.psm1','NextVision.Startup.psm1','NextVision.Network.psm1')
+  $files=@($EntryPoint,'NextVision.Core.psm1','NextVision.Startup.psm1')
+  if ($EntryPoint -eq 'nextvision-connect.ps1') { $files+=@('NextVision.Runtime.psm1','NextVision.Network.psm1') }
   $hashes=@(foreach ($file in $files) { (Get-FileHash -LiteralPath (Join-Path $SourceDirectory $file) -Algorithm SHA256).Hash })
   $sha=[Security.Cryptography.SHA256]::Create()
   try { $version=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($hashes -join ':'))))).Replace('-','').Substring(0,20) }
@@ -26,7 +27,7 @@ function Install-NvStartup {
     if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) { throw 'Falha ao verificar a copia do agente.' }
   }
   $executable=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '+[NextVision.MediaProcess]::Quote((Join-Path $target 'nextvision-connect.ps1'))+' run -Background'
+  $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '+[NextVision.MediaProcess]::Quote((Join-Path $target $EntryPoint))+' run -Background'
   $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   $action=New-ScheduledTaskAction -Execute $executable -Argument $arguments -WorkingDirectory $target
   $trigger=New-ScheduledTaskTrigger -AtLogOn -User $sid

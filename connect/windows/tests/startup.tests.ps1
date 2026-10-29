@@ -30,6 +30,11 @@ try {
   Assert (-not (Test-NvAgentRunning $agent))
   $handle=[IO.File]::Open((Join-Path $agent 'agent.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   try { Assert (Test-NvAgentRunning $agent) } finally { $handle.Dispose() }
+  [IO.File]::WriteAllText((Join-Path $source 'nextvision-pilot.ps1'),'param($Mode,[switch]$Background)')
+  $target=Install-NvStartup $source $agent $task 'nextvision-pilot.ps1'
+  $registered=Get-ScheduledTask -TaskName $task
+  Assert ($registered.Actions[0].Arguments.Contains('nextvision-pilot.ps1'))
+  Assert (-not [IO.File]::Exists((Join-Path $target 'NextVision.Network.psm1')))
   Stop-NvStartup $agent $task
   [xml]$definition=Export-ScheduledTask -TaskName $task
   Assert ($definition.Task.Settings.Enabled -eq 'false')

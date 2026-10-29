@@ -245,18 +245,33 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
  res.set({'Content-Type':mime,'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff'});
  if(asset.endsWith('.m3u8')){
   let playlist=await upstream.text();
-  // Reject unexpected external references, keys, or absolute paths.
-  const lines=playlist.split(/\r?\n/);
-  for(const line of lines){
-   if(line.startsWith('#')&&(/URI=/i.test(line)))return bad(res,502,'Playlist não suportada');
-   if(line&& !line.startsWith('#') && !/^[A-Za-z0-9_.-]+\.(?:m3u8|ts|m4s|mp4)(?:\?[A-Za-z0-9_=.-]+)?$/.test(line))return bad(res,502,'Playlist inválida');
-  }
-  playlist=lines.map(line=>{
-   if(!line||line.startsWith('#'))return line;
-   const [file,query='']=line.split('?');
-   if(!allowedMediaAsset(file))return '';
+  // Rewrite all HLS media references to this order-scoped proxy (including fMP4 LL-HLS tags).
+  const routeFor=reference=>{
+   if(!/^[A-Za-z0-9_.-]+\.(?:m3u8|ts|m4s|mp4)(?:\?[A-Za-z0-9_=.-]+)?$/.test(reference))return null;
+   const [file,query='']=reference.split('?');
+   if(!allowedMediaAsset(file))return null;
    return '/api/public/orders/'+encodeURIComponent(token)+'/live/'+file+(query?'?'+query:'');
-  }).join('\n');
+  };
+  const lines=playlist.split(/\r?\n/);
+  const rewritten=[];
+  for(const line of lines){
+   if(line.startsWith('#')){
+    if(/^#EXT-X-(?:KEY|SESSION-KEY):/i.test(line))return bad(res,502,'Playlist criptografada não suportada');
+    let invalid=false;
+    const next=line.replace(/URI="([^"]+)"/g,(_match,uri)=>{
+     const mapped=routeFor(uri);
+     if(!mapped){invalid=true;return _match}
+     return 'URI="'+mapped+'"';
+    });
+    if(invalid)return bad(res,502,'Playlist inválida');
+    rewritten.push(next);
+   }else if(line){
+    const mapped=routeFor(line);
+    if(!mapped)return bad(res,502,'Playlist inválida');
+    rewritten.push(mapped);
+   }else rewritten.push(line);
+  }
+  playlist=rewritten.join('\n');
   return res.send(playlist);
  }
  const bytes=await upstream.arrayBuffer();

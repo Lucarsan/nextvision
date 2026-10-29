@@ -62,3 +62,10 @@ authorization exist. A temporary Quick Tunnel is not permanent infrastructure.
 No signed `.exe`, Windows service, object storage, video upload/download or
 billing provider is created by this portal publication. Network maintenance UI
 is development agent code and is not automatically installed on the pilot PC.
+
+## Production acceptance
+
+The user confirmed `/health` returned `release: portal-operations` and revision
+`a8df9d99441790ec30a9707d2f8983db83c45e15`, then confirmed: “Portal atualizado e
+vídeo funcionando”. This verifies the published portal and active pilot video;
+it does not mark the commercial Windows installer or central ingest complete.

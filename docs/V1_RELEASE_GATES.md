@@ -5,7 +5,7 @@ instalador Windows nem provisiona uma infraestrutura de mídia.
 
 | Área | Evidência atual | Gate restante |
 | --- | --- | --- |
-| Portal/API/banco | Pedidos completos, ações na mesma aba, polling, clientes, nichos, fila privada, cotas e permissões; teste de upgrade 13→18 | Confirmar revisão implantada e aceite do usuário na produção |
+| Portal/API/banco | Pedidos completos, ações na mesma aba, polling, clientes, nichos, fila privada, cotas e permissões; teste de upgrade 13→18 | Aceite de produção confirmado em a8df9d9; manter regressão nas próximas versões |
 | Agente do piloto | DPAPI e tarefa após login; queda controlada do FFmpeg recuperou vídeo no Windows/cliente sem F5 | Migrar ao serviço e ao pacote final sem processos duplicados |
 | Instalador | Scripts/módulos versionados | `.exe`/instalador assinado, dependências verificadas/licenças, instalação/reparo/remoção, atualização e rollback |
 | Execução contínua | Supervisão de publicadores/relay e conector nomeado em desenvolvimento | Serviço antes do login, conta/ACL/cofre adequados e testes de reboot, logout e recuperação |

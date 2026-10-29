@@ -24,7 +24,7 @@ $stopFile=Join-Path $directory 'stop.request'
 $restartFile=Join-Path $directory 'restart.request'
 $task='NextVisionPilotPublisher-'+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 function ReadSource {
-  $secure=Get-Content -LiteralPath $keyFile -Raw|ConvertTo-SecureString
+  $secure=(Get-Content -LiteralPath $keyFile -Raw).Trim()|ConvertTo-SecureString
   $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
   try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)|ConvertFrom-Json }
   finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }

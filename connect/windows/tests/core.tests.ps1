@@ -55,6 +55,17 @@ try {
     Throws { Set-NvStorageDirectory 'relative/path' }
     Throws { Set-NvStorageDirectory $previous }
   }
+  Check 'pilot reads a protected JSON credential persisted with trailing CRLF' {
+    $keyFile=Join-Path $root 'source.dpapi'
+    $plain=@{id=$idA;transport='udp';url='rtsp://test:synthetic@127.0.0.1/source'}|ConvertTo-Json -Compress
+    $protected=ConvertFrom-SecureString (ConvertTo-SecureString $plain -AsPlainText -Force)
+    [IO.File]::WriteAllText($keyFile,($protected+"`r`n"),[Text.Encoding]::ASCII)
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../nextvision-pilot.ps1'),[ref]$tokens,[ref]$errors)
+    $reader=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'ReadSource'},$true)
+    $loaded=& $reader.Body.GetScriptBlock()
+    Assert ($loaded.id -eq $idA -and $loaded.transport -eq 'udp' -and $loaded.url -eq 'rtsp://test:synthetic@127.0.0.1/source')
+  }
   Check 'argument quoting preserves spaces, quotes, empty arguments and trailing backslashes' {
     Assert ([NextVision.MediaProcess]::Quote('') -eq '""')
     Assert ([NextVision.MediaProcess]::Quote('C:\video folder\') -eq '"C:\video folder\\"')

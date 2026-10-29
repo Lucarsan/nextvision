@@ -67,7 +67,7 @@ paths:
   const timeout=setTimeout(()=>child.kill('SIGKILL'),90000);
   const [code]=await once(child,'exit');clearTimeout(timeout);
   assert.equal(code,0,output.replaceAll('synthetic-secret','[redacted]'));
-  assert.match(output,/(14|16) checks passed/);
+  assert.match(output,/(15|17) checks passed/);
   const paths=JSON.parse(await readFile(root+'/paths.json','utf8'));
   const recordings=await readdir(root+'/recorded videos');assert.equal(recordings.length,4,'TS and MP4 preserved for both cameras');
   for(const [key,channel]of [['a',0],['b',2]]){

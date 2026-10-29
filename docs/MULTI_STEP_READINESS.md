@@ -18,14 +18,14 @@ selecionar explicitamente **Sem câmera nesta etapa**. A última opção é dife
 de herdar o padrão; não agenda captura nem libera HLS nessa etapa. O portal
 informa a ausência de câmera sem tentar iniciar um player.
 
-As gravações continuam identificadas por pedido e índice da etapa. Os testes
+As gravações são identificadas por pedido, índice da etapa e visita. Pausa/retomada e retorno a uma etapa criam novos identificadores de captura. Os testes
 verificam separação dos jobs, finalização ao avançar, conclusão somente na última
 etapa, estados de pausa/retomada e rejeição de notificações incompatíveis.
 
 ## Instalação e atualização
 
-Foi corrigido o delimitador SQL inválido da migração 008. O runner agora executa
-as migrações numa transação e serializa execuções simultâneas por banco/schema.
+Foi corrigido o delimitador SQL inválido da migração 008. O runner executa
+as migrações novas, registradas em uma tabela de versões, numa transação e serializa execuções simultâneas por banco/schema.
 Se houver falha, ocorre rollback e o comando retorna erro. Reexecutar as migrações
 não atualiza as cópias dos pedidos já preservados.
 
@@ -67,10 +67,10 @@ Um teste skipped não conta como comportamento validado.
 
 ## Pendências antes do instalador comercial
 
-- **Arquivos de gravação no Windows:** o agente atual usa o mesmo `.ts` com
-  sobrescrita ao retomar. O teste do backend não demonstra preservação dos
-  trechos em disco. É necessário gravar partes independentes e consolidá-las,
-  com teste real em Windows, antes de anunciar pausa/retomada sem perda.
+- **Arquivos de gravação no Windows:** a continuação agora recebe um novo job/UUID,
+  evitando reutilizar o caminho do trecho anterior. Ainda é necessário consolidar
+  as partes, reconciliar falhas e validar esse ciclo com o agente no Windows antes
+  de anunciar um único MP4 completo para download.
 - **Várias câmeras no agente:** o protótipo ainda lê o caminho RTSP fixo
   `camera`, mesmo quando os jobs referenciam câmeras diferentes. O agendamento
   correto no servidor não substitui esse mapeamento local.
@@ -86,3 +86,5 @@ Um teste skipped não conta como comportamento validado.
 Esta entrega prepara a consistência das etapas e o agendamento no servidor.
 Não afirma gravação MP4 completa, várias câmeras físicas funcionando nem produto
 empacotado.
+
+Para os fluxos operacionais, planos, controle de câmeras e implantação das migrações 015–018, consulte `STORE_OPERATIONS_AND_CAMERA_PLANS.md`.

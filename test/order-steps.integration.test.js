@@ -77,7 +77,7 @@ test('order history and recording scheduling across multiple steps', {
     const updated = { name: 'New service version', steps: ['Inspection', 'Ready'], camera_id: cameraB, step_cameras: {} };
     let processID, orderID, trackingPath, quickOrderID;
     const transition = action => request(`/api/orders/${orderID}/transition`, { method: 'POST', body: { action } });
-    const rows = async () => (await db.query('SELECT * FROM recordings WHERE order_id=$1 ORDER BY step_index', [orderID])).rows;
+    const rows = async () => (await db.query('SELECT * FROM recordings WHERE order_id=$1 ORDER BY step_index,visit_index', [orderID])).rows;
     await t.test('regular and quick orders capture their process at creation', async () => {
       processID = (await ok('/api/processes', { method: 'POST', body: initial }, 201)).id;
       const order = await ok('/api/orders', { method: 'POST', body: { customer_id: customer, process_id: processID } }, 201);
@@ -139,32 +139,35 @@ test('order history and recording scheduling across multiple steps', {
       assert.equal(recordings[0].camera_id, cameraA); assert.equal(recordings[0].status, 'pending');
       assert.equal((await event(firstRecording, 'started')).status, 200);
     });
-    await t.test('pause and resume preserve the recording identity and reject stale stop notifications', async () => {
+    await t.test('pause and resume preserve old files by allocating a new recording visit', async () => {
+      const original=firstRecording;
       assert.equal((await transition('pause')).status, 200);
       assert.equal((await transition('advance')).status, 409);
-      assert.equal((await event(firstRecording, 'stopped')).status, 200);
+      assert.equal((await event(original, 'stopped')).status, 200);
       assert.equal((await transition('resume')).status, 200);
-      assert.equal((await event(firstRecording, 'stopped')).status, 409);
+      assert.equal((await event(original, 'stopped')).status, 409);
+      const recordings=await rows();assert.equal(recordings.length,2);
+      assert.equal(recordings[0].status,'upload_pending');assert.equal(recordings[0].id,original);
+      firstRecording=recordings[1].id;assert.notEqual(firstRecording,original);assert.equal(recordings[1].visit_index,1);
       assert.equal((await event(firstRecording, 'started')).status, 200);
-      assert.equal((await rows()).length, 1); assert.equal((await rows())[0].id, firstRecording);
     });
     await t.test('advancing finalizes the previous step and schedules the second camera separately', async () => {
       assert.equal((await transition('advance')).status, 200);
-      const recordings = await rows(); assert.equal(recordings.length, 2);
-      assert.equal(recordings[0].status, 'finalizing'); assert.equal(recordings[0].camera_id, cameraA);
-      assert.equal(recordings[1].status, 'pending'); assert.equal(recordings[1].camera_id, cameraB);
-      assert.notEqual(recordings[0].id, recordings[1].id);
+      const recordings = await rows(); assert.equal(recordings.length, 3);
+      assert.equal(recordings[1].status, 'finalizing'); assert.equal(recordings[1].camera_id, cameraA);
+      assert.equal(recordings[2].status, 'pending'); assert.equal(recordings[2].camera_id, cameraB);
+      assert.notEqual(recordings[1].id, recordings[2].id);
       const jobs = await ok('/api/connect/recording-jobs', { token: deviceToken });
       assert.equal(jobs.jobs.length, 2);
       assert.equal((await event(firstRecording, 'started')).status, 409);
       assert.equal((await event(firstRecording, 'stopped', foreignDeviceToken)).status, 404);
       assert.equal((await event(firstRecording, 'stopped')).status, 200);
-      assert.equal((await rows())[0].status, 'upload_pending');
+      assert.equal((await rows())[1].status, 'upload_pending');
     });
     await t.test('an explicitly camera-free step does not fall back to the default camera', async () => {
       assert.equal((await transition('complete')).status, 409);
       assert.equal((await transition('advance')).status, 200);
-      assert.equal((await rows()).length, 2);
+      assert.equal((await rows()).length, 3);
       const order = (await db.query('SELECT camera_id,step_index FROM orders WHERE id=$1', [orderID])).rows[0];
       assert.equal(order.camera_id, null); assert.equal(order.step_index, 2);
       assert.equal((await transition('complete')).status, 200);

@@ -6,15 +6,19 @@ const files = [
   '004_loyalty.sql', '005_loyalty_redemptions.sql', '006_operations_ui.sql',
   '007_process_camera_mapping.sql', '008_technician_assignments.sql',
   '009_order_share_links.sql', '010_order_soft_delete.sql', '011_shop_devices.sql',
-  '012_step_recordings.sql', '013_camera_device_binding.sql', '014_order_process_snapshot.sql'
+  '012_step_recordings.sql', '013_camera_device_binding.sql', '014_order_process_snapshot.sql',
+  '015_store_operations.sql', '016_camera_control.sql', '017_camera_plans.sql', '018_camera_paths.sql'
 ];
 let client;
 try {
   client = await db.connect();
   await client.query('BEGIN');
   await client.query("SELECT pg_advisory_xact_lock(hashtext(current_database() || ':' || current_schema() || ':nextvision-migrate'))");
+  await client.query('CREATE TABLE IF NOT EXISTS nextvision_schema_migrations(name text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');
   for (const file of files) {
+    if ((await client.query('SELECT 1 FROM nextvision_schema_migrations WHERE name=$1', [file])).rowCount) continue;
     await client.query(await readFile(new URL('../sql/' + file, import.meta.url), 'utf8'));
+    await client.query('INSERT INTO nextvision_schema_migrations(name) VALUES($1)', [file]);
   }
   await client.query('COMMIT');
   console.log('Migração concluída');

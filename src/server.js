@@ -321,7 +321,7 @@ const liveMediaConfig=()=>{
 const allowedMediaAsset=name=>/^(index|stream|segment|part|init)[A-Za-z0-9_.-]{0,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name)||/^[A-Za-z0-9_-]{1,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name);
 app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:180,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{
  const config=liveMediaConfig();
- if(!config)return bad(res,503,'Vídeo indisponível');
+ if(!config){console.error('HLS configuration incomplete');return bad(res,503,'Vídeo indisponível');}
  const {token,asset}=req.params;
  if(!/^[\w-]{16,100}$/.test(token)||!allowedMediaAsset(asset))return bad(res,404,'Não encontrado');
  const hash=crypto.createHash('sha256').update(token).digest('hex');
@@ -353,9 +353,9 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);
  let upstream;
  try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1'},redirect:'manual',signal:controller.signal});}
- catch{return bad(res,502,'Falha ao carregar vídeo');}
+ catch(e){console.error('HLS upstream network failure:',e.cause?.code||e.name);return bad(res,502,'Falha ao carregar vídeo');}
  finally{clearTimeout(timeout);}
- if(!upstream.ok){await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}
+ if(!upstream.ok){console.error('HLS upstream HTTP',upstream.status,'asset type',asset.split('.').pop());await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}
  const mime=asset.endsWith('.m3u8')?'application/vnd.apple.mpegurl':asset.endsWith('.ts')?'video/mp2t':'video/mp4';
  res.set({'Content-Type':mime,'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff'});
  if(asset.endsWith('.m3u8')){

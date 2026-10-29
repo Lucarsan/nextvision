@@ -41,7 +41,9 @@ preservar SSIDs com acentos no Windows PowerShell 5.1.
 A troca é opcional. O agente verifica a política **antes** das chamadas à central,
 para que a perda da rede não impeça sua própria recuperação. A API nativa WLAN
 controla apenas o adaptador selecionado, usando perfis escolhidos pelo operador.
-Não procura senhas nem entra em outras redes salvas arbitrariamente.
+Não procura senhas nem entra em outras redes salvas arbitrariamente. Antes de
+solicitar conexão, confere se o perfil está disponível no alcance atual, evitando
+derrubar a conexão do PC ao tentar uma rede que ficou na loja.
 
 Três observações sem conexão antecedem a primeira tentativa. O agente tenta a
 principal, depois as reservas na ordem definida, aguarda até 20 segundos por

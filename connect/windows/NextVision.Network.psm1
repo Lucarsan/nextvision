@@ -17,10 +17,18 @@ namespace NextVision {
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Connection {
       public uint Mode; [MarshalAs(UnmanagedType.LPWStr)] public string Profile; public IntPtr Ssid, BssidList; public uint BssType, Flags;
     }
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode, Pack=4)] struct AvailableNetwork {
+      [MarshalAs(UnmanagedType.ByValTStr,SizeConst=256)] public string Profile;
+      public uint SsidLength; [MarshalAs(UnmanagedType.ByValArray,SizeConst=32)] public byte[] Ssid;
+      public uint BssType, BssidCount, Connectable, Reason, PhyCount;
+      [MarshalAs(UnmanagedType.ByValArray,SizeConst=8)] public uint[] PhyTypes;
+      public uint MorePhyTypes, Signal, SecurityEnabled, Auth, Cipher, Flags, Reserved;
+    }
     [DllImport("wlanapi.dll")] static extern uint WlanOpenHandle(uint version, IntPtr reserved, out uint negotiated, out IntPtr handle);
     [DllImport("wlanapi.dll")] static extern uint WlanCloseHandle(IntPtr handle, IntPtr reserved);
     [DllImport("wlanapi.dll")] static extern uint WlanEnumInterfaces(IntPtr handle, IntPtr reserved, out IntPtr list);
     [DllImport("wlanapi.dll")] static extern uint WlanGetProfileList(IntPtr handle, ref Guid adapter, IntPtr reserved, out IntPtr list);
+    [DllImport("wlanapi.dll")] static extern uint WlanGetAvailableNetworkList(IntPtr handle, ref Guid adapter, uint flags, IntPtr reserved, out IntPtr list);
     [DllImport("wlanapi.dll")] static extern uint WlanQueryInterface(IntPtr handle, ref Guid adapter, uint opcode, IntPtr reserved, out uint size, out IntPtr data, out uint type);
     [DllImport("wlanapi.dll")] static extern uint WlanConnect(IntPtr handle, ref Guid adapter, ref Connection connection, IntPtr reserved);
     [DllImport("wlanapi.dll")] static extern void WlanFreeMemory(IntPtr memory);
@@ -61,6 +69,18 @@ namespace NextVision {
         if(result!=0)throw new InvalidOperationException("Conexao Wi-Fi recusada ("+result+").");
       }finally{WlanCloseHandle(handle,IntPtr.Zero);}
     }
+    public static bool IsAvailable(Guid adapter,string profile) {
+      var handle=Open();IntPtr list=IntPtr.Zero;
+      try {
+        var error=WlanGetAvailableNetworkList(handle,ref adapter,0,IntPtr.Zero,out list);
+        if(error!=0)throw new InvalidOperationException("Consulta de redes disponiveis recusada ("+error+"). Confira permissoes Wi-Fi/localizacao.");
+        int count=Marshal.ReadInt32(list),size=Marshal.SizeOf(typeof(AvailableNetwork));
+        for(int i=0;i<count;i++) {
+          var item=(AvailableNetwork)Marshal.PtrToStructure(IntPtr.Add(list,8+i*size),typeof(AvailableNetwork));
+          if(item.Connectable!=0 && String.Equals(item.Profile,profile,StringComparison.Ordinal))return true;
+        }return false;
+      }finally{if(list!=IntPtr.Zero)WlanFreeMemory(list);WlanCloseHandle(handle,IntPtr.Zero);}
+    }
   }
 }
 '@
@@ -98,7 +118,10 @@ function New-NvNetworkState {
 }
 function Sync-NvNetwork {
   param($State,$Policy,[scriptblock]$Observe={param($id) @([NextVision.Wifi]::Adapters()|Where-Object {$_.Id -eq [guid]$id})|Select-Object -First 1},
-    [scriptblock]$Connect={param($id,$profile) [NextVision.Wifi]::Connect([guid]$id,$profile)},
+    [scriptblock]$Connect={param($id,$profile)
+      if (-not [NextVision.Wifi]::IsAvailable([guid]$id,$profile)) { throw 'Rede selecionada fora de alcance.' }
+      [NextVision.Wifi]::Connect([guid]$id,$profile)
+    },
     [scriptblock]$Probe={param($endpoint) Test-NvCameraEndpoint $endpoint},[datetime]$Now=[datetime]::UtcNow,[switch]$Maintenance)
   $State.Changed=$false
   if ($Maintenance) { $State.Status='manutencao manual de rede em andamento';return }
@@ -240,6 +263,7 @@ function Show-NvNetworkSettings([string]$PolicyFile,[array]$Endpoints,[string]$D
       $lock=[IO.File]::Open((Join-Path $Directory 'network-maintenance.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
       $before=@([NextVision.Wifi]::Adapters()|Where-Object {$_.Id -eq $id})|Select-Object -First 1
       $status.Text='Conectando e testando acesso local. Aguarde ate 20 segundos.';[Windows.Forms.Application]::DoEvents()
+      if (-not [NextVision.Wifi]::IsAvailable($id,$profile)) { throw 'Perfil selecionado indisponivel no alcance atual.' }
       [NextVision.Wifi]::Connect($id,$profile)
       $ok=$false;$deadline=[datetime]::UtcNow.AddSeconds(20)
       while ([datetime]::UtcNow -lt $deadline) {

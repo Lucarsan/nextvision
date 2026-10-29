@@ -1,6 +1,6 @@
 # NextVision Connect - Windows PowerShell 5.1+. Execute sempre com o mesmo usuario Windows.
 param(
-  [ValidateSet('activate','configure','configure-camera','remove-camera','set-storage','configure-runtime','configure-tunnel','external-runtime','install-startup','uninstall-startup','start','stop','status','run')][string]$Mode='run',
+  [ValidateSet('activate','configure','configure-camera','remove-camera','set-storage','configure-network','configure-runtime','configure-tunnel','external-runtime','install-startup','uninstall-startup','start','stop','status','run')][string]$Mode='run',
   [string]$CameraId='',
   [string]$RecordingDirectory='',
   [string]$MediaMTXPath='',
@@ -14,6 +14,7 @@ if ($env:OS -ne 'Windows_NT') { throw 'Este agente usa DPAPI do Windows. Os test
 Import-Module (Join-Path $PSScriptRoot 'NextVision.Core.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'NextVision.Runtime.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'NextVision.Startup.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'NextVision.Network.psm1') -Force
 $Base='https://nextvision-mgx6.onrender.com'
 $AgentDirectory=Join-Path $env:LOCALAPPDATA 'NextVisionConnect'
 $KeyFile=Join-Path $AgentDirectory 'device-token.dpapi'
@@ -25,6 +26,7 @@ $OutboxDirectory=Join-Path $AgentDirectory 'events'
 $RuntimeFile=Join-Path $AgentDirectory 'runtime.json'
 $RuntimeConfigFile=Join-Path $AgentDirectory 'runtime-config.dpapi'
 $StopFile=Join-Path $AgentDirectory 'stop.request'
+$NetworkFile=Join-Path $AgentDirectory 'network-policy.json'
 New-Item -ItemType Directory -Force -Path $AgentDirectory,$SourceDirectory,$JournalDirectory,$OutboxDirectory | Out-Null
 function ReadSecret([string]$Path) {
   $secure=(Get-Content -LiteralPath $Path -Raw).Trim() | ConvertTo-SecureString
@@ -104,6 +106,16 @@ if ($Mode -eq 'set-storage') {
   return
 }
 if (-not (Test-Path -LiteralPath $KeyFile)) { throw 'Execute primeiro: .\nextvision-connect.ps1 activate' }
+if ($Mode -eq 'configure-network') {
+  # Network maintenance must also work while the cloud is unreachable. It changes
+  # Windows connectivity only; camera source/plan authorization is unchanged.
+  $urls=@(foreach ($file in @(Get-ChildItem -LiteralPath $SourceDirectory -Filter '*.dpapi')) {
+    $disabled=Join-Path $SourceDirectory ($file.BaseName+'.disabled')
+    if (-not (Test-Path -LiteralPath $disabled)) { (ReadSecret $file.FullName|ConvertFrom-Json).url }
+  })
+  Show-NvNetworkSettings $NetworkFile @(Get-NvNetworkEndpoints $urls) $AgentDirectory
+  return
+}
 if ($Mode -in @('install-startup','start')) {
   if (-not (Test-Path -LiteralPath $RtspFile)) { throw 'Configure a leitura do MediaMTX antes de instalar o inicio automatico.' }
   Request 'GET' '/api/connect/status'|Out-Null
@@ -189,19 +201,22 @@ if ($Mode -in @('configure-camera','remove-camera')) {
   return
 }
 if ($Mode -eq 'status') {
-  $status=Request 'GET' '/api/connect/status'
-  $response=Request 'GET' '/api/connect/cameras'
-  Write-Host "Dispositivo autorizado: $($status.enabled); modo: $($response.mode)"
-  $response.cameras | Select-Object id,name,enabled,config_version
+  try {
+    $status=Request 'GET' '/api/connect/status'
+    $response=Request 'GET' '/api/connect/cameras'
+    Write-Host "Dispositivo autorizado: $($status.enabled); modo: $($response.mode)"
+    $response.cameras | Select-Object id,name,enabled,config_version
+  } catch { Write-Warning 'Nao foi possivel confirmar a autorizacao na central. O estado abaixo e somente local.' }
   if (Test-Path -LiteralPath $RuntimeFile) {
-    $runtime=Get-Content -LiteralPath $RuntimeFile -Raw|ConvertFrom-Json
+    $runtime=Get-Content -LiteralPath $RuntimeFile -Raw -Encoding UTF8|ConvertFrom-Json
     Write-Host "Ultima observacao local: $($runtime.observed_at). Atualizacoes com mais de 30 segundos podem estar desatualizadas."
     $runtime.publishers | Format-Table id,status
     if ($null -ne $runtime.PSObject.Properties['services']) { Write-Host ('Servicos: '+$runtime.services) }
+    if ($null -ne $runtime.PSObject.Properties['network']) { Write-Host ('Rede: '+$runtime.network) }
   }
   $task=Get-ScheduledTask -TaskName (Get-NvStartupTaskName) -ErrorAction SilentlyContinue
   if ($null -ne $task) { Write-Host ('Inicio automatico: '+$task.State) }
-  Write-Host 'Este status confirma autorizacao, nao confirma imagem em movimento. Confira tambem o link de um pedido em atendimento.'
+  Write-Host 'Confira tambem a imagem em movimento no link de um pedido em atendimento.'
   return
 }
 $initialRuntime=ReadRuntimeConfig
@@ -212,10 +227,11 @@ try { $instanceLock=[IO.File]::Open((Join-Path $AgentDirectory 'agent.lock'),[IO
 catch { throw 'Ja existe um agente em execucao para este usuario Windows.' }
 $publishers=New-NvSupervisor
 $services=New-NvRuntimeState
+$network=New-NvNetworkState
 $active=@{}
 function GetVideos {
   $directory=Join-Path $AgentDirectory 'recordings'
-  if (Test-Path -LiteralPath $SettingsFile) { $directory=(Get-Content -LiteralPath $SettingsFile -Raw|ConvertFrom-Json).recording_directory }
+  if (Test-Path -LiteralPath $SettingsFile) { $directory=(Get-Content -LiteralPath $SettingsFile -Raw -Encoding UTF8|ConvertFrom-Json).recording_directory }
   return Set-NvStorageDirectory $directory
 }
 function LocalReadUrl([string]$Path) {
@@ -279,6 +295,12 @@ try {
   }
   while ($true) {
     if (Test-Path -LiteralPath $StopFile) { break }
+    # Reconnect before cloud requests: a broken network must not block its own repair.
+    try {
+      $policy=$null;if (Test-Path -LiteralPath $NetworkFile) { $policy=Get-Content -LiteralPath $NetworkFile -Raw -Encoding UTF8|ConvertFrom-Json }
+      Sync-NvNetwork $network $policy -Maintenance:(Test-NvNetworkMaintenance $AgentDirectory)
+      if ($network.Changed) { Stop-NvPublishers $publishers;foreach ($id in @($active.Keys)) { Finalize $id $true } }
+    } catch { $network.Status='configuracao de rede invalida ou adaptador indisponivel; manutencao necessaria' }
     try {
       $config=Request 'GET' '/api/connect/cameras'
       FlushEvents
@@ -325,7 +347,7 @@ try {
       if (-not $health.RelayReady) { $desired=@();$paths=@{} }
       Sync-NvPublishers $publishers $desired $ffmpeg
       $observed=@(foreach ($id in $publishers.Keys) { @{id=$id;status=$publishers[$id].Status} })
-      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=$observed;services=$health.Status}
+      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=$observed;services=$health.Status;network=$network.Status}
       $jobs=@($result.jobs | Where-Object { $null -ne $_ })
       $byId=@{};foreach ($job in $jobs) { $byId[[string]$job.recording_id]=$job }
       foreach ($id in @($active.Keys)) {
@@ -354,7 +376,7 @@ try {
       Write-Warning 'Sem autorizacao/conexao ou configuracao invalida; fontes e gravacoes locais interrompidas. Nova tentativa em 5 segundos.'
       Stop-NvPublishers $publishers
       Stop-NvRuntime $services
-      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=@();status='interrompido'}
+      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=@();status='interrompido';network=$network.Status}
       foreach ($id in @($active.Keys)) { Finalize $id $true }
     }
     Start-Sleep -Seconds 5

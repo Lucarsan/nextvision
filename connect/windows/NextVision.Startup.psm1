@@ -13,7 +13,7 @@ function Test-NvAgentRunning([string]$Directory) {
 function Install-NvStartup {
   param([string]$SourceDirectory,[string]$AgentDirectory,[string]$TaskName=(Get-NvStartupTaskName))
   if ($env:OS -ne 'Windows_NT') { throw 'Inicio automatico requer Windows.' }
-  $files=@('nextvision-connect.ps1','NextVision.Core.psm1','NextVision.Runtime.psm1','NextVision.Startup.psm1')
+  $files=@('nextvision-connect.ps1','NextVision.Core.psm1','NextVision.Runtime.psm1','NextVision.Startup.psm1','NextVision.Network.psm1')
   $hashes=@(foreach ($file in $files) { (Get-FileHash -LiteralPath (Join-Path $SourceDirectory $file) -Algorithm SHA256).Hash })
   $sha=[Security.Cryptography.SHA256]::Create()
   try { $version=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($hashes -join ':'))))).Replace('-','').Substring(0,20) }

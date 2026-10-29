@@ -49,7 +49,7 @@ try {
     $settings=Join-Path $root 'settings.json'
     Write-NvJson $settings @{recording_directory=$directory}
     Write-NvJson $settings @{recording_directory=$directory;version=2}
-    $loaded=Get-Content -LiteralPath $settings -Raw|ConvertFrom-Json
+    $loaded=Get-Content -LiteralPath $settings -Raw -Encoding UTF8|ConvertFrom-Json
     Assert ($loaded.recording_directory -eq $directory -and $loaded.version -eq 2)
     Assert ([IO.File]::ReadAllText($previous) -eq 'preserved')
     Throws { Set-NvStorageDirectory 'relative/path' }

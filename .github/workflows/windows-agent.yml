@@ -24,3 +24,6 @@ jobs:
       - name: Current-user task registration and safe removal
         shell: ${{ matrix.shell }}
         run: ./connect/windows/tests/startup.tests.ps1
+      - name: Network selection and automatic recovery policy
+        shell: ${{ matrix.shell }}
+        run: ./connect/windows/tests/network.tests.ps1

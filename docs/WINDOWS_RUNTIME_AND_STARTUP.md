@@ -163,3 +163,7 @@ Continuam pendentes o teste real no Windows/Yoosee, a validação do túnel nome
 a interface técnica integrada, o instalador assinado, a ingestão comercial de
 múltiplas lojas e upload/download. Sem cópia externa, o computador desligado não
 fornece download dos vídeos locais.
+
+A tela de rede principal/reservas e manutenção está descrita em
+[`WINDOWS_NETWORK_MAINTENANCE.md`](WINDOWS_NETWORK_MAINTENANCE.md). É um recurso da
+branch de desenvolvimento e requer aceite Windows antes de distribuição.

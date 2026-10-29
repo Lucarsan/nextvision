@@ -9,7 +9,7 @@ $source=Join-Path $root 'source with spaces';$agent=Join-Path $root 'user data'
 [IO.Directory]::CreateDirectory($source)|Out-Null
 [IO.Directory]::CreateDirectory($agent)|Out-Null
 try {
-  foreach ($file in @('NextVision.Core.psm1','NextVision.Runtime.psm1','NextVision.Startup.psm1')) {
+  foreach ($file in @('NextVision.Core.psm1','NextVision.Runtime.psm1','NextVision.Startup.psm1','NextVision.Network.psm1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('../'+$file)) -Destination (Join-Path $source $file)
   }
   # Register the real task definition, but do not run an agent against production

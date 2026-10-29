@@ -153,3 +153,29 @@ de ingestão para múltiplas lojas continua pendente.
 bem-sucedida deixa a tarefa em `upload_pending`. Se o computador estiver desligado,
 o vídeo local não poderá ser baixado. A cópia externa para disponibilidade
 independente e a política de retenção ainda precisam ser implementadas.
+
+## Troca de rede: critérios de instalação
+
+A faixa 2,4/5 GHz e o nome do Wi-Fi não determinam alcance da câmera. Validar
+comunicação local real, inclusive quando PC e câmera usam faixas diferentes do
+mesmo roteador. Redes de convidados, isolamento entre clientes, outro roteador
+sem rota e internet móvel podem impedir essa comunicação. Usar o painel de uma
+rede externa mantém o agente de captura na loja; acesso remoto do próprio agente
+à câmera requer conexão gerenciada entre as redes.
+
+Matriz de aceite a executar no local:
+
+| Mudança | Resultado exigido |
+| --- | --- |
+| 2,4 GHz → 5 GHz com câmera acessível | Manter vídeo ou recuperar automaticamente, sem senha/F5 |
+| Wi-Fi → cabo na rede da câmera | Recuperar sem reconfigurar a câmera |
+| Rede sem alcance da câmera | Informar perda de acesso; preservar pedidos e credenciais |
+| Retorno à rede da câmera | Retomar publicador e player automaticamente |
+| Painel em celular/PC externo, agente na loja | Criar/alterar pedidos normalmente |
+
+Em 29/10/2026, no piloto, o PC em outro Wi-Fi não alcançava o RTSP da câmera.
+Após conectá-lo à rede correta, o teste TCP voltou a True. O supervisor separado
+do piloto recebeu imagem e um teste controlado de interrupção do FFmpeg confirmou
+recuperação automática no Windows e no cliente sem F5. A troca física específica
+entre 2,4/5 GHz e o início antes/depois de reinicialização ainda precisam ser
+validados; esse teste de queda não substitui a matriz acima.

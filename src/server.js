@@ -400,6 +400,12 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
   else if(v.action==='complete'&&status==='live'&&index===o.steps.length-1)status='completed';
   else{await c.query('ROLLBACK');return bad(res,409,'Transição inválida');}
   const camera=cameraForStep(o.step_cameras,o.process_camera_id,index);
+  if(status==='live'&&camera){
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['nextvision-camera:'+camera]);
+   const occupied=await c.query(`SELECT 1 FROM orders busy WHERE busy.tenant_id=$1 AND busy.id<>$2 AND busy.status='live' AND busy.deleted_at IS NULL
+    AND (CASE WHEN (busy.process_snapshot->'step_cameras') ? busy.step_index::text THEN busy.process_snapshot->'step_cameras'->>busy.step_index::text ELSE busy.process_snapshot->>'camera_id' END)=$3 LIMIT 1`,[tid(req),o.id,camera]);
+   if(occupied.rowCount){await c.query('ROLLBACK');return bad(res,409,'Esta câmera está em uso por outro pedido. Pause ou conclua o atendimento atual antes de usar esta câmera.');}
+  }
   // Close the old capture before assigning a distinct file/job to a new visit.
   if(['pause','advance','back','complete','resume'].includes(v.action)){
    await c.query("UPDATE recordings SET status='finalizing',ended_at=COALESCE(ended_at,now()),updated_at=now() WHERE order_id=$1 AND tenant_id=$2 AND step_index=$3 AND status IN ('pending','recording','paused')",[o.id,tid(req),o.step_index]);

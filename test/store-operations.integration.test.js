@@ -55,6 +55,7 @@ test('daily store operations, private queue information and administrative niche
       assert.deepEqual(recordings.filter(r => r.step_index === 0).map(r => r.visit_index), [0, 1, 2]);
       assert.equal(recordings.filter(r => r.status === 'pending').length, 1);
       f.migrate(); // Must not recreate the old unique-per-step index.
+      await move(order.id, 'pause'); // Release the station before the independent deletion scenarios.
     });
     await t.test('deleting live or paused work revokes the link and finalizes captures immediately', async () => {
       for (const paused of [false, true]) {

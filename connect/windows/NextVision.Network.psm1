@@ -88,12 +88,13 @@ namespace NextVision {
 function Test-NvCameraEndpoint($Endpoint,[int]$TimeoutMilliseconds=700) {
   $client=[Net.Sockets.TcpClient]::new()
   try {
-    $pending=$client.BeginConnect([string]$Endpoint.host,[int]$Endpoint.port,$null,$null)
-    if (-not $pending.AsyncWaitHandle.WaitOne($TimeoutMilliseconds)) { return $false }
-    $client.EndConnect($pending);return $true
+    $pending=$client.ConnectAsync([string]$Endpoint.host,[int]$Endpoint.port)
+    if (-not $pending.Wait($TimeoutMilliseconds)) { return $false }
+    $pending.GetAwaiter().GetResult();return $true
   } catch { return $false } finally { $client.Dispose() }
 }
 function Assert-NvNetworkPolicy($Policy) {
+  if ($Policy.enabled -isnot [bool]) { throw 'Estado de troca automatica invalido.' }
   $id=[guid]::Empty
   if (-not [guid]::TryParse([string]$Policy.adapter_id,[ref]$id)) { throw 'Selecione o adaptador Wi-Fi.' }
   $profiles=@($Policy.primary)+@($Policy.backups)

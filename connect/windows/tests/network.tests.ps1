@@ -80,4 +80,12 @@ Check 'disabling automatic mode clears previous connection attempts' {
  Tick $s $null
  Assert (-not $s.Searching -and $s.Pending -eq '' -and $s.Failures -eq 0 -and $s.Cursor -eq 0)
 }
+Check 'native WLAN memory layouts match the Windows SDK contract' {
+ $native=[NextVision.Wifi]
+ foreach ($pair in @(@('InterfaceInfo',532),@('ProfileInfo',516),@('AvailableNetwork',628))) {
+  $layout=$native.GetNestedType([string]$pair[0],[Reflection.BindingFlags]::NonPublic)
+  Assert ([Runtime.InteropServices.Marshal]::SizeOf([type]$layout) -eq [int]$pair[1]) ('Invalid WLAN layout: '+$pair[0])
+ }
+ Assert ($null -ne ([NextVision.WifiAdapter]).GetProperty('Name')) 'WinForms display binding needs a public property'
+}
 Write-Host "$script:passed network checks passed."

@@ -55,6 +55,17 @@ try {
     Throws { Set-NvStorageDirectory 'relative/path' }
     Throws { Set-NvStorageDirectory $previous }
   }
+  Check 'agent reads protected credentials persisted with CRLF' {
+    $Path=Join-Path $root 'persisted.dpapi'
+    $plain='synthetic-'+[guid]::NewGuid().ToString()
+    $encoded=ConvertFrom-SecureString (ConvertTo-SecureString $plain -AsPlainText -Force)
+    [IO.File]::WriteAllText($Path,($encoded+"`r`n"),[Text.Encoding]::ASCII)
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../nextvision-connect.ps1'),[ref]$tokens,[ref]$errors)
+    $reader=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'ReadSecret'},$true)
+    $loaded=& $reader.Body.GetScriptBlock()
+    Assert ($loaded -eq $plain)
+  }
   Check 'argument quoting preserves spaces, quotes, empty arguments and trailing backslashes' {
     Assert ([NextVision.MediaProcess]::Quote('') -eq '""')
     Assert ([NextVision.MediaProcess]::Quote('C:\video folder\') -eq '"C:\video folder\\"')

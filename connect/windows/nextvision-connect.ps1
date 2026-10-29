@@ -27,7 +27,7 @@ $RuntimeConfigFile=Join-Path $AgentDirectory 'runtime-config.dpapi'
 $StopFile=Join-Path $AgentDirectory 'stop.request'
 New-Item -ItemType Directory -Force -Path $AgentDirectory,$SourceDirectory,$JournalDirectory,$OutboxDirectory | Out-Null
 function ReadSecret([string]$Path) {
-  $secure=Get-Content -LiteralPath $Path -Raw | ConvertTo-SecureString
+  $secure=(Get-Content -LiteralPath $Path -Raw).Trim() | ConvertTo-SecureString
   $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
   try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
   finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }

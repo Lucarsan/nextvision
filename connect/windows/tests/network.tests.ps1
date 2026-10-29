@@ -88,4 +88,10 @@ Check 'native WLAN memory layouts match the Windows SDK contract' {
  }
  Assert ($null -ne ([NextVision.WifiAdapter]).GetProperty('Name')) 'WinForms display binding needs a public property'
 }
+Check 'camera connectivity probe accepts a listening endpoint and rejects a closed port' {
+ $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
+ $listener.Start();$port=$listener.LocalEndpoint.Port
+ try { Assert (Test-NvCameraEndpoint @{host='127.0.0.1';port=$port}) } finally { $listener.Stop() }
+ Assert (-not (Test-NvCameraEndpoint @{host='127.0.0.1';port=$port}))
+}
 Write-Host "$script:passed network checks passed."

@@ -258,7 +258,6 @@ app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,lim
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }));
 app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({action:z.enum(['start','pause','resume','advance','complete'])}),req,res);if(!v)return;const c=await db.connect();try{await c.query('BEGIN');const r=await c.query('SELECT o.*,p.steps,p.camera_id process_camera_id,p.step_cameras FROM orders o JOIN processes p ON p.id=o.process_id WHERE o.id=$1 AND o.tenant_id=$2 FOR UPDATE OF o',[req.params.id,tid(req)]);const o=r.rows[0];if(!o){await c.query('ROLLBACK');return bad(res,404,'Pedido não encontrado');}const steps=o.steps;let status=o.status,index=o.step_index;if(v.action==='start'&&status==='queued')status='live';else if(v.action==='pause'&&status==='live')status='paused';else if(v.action==='resume'&&status==='paused')status='live';else if(v.action==='advance'&&status==='live'&&index<steps.length-1)index++;else if(v.action==='complete'&&status==='live'&&index===steps.length-1)status='completed';else{await c.query('ROLLBACK');return bad(res,409,'Transição inválida');}const mappedCamera=o.step_cameras?.[String(index)]||o.process_camera_id||null;const upd=await c.query("UPDATE orders SET camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index",[status,index,o.id,mappedCamera]);// Recording schedule is transactional; the Windows agent must confirm capture and upload.
-const previousCamera=o.step_cameras?.[String(o.step_index)]||o.camera_id||o.process_camera_id||null;
 if(v.action==='start'){
  if(mappedCamera)await c.query("INSERT INTO recordings(tenant_id,order_id,step_index,camera_id,status) VALUES($1,$2,$3,$4,'pending') ON CONFLICT(order_id,step_index) DO NOTHING",[tid(req),o.id,index,mappedCamera]);
 }
@@ -345,7 +344,7 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
 }));
 app.get('/api/public/orders/:token/recordings',rateLimit({windowMs:60000,limit:60}),route(async(req,res)=>{
  const token=req.params.token;
- if(!/^[\\w-]{16,100}$/.test(token))return bad(res,404,'Não encontrado');
+ if(!/^[\w-]{16,100}$/.test(token))return bad(res,404,'Não encontrado');
  const r=await q("SELECT rec.id,rec.step_index,rec.status,rec.started_at,rec.ended_at FROM recordings rec JOIN orders o ON o.id=rec.order_id AND o.tenant_id=rec.tenant_id JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND t.status IN ('trial','active') AND o.deleted_at IS NULL ORDER BY rec.step_index",[digestToken(token),token]);
  res.set('Cache-Control','no-store');res.json(r.rows);
 }));

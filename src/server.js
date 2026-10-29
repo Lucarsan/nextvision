@@ -13,6 +13,60 @@ const audit=(req,action,type,id,tenant=tid(req))=>q('INSERT INTO audit_events(te
 app.get('/health',(_req,res)=>res.json({ok:true,service:'nextvision'}));
 app.post('/api/auth/login',rateLimit({windowMs:900000,limit:12,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{const v=valid(z.object({email:z.string().email(),password:z.string().min(1)}),req,res);if(!v)return;const {rows}=await q('SELECT id,tenant_id,name,email,password_hash,role FROM users WHERE lower(email)=lower($1) AND active=true',[v.email]);const u=rows[0];if(!u||!(await bcrypt.compare(v.password,u.password_hash)))return bad(res,401,'Credenciais inválidas');if(!['master','technician'].includes(u.role)){const r=await q("SELECT status FROM tenants WHERE id=$1",[u.tenant_id]);if(!r.rows.length||!['trial','active'].includes(r.rows[0].status))return bad(res,403,'Loja indisponível');}const token=jwt.sign({id:u.id,tenant_id:u.tenant_id,role:u.role},secret,{algorithm:'HS256',expiresIn:'8h'});res.json({token,user:{id:u.id,name:u.name,email:u.email,role:u.role,tenant_id:u.tenant_id}});}));
 app.get('/api/me',auth,(req,res)=>res.json(req.user));
+
+const digestToken=value=>crypto.createHash('sha256').update(value).digest('hex');
+const deviceAuth=route(async(req,res,next)=>{
+ const raw=/^Bearer (nvdev_[a-f0-9]{64})$/i.exec(req.get('authorization')||'')?.[1];
+ if(!raw)return bad(res,401,'Dispositivo não autenticado');
+ const result=await q("SELECT d.id,d.tenant_id,d.name,d.enabled,d.revoked_at,t.status tenant_status FROM shop_devices d JOIN tenants t ON t.id=d.tenant_id WHERE d.credential_hash=$1",[digestToken(raw)]);
+ if(!result.rowCount||!result.rows[0].enabled||result.rows[0].revoked_at||!['trial','active'].includes(result.rows[0].tenant_status))return bad(res,403,'Dispositivo bloqueado');
+ req.device=result.rows[0];next();
+});
+app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
+ const store=await q("SELECT id,status FROM tenants WHERE id=$1",[req.params.id]);
+ if(!store.rowCount)return bad(res,404,'Loja não encontrada');
+ if(!['trial','active'].includes(store.rows[0].status))return bad(res,409,'Loja bloqueada');
+ const code='NV-'+crypto.randomBytes(16).toString('hex').toUpperCase();
+ const result=await q("INSERT INTO shop_activation_codes(tenant_id,code_hash,expires_at,created_by) VALUES($1,$2,now()+interval '30 minutes',$3) RETURNING id,expires_at",[req.params.id,digestToken(code),req.user.id]);
+ await audit(req,'issue_activation','shop_device',result.rows[0].id,req.params.id);
+ res.set('Cache-Control','no-store');res.status(201).json({activation_code:code,expires_at:result.rows[0].expires_at,tenant_id:req.params.id});
+}));
+app.post('/api/connect/activate',rateLimit({windowMs:15*60000,limit:12,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{
+ const v=valid(z.object({activation_code:z.string().regex(/^NV-[A-F0-9]{32}$/),device_name:z.string().trim().min(2).max(120)}),req,res);if(!v)return;
+ const client=await db.connect();try{
+  await client.query('BEGIN');
+  const code=await client.query("SELECT a.id,a.tenant_id,t.status FROM shop_activation_codes a JOIN tenants t ON t.id=a.tenant_id WHERE a.code_hash=$1 AND a.used_at IS NULL AND a.expires_at>now() FOR UPDATE OF a",[digestToken(v.activation_code)]);
+  if(!code.rowCount||!['trial','active'].includes(code.rows[0].status)){await client.query('ROLLBACK');return bad(res,403,'Código expirado, inválido ou loja bloqueada')}
+  const credential='nvdev_'+crypto.randomBytes(32).toString('hex');
+  const d=await client.query("INSERT INTO shop_devices(tenant_id,name,credential_hash,activation_id) VALUES($1,$2,$3,$4) RETURNING id,tenant_id,name,enabled",[code.rows[0].tenant_id,v.device_name,digestToken(credential),code.rows[0].id]);
+  await client.query("UPDATE shop_activation_codes SET used_at=now() WHERE id=$1",[code.rows[0].id]);
+  await client.query('COMMIT');
+  res.set('Cache-Control','no-store');res.status(201).json({...d.rows[0],device_token:credential});
+ }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}));
+app.get('/api/connect/status',deviceAuth,route(async(req,res)=>{
+ await q("UPDATE shop_devices SET last_seen_at=now() WHERE id=$1",[req.device.id]);
+ res.set('Cache-Control','no-store');res.json({device_id:req.device.id,tenant_id:req.device.tenant_id,enabled:true,tenant_status:req.device.tenant_status,heartbeat_seconds:30});
+}));
+app.get('/api/master/tenants/:id/devices',auth,roles('master'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
+ res.json((await q("SELECT id,tenant_id,name,enabled,created_at,last_seen_at,revoked_at FROM shop_devices WHERE tenant_id=$1 ORDER BY created_at DESC",[req.params.id])).rows);
+}));
+app.patch('/api/master/tenants/:id/devices/:deviceId',auth,roles('master'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success||!uuid.safeParse(req.params.deviceId).success)return bad(res,400,'ID inválido');
+ const v=valid(z.object({enabled:z.boolean()}),req,res);if(!v)return;
+ const result=await q("UPDATE shop_devices SET enabled=$1 WHERE id=$2 AND tenant_id=$3 AND revoked_at IS NULL RETURNING id,tenant_id,name,enabled,last_seen_at",[v.enabled,req.params.deviceId,req.params.id]);
+ if(!result.rowCount)return bad(res,404,'Dispositivo não encontrado');
+ await audit(req,v.enabled?'enable':'disable','shop_device',req.params.deviceId,req.params.id);
+ res.json(result.rows[0]);
+}));
+app.post('/api/master/tenants/:id/devices/:deviceId/revoke',auth,roles('master'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success||!uuid.safeParse(req.params.deviceId).success)return bad(res,400,'ID inválido');
+ const result=await q("UPDATE shop_devices SET enabled=false,revoked_at=now() WHERE id=$1 AND tenant_id=$2 AND revoked_at IS NULL RETURNING id,tenant_id,enabled,revoked_at",[req.params.deviceId,req.params.id]);
+ if(!result.rowCount)return bad(res,404,'Dispositivo não encontrado');
+ await audit(req,'revoke','shop_device',req.params.deviceId,req.params.id);res.json(result.rows[0]);
+}));
 app.get('/api/master/diagnostics',auth,roles('master'),route(async(req,res)=>{const r=await q("SELECT current_database() database, current_schema() schema, (SELECT count(*)::int FROM users) users_count, (SELECT count(*)::int FROM tenants) tenants_count, (SELECT count(*)::int FROM users WHERE role='master') masters_count");res.set('Cache-Control','no-store');res.json(r.rows[0]);}));
 app.get('/api/master/tenants',auth,roles('master'),route(async(req,res)=>res.json((await q('SELECT t.*,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id) cameras_count FROM tenants t ORDER BY created_at DESC')).rows)));
 app.post('/api/master/tenants',auth,roles('master'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),slug:z.string().regex(/^[a-z0-9-]{3,60}$/),retention_days:z.number().int().min(1).max(365).default(15)}),req,res);if(!v)return;const r=await q('INSERT INTO tenants(name,slug,retention_days) VALUES($1,$2,$3) RETURNING *',[v.name,v.slug,v.retention_days]);await audit(req,'create','tenant',r.rows[0].id,r.rows[0].id);res.status(201).json(r.rows[0]);}));

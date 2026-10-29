@@ -94,8 +94,10 @@ etapa do pedido; não aceita escolher URL/câmera arbitrária pelo navegador.
 central em produção, provisionar a origem estável, autenticação de publicação
 por dispositivo/câmera e o agente Windows que configura cada fonte local em seu
 caminho aprovado. O agente passou a configurar fontes e supervisionar FFmpeg por câmera aprovada;
-continua publicando no relay local e depende da configuração externa desse relay
-e da origem estável. Ver `WINDOWS_AGENT_READINESS.md`.
+continua publicando no relay local, agora com gerenciamento opcional de MediaMTX
+e conector de túnel nomeado. A origem estável e a ingestão por loja exigem
+provisionamento externo. Ver `WINDOWS_AGENT_READINESS.md` e
+`WINDOWS_RUNTIME_AND_STARTUP.md`.
 Vários equipamentos físicos e ingestão de várias lojas exigem esses passos e
 validação real; caminhos distintos no servidor não bastam.
 

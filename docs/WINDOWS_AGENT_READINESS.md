@@ -43,7 +43,9 @@ do Windows e um administrador local conseguem alterar o programa ou inspecionar
 memória: DPAPI não transforma um computador administrado pelo lojista em ambiente
 inviolável. Limites e acesso público continuam sendo impostos pelo servidor.
 
-O MediaMTX e o túnel continuam como pré-requisitos externos nesta versão. Configurar
+O gerenciamento opcional de MediaMTX e túnel nomeado, junto do início automático,
+está em [`WINDOWS_RUNTIME_AND_STARTUP.md`](WINDOWS_RUNTIME_AND_STARTUP.md). No
+modo externo/legado, configurar
 RTSP local em `127.0.0.1:8554`, HLS autenticado e os caminhos aprovados. A publicação
 local do agente não usa credencial e deve ser permitida **somente em loopback e
 nos caminhos aprovados**, sem permitir leitura anônima. Não liberar HLS anônimo
@@ -141,9 +143,11 @@ apontando para binários oficiais verificados. Não usa câmera, senha, banco ou
 pedido de produção. Um teste skipped não conta como validação.
 
 Ainda pendem validação no PC Windows do piloto (DPAPI, Job Object, rede Yoosee,
-pasta escolhida, reinício e duas câmeras físicas), serviço/início automático,
-interface técnica integrada e instalador assinado. Esta versão não supervisiona
-MediaMTX/cloudflared e não fornece infraestrutura estável para múltiplas lojas.
+pasta escolhida, execução após login e duas câmeras físicas), túnel nomeado real,
+interface técnica integrada e instalador assinado. A tarefa de início automático
+e a supervisão opcional de MediaMTX/cloudflared foram implementadas; a execução
+específica no Windows ainda precisa ser confirmada. A infraestrutura comercial
+de ingestão para múltiplas lojas continua pendente.
 
 **Não há upload/download pelo portal.** MP4 fica no PC do lojista; finalização
 bem-sucedida deixa a tarefa em `upload_pending`. Se o computador estiver desligado,

@@ -1,13 +1,19 @@
 # NextVision Connect - Windows PowerShell 5.1+. Execute sempre com o mesmo usuario Windows.
 param(
-  [ValidateSet('activate','configure','configure-camera','remove-camera','set-storage','status','run')][string]$Mode='run',
+  [ValidateSet('activate','configure','configure-camera','remove-camera','set-storage','configure-runtime','configure-tunnel','external-runtime','install-startup','uninstall-startup','start','stop','status','run')][string]$Mode='run',
   [string]$CameraId='',
-  [string]$RecordingDirectory=''
+  [string]$RecordingDirectory='',
+  [string]$MediaMTXPath='',
+  [string]$CloudflaredPath='',
+  [string]$TunnelHostname='',
+  [switch]$Background
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2.0
 if ($env:OS -ne 'Windows_NT') { throw 'Este agente usa DPAPI do Windows. Os testes portaveis ficam em tests/.' }
 Import-Module (Join-Path $PSScriptRoot 'NextVision.Core.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'NextVision.Runtime.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'NextVision.Startup.psm1') -Force
 $Base='https://nextvision-mgx6.onrender.com'
 $AgentDirectory=Join-Path $env:LOCALAPPDATA 'NextVisionConnect'
 $KeyFile=Join-Path $AgentDirectory 'device-token.dpapi'
@@ -17,6 +23,8 @@ $SourceDirectory=Join-Path $AgentDirectory 'sources'
 $JournalDirectory=Join-Path $AgentDirectory 'recording-state'
 $OutboxDirectory=Join-Path $AgentDirectory 'events'
 $RuntimeFile=Join-Path $AgentDirectory 'runtime.json'
+$RuntimeConfigFile=Join-Path $AgentDirectory 'runtime-config.dpapi'
+$StopFile=Join-Path $AgentDirectory 'stop.request'
 New-Item -ItemType Directory -Force -Path $AgentDirectory,$SourceDirectory,$JournalDirectory,$OutboxDirectory | Out-Null
 function ReadSecret([string]$Path) {
   $secure=Get-Content -LiteralPath $Path -Raw | ConvertTo-SecureString
@@ -58,6 +66,20 @@ function AssertTechnicalAccess([string]$Token='') {
   }
   return $Token
 }
+function ReadRuntimeConfig {
+  if (Test-Path -LiteralPath $RuntimeConfigFile) { return (ReadSecret $RuntimeConfigFile|ConvertFrom-Json) }
+  return $null
+}
+function ResolveExecutable([string]$Path,[string]$Default) {
+  if (-not $Path) { $Path=$Default }
+  $command=Get-Command -Name $Path -CommandType Application -ErrorAction Stop
+  return $command.Source
+}
+if ($Mode -in @('stop','uninstall-startup')) {
+  if ($Mode -eq 'stop') { Stop-NvStartup $AgentDirectory;Write-Host 'Parada solicitada. Inicio automatico desabilitado ate executar start.' }
+  else { Uninstall-NvStartup $AgentDirectory;Write-Host 'Inicio automatico removido. Gravacoes e configuracoes preservadas.' }
+  return
+}
 if ($Mode -eq 'activate') {
   $name=Read-Host 'Nome deste computador'
   $code=Read-Host 'Codigo de ativacao gerado pela central'
@@ -82,6 +104,50 @@ if ($Mode -eq 'set-storage') {
   return
 }
 if (-not (Test-Path -LiteralPath $KeyFile)) { throw 'Execute primeiro: .\nextvision-connect.ps1 activate' }
+if ($Mode -in @('install-startup','start')) {
+  if (-not (Test-Path -LiteralPath $RtspFile)) { throw 'Configure a leitura do MediaMTX antes de instalar o inicio automatico.' }
+  Request 'GET' '/api/connect/status'|Out-Null
+  if ($Mode -eq 'install-startup') {
+    Install-NvStartup $PSScriptRoot $AgentDirectory|Out-Null
+    Write-Host 'Agente copiado para pasta estavel e tarefa registrada para o login deste usuario Windows.'
+  }
+  Start-NvStartup $AgentDirectory
+  Write-Host 'Agente habilitado em segundo plano. Use status para conferir a ultima observacao e stop para encerrar.'
+  return
+}
+if ($Mode -in @('configure-runtime','configure-tunnel','external-runtime')) {
+  $technicalToken=AssertTechnicalAccess
+  if ($Mode -eq 'external-runtime') {
+    if (Test-Path -LiteralPath $RuntimeConfigFile) { Remove-Item -LiteralPath $RuntimeConfigFile }
+    Write-Host 'Gerenciamento local desativado. O agente encerrara seus servicos; configure/inicie o relay externo antes de usa-lo.'
+    return
+  }
+  $options=ReadRuntimeConfig
+  if ($Mode -eq 'configure-runtime') {
+    if (-not $MediaMTXPath) { $MediaMTXPath=Read-Host 'Caminho do mediamtx.exe (vazio usa PATH)' }
+    $relay=ResolveExecutable $MediaMTXPath 'mediamtx'
+    $version=@(& $relay --version 2>$null)
+    if ($LASTEXITCODE -ne 0 -or ($version -join '') -notmatch '^v?1\.21\.3$') { throw 'Esta versao foi validada com MediaMTX 1.21.3. Use esse binario antes de habilitar o gerenciamento.' }
+    if ($null -eq $options) { $options=[pscustomobject]@{relay_binary=$relay;ffmpeg_binary=(ResolveExecutable '' 'ffmpeg');tunnel_enabled=$false;tunnel_binary='';tunnel_hostname='';tunnel_token=''} }
+    else { $options.relay_binary=$relay;$options.ffmpeg_binary=ResolveExecutable '' 'ffmpeg' }
+  } else {
+    if ($null -eq $options) { throw 'Configure primeiro o relay: configure-runtime.' }
+    if (-not $TunnelHostname) { $TunnelHostname=Read-Host 'Hostname fixo provisionado pela central no Cloudflare' }
+    Assert-NvTunnelHostname $TunnelHostname
+    $binary=ResolveExecutable $CloudflaredPath 'cloudflared'
+    $secret=Read-Host 'Token do tunel nomeado (nao enviar pelo chat)' -AsSecureString
+    $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
+    try { $token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+    if (-not $token) { throw 'Token de tunel vazio.' }
+    $options.tunnel_enabled=$true;$options.tunnel_binary=$binary;$options.tunnel_hostname=$TunnelHostname;$options.tunnel_token=$token
+  }
+  AssertTechnicalAccess $technicalToken|Out-Null
+  SaveSecret $RuntimeConfigFile ($options|ConvertTo-Json -Compress)
+  $options=$null;$token=$null
+  Write-Host 'Configuracao protegida salva. O agente aplicara no proximo ciclo. Processos externos precisam ser encerrados pelo tecnico; nao serao assumidos ou mortos.'
+  return
+}
 if ($Mode -eq 'configure') {
   $credential=Get-Credential -Message 'Usuario e senha de leitura do MediaMTX local'
   if ($null -eq $credential) { return }
@@ -131,16 +197,21 @@ if ($Mode -eq 'status') {
     $runtime=Get-Content -LiteralPath $RuntimeFile -Raw|ConvertFrom-Json
     Write-Host "Ultima observacao local: $($runtime.observed_at). Atualizacoes com mais de 30 segundos podem estar desatualizadas."
     $runtime.publishers | Format-Table id,status
+    if ($null -ne $runtime.PSObject.Properties['services']) { Write-Host ('Servicos: '+$runtime.services) }
   }
+  $task=Get-ScheduledTask -TaskName (Get-NvStartupTaskName) -ErrorAction SilentlyContinue
+  if ($null -ne $task) { Write-Host ('Inicio automatico: '+$task.State) }
   Write-Host 'Este status confirma autorizacao, nao confirma imagem em movimento. Confira tambem o link de um pedido em atendimento.'
   return
 }
-$ffmpeg=(Get-Command ffmpeg -ErrorAction Stop).Source
+$initialRuntime=ReadRuntimeConfig
+$ffmpeg=$(if ($null -ne $initialRuntime) { ResolveExecutable $initialRuntime.ffmpeg_binary 'ffmpeg' } else { ResolveExecutable '' 'ffmpeg' })
 if (-not (Test-Path -LiteralPath $RtspFile)) { throw 'Execute antes: .\nextvision-connect.ps1 configure' }
 # An exclusive file handle prevents two agents from publishing/recording the same camera.
 try { $instanceLock=[IO.File]::Open((Join-Path $AgentDirectory 'agent.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
 catch { throw 'Ja existe um agente em execucao para este usuario Windows.' }
 $publishers=New-NvSupervisor
+$services=New-NvRuntimeState
 $active=@{}
 function GetVideos {
   $directory=Join-Path $AgentDirectory 'recordings'
@@ -196,6 +267,8 @@ function Finalize([string]$Id,[bool]$Failed=$false) {
 }
 Write-Host 'NextVision Connect: fontes autorizadas e gravacoes. Ctrl+C encerra apenas os processos deste agente.'
 try {
+  if ($Background -and (Test-Path -LiteralPath $StopFile)) { return }
+  if (-not $Background -and (Test-Path -LiteralPath $StopFile)) { Remove-Item -LiteralPath $StopFile }
   # Recover metadata after a crash without overwriting or silently claiming a complete recording.
   foreach ($file in @(Get-ChildItem -LiteralPath $JournalDirectory -Filter '*.json')) {
     $journal=Get-Content -LiteralPath $file.FullName -Raw|ConvertFrom-Json
@@ -205,6 +278,7 @@ try {
     Remove-Item -LiteralPath $file.FullName
   }
   while ($true) {
+    if (Test-Path -LiteralPath $StopFile) { break }
     try {
       $config=Request 'GET' '/api/connect/cameras'
       FlushEvents
@@ -229,9 +303,29 @@ try {
           $desired+=@{Id=[string]$camera.id;Path=$path;Url=$source.url;Transport=$source.transport;Revision=$revisions[[string]$camera.id]}
         } elseif ($config.mode -ne 'legacy_single_camera') { $paths.Remove([string]$camera.id) }
       }
+      $options=ReadRuntimeConfig
+      $readerUser='';$readerPassword=''
+      if ($null -ne $options) {
+        if ($ffmpeg -ne $options.ffmpeg_binary) {
+          Stop-NvPublishers $publishers
+          foreach ($id in @($active.Keys)) { Finalize $id $true }
+          $ffmpeg=ResolveExecutable $options.ffmpeg_binary 'ffmpeg'
+        }
+        $credential=ReadSecret $RtspFile;$separator=$credential.IndexOf(':')
+        if ($separator -lt 1) { throw 'Credencial local invalida.' }
+        $readerUser=$credential.Substring(0,$separator);$readerPassword=$credential.Substring($separator+1)
+      }
+      $generation=$services.RelayGeneration
+      $health=Sync-NvRuntime $services $options @($desired|ForEach-Object { $_.Path }) (Join-Path $AgentDirectory 'services') $readerUser $readerPassword
+      $readerPassword=$null;$credential=$null
+      if ($generation -ne $health.Generation) {
+        Stop-NvPublishers $publishers
+        foreach ($id in @($active.Keys)) { Finalize $id $true }
+      }
+      if (-not $health.RelayReady) { $desired=@();$paths=@{} }
       Sync-NvPublishers $publishers $desired $ffmpeg
       $observed=@(foreach ($id in $publishers.Keys) { @{id=$id;status=$publishers[$id].Status} })
-      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=$observed}
+      Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=$observed;services=$health.Status}
       $jobs=@($result.jobs | Where-Object { $null -ne $_ })
       $byId=@{};foreach ($job in $jobs) { $byId[[string]$job.recording_id]=$job }
       foreach ($id in @($active.Keys)) {
@@ -259,6 +353,7 @@ try {
     } catch {
       Write-Warning 'Sem autorizacao/conexao ou configuracao invalida; fontes e gravacoes locais interrompidas. Nova tentativa em 5 segundos.'
       Stop-NvPublishers $publishers
+      Stop-NvRuntime $services
       Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=@();status='interrompido'}
       foreach ($id in @($active.Keys)) { Finalize $id $true }
     }
@@ -266,6 +361,7 @@ try {
   }
 } finally {
   Stop-NvPublishers $publishers
+  Stop-NvRuntime $services
   Write-NvJson $RuntimeFile @{observed_at=[datetime]::UtcNow.ToString('o');publishers=@();status='encerrado'}
   foreach ($id in @($active.Keys)) { Finalize $id $true }
   $instanceLock.Dispose()

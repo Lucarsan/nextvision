@@ -21,3 +21,6 @@ jobs:
       - name: Parse, storage, DPAPI and owned Windows processes
         shell: ${{ matrix.shell }}
         run: ./connect/windows/tests/core.tests.ps1
+      - name: Current-user task registration and safe removal
+        shell: ${{ matrix.shell }}
+        run: ./connect/windows/tests/startup.tests.ps1

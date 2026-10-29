@@ -43,10 +43,17 @@ namespace NextVision {
       }
       b.Append('\\', slashes * 2); return b.Append('"').ToString();
     }
-    public MediaProcess(string binary, string[] args, string input) {
+    public MediaProcess(string binary, string[] args, string input) : this(binary, args, input, null) { }
+    public MediaProcess(string binary, string[] args, string input, System.Collections.IDictionary environment) {
       Process = new Process(); var info = new ProcessStartInfo(binary);
       info.UseShellExecute = false; info.CreateNoWindow = true;
       info.RedirectStandardInput = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true;
+      // Do not let inherited MediaMTX/Cloudflared overrides open listeners or
+      // replace credentials from the generated, approved configuration.
+      var inherited = new System.Collections.ArrayList(info.EnvironmentVariables.Keys);
+      foreach (string key in inherited)
+        if (key.StartsWith("MTX_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("RTSP_", StringComparison.OrdinalIgnoreCase) || key.StartsWith("TUNNEL_", StringComparison.OrdinalIgnoreCase)) info.EnvironmentVariables.Remove(key);
+      if (environment != null) foreach (System.Collections.DictionaryEntry item in environment) info.EnvironmentVariables[(string)item.Key] = (string)item.Value;
       var b = new StringBuilder(); foreach (var arg in args) { if (b.Length > 0) b.Append(' '); b.Append(Quote(arg)); }
       info.Arguments = b.ToString(); Process.StartInfo = info;
       Process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
@@ -68,7 +75,7 @@ namespace NextVision {
         }
         Process.BeginOutputReadLine(); Process.BeginErrorReadLine();
         Process.StandardInput.Write(input); Process.StandardInput.Close();
-      } catch { Dispose(); throw new InvalidOperationException("Falha ao iniciar FFmpeg; confira executavel e configuracao local."); }
+      } catch { Dispose(); throw new InvalidOperationException("Falha ao iniciar processo gerenciado; confira executavel e configuracao local."); }
     }
     public void Dispose() {
       try { if (!Process.HasExited) { Process.Kill(); Process.WaitForExit(5000); } } catch (InvalidOperationException) { }

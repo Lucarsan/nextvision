@@ -1,10 +1,11 @@
 # NextVision Connect - piloto Windows / PowerShell 5.1+
 # Uso: .\nextvision-connect.ps1 activate | run
-param([ValidateSet('activate','run')][string]$Mode='run')
+param([ValidateSet('activate','configure','run')][string]$Mode='run')
 $ErrorActionPreference='Stop'
 $Base='https://nextvision-mgx6.onrender.com'
 $HomePath=Join-Path $env:LOCALAPPDATA 'NextVisionConnect'
 $KeyFile=Join-Path $HomePath 'device-token.dpapi'
+$RtspFile=Join-Path $HomePath 'rtsp-read.dpapi'
 $Videos=Join-Path $HomePath 'recordings'
 New-Item -ItemType Directory -Force -Path $HomePath,$Videos | Out-Null
 function Request([string]$Method,[string]$Path,$Payload=$null){
@@ -34,6 +35,31 @@ if($Mode -eq 'activate'){
   ConvertFrom-SecureString $Sec | Set-Content -Path $KeyFile -Encoding Ascii
   Write-Host "Vinculado a loja $($Data.tenant_id), dispositivo $($Data.id). Credencial protegida com Windows DPAPI."
   exit
+}
+if($Mode -eq 'configure'){
+  $User=Read-Host 'Usuario de leitura do MediaMTX (ex: teste)'
+  $Pass=Read-Host 'Senha de leitura do MediaMTX' -AsSecureString
+  $Ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($Pass)
+  try{$Plain=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr)}
+  finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Ptr)}
+  $Credential=$User+':'+$Plain
+  $Protected=ConvertTo-SecureString $Credential -AsPlainText -Force
+  ConvertFrom-SecureString $Protected | Set-Content -Path $RtspFile -Encoding Ascii
+  $Plain=$null;$Credential=$null
+  Write-Host 'Credenciais RTSP armazenadas com Windows DPAPI para este usuario.'
+  exit
+}
+function GetRtspUrl {
+  if(!(Test-Path $RtspFile)){throw 'Execute antes: .\\nextvision-connect.ps1 configure'}
+  $Sec=Get-Content $RtspFile | ConvertTo-SecureString
+  $Ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($Sec)
+  try{$RawCredential=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr)}
+  finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Ptr)}
+  $sep=$RawCredential.IndexOf(':')
+  if($sep -lt 1){throw 'Credenciais de leitura invalidas'}
+  $Username=[uri]::EscapeDataString($RawCredential.Substring(0,$sep))
+  $Password=[uri]::EscapeDataString($RawCredential.Substring($sep+1))
+  return ('rtsp://'+$Username+':'+$Password+'@127.0.0.1:8554/camera')
 }
 if(!(Test-Path $KeyFile)){throw 'Execute primeiro: .\nextvision-connect.ps1 activate'}
 if(!(Get-Command ffmpeg -ErrorAction SilentlyContinue)){throw 'FFmpeg nao encontrado no PATH.'}
@@ -65,7 +91,7 @@ try{
           $raw=Join-Path $Videos ($id+'.ts')
           try{
             # Captura a retransmissao local H.264 que ja esta funcionando; evita segunda sessao na Yoosee.
-            $args=@('-hide_banner','-loglevel','error','-y','-rtsp_transport','tcp','-i','rtsp://127.0.0.1:8554/camera','-map','0:v:0','-an','-c:v','copy','-f','mpegts',$raw)
+            $args=@('-hide_banner','-loglevel','error','-y','-rtsp_transport','tcp','-i',(GetRtspUrl),'-map','0:v:0','-an','-c:v','copy','-f','mpegts',$raw)
             $proc=Start-Process -FilePath 'ffmpeg' -ArgumentList $args -PassThru -WindowStyle Hidden
             Start-Sleep -Seconds 2
             if($proc.HasExited){throw "FFmpeg encerrou imediatamente: $($proc.ExitCode)"}

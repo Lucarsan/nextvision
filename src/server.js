@@ -204,6 +204,65 @@ app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,lim
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }));
 app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({action:z.enum(['start','pause','resume','advance','complete'])}),req,res);if(!v)return;const c=await db.connect();try{await c.query('BEGIN');const r=await c.query('SELECT o.*,p.steps,p.camera_id process_camera_id,p.step_cameras FROM orders o JOIN processes p ON p.id=o.process_id WHERE o.id=$1 AND o.tenant_id=$2 FOR UPDATE OF o',[req.params.id,tid(req)]);const o=r.rows[0];if(!o){await c.query('ROLLBACK');return bad(res,404,'Pedido não encontrado');}const steps=o.steps;let status=o.status,index=o.step_index;if(v.action==='start'&&status==='queued')status='live';else if(v.action==='pause'&&status==='live')status='paused';else if(v.action==='resume'&&status==='paused')status='live';else if(v.action==='advance'&&status==='live'&&index<steps.length-1)index++;else if(v.action==='complete'&&status==='live'&&index===steps.length-1)status='completed';else{await c.query('ROLLBACK');return bad(res,409,'Transição inválida');}const mappedCamera=o.step_cameras?.[String(index)]||o.process_camera_id||null;const upd=await c.query("UPDATE orders SET camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index",[status,index,o.id,mappedCamera]);if(v.action==='complete'&&o.customer_id){await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled=true) ON CONFLICT(order_id) DO NOTHING',[tid(req),o.customer_id,o.id]);}await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tid(req),req.user.id,v.action,'order',o.id]);await c.query('COMMIT');void notifyOrder(o.id,v.action).catch(e=>console.error('Falha no e-mail:',e.message));res.json(upd.rows[0]);}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}));
+
+const liveMediaConfig=()=>{
+ const {MEDIA_UPSTREAM_URL,MEDIA_USERNAME,MEDIA_PASSWORD,LIVE_CAMERA_ID}=process.env;
+ if(!MEDIA_UPSTREAM_URL||!MEDIA_USERNAME||!MEDIA_PASSWORD||!uuid.safeParse(LIVE_CAMERA_ID).success)return null;
+ let origin;try{origin=new URL(MEDIA_UPSTREAM_URL);}catch{return null;}
+ if(origin.protocol!=='https:'||origin.username||origin.password||origin.search||origin.hash||origin.pathname!=='/')return null;
+ return {origin,username:MEDIA_USERNAME,password:MEDIA_PASSWORD,cameraId:LIVE_CAMERA_ID};
+};
+const allowedMediaAsset=name=>/^(index|stream|segment|part|init)[A-Za-z0-9_.-]{0,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name)||/^[A-Za-z0-9_-]{1,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name);
+app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:180,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{
+ const config=liveMediaConfig();
+ if(!config)return bad(res,503,'Vídeo indisponível');
+ const {token,asset}=req.params;
+ if(!/^[\w-]{16,100}$/.test(token)||!allowedMediaAsset(asset))return bad(res,404,'Não encontrado');
+ const hash=crypto.createHash('sha256').update(token).digest('hex');
+ // A camera must belong to this tenant and this active order; never expose a general camera feed
+ const found=await q(`SELECT o.id,o.tenant_id,o.step_index,o.camera_id,p.step_cameras,p.camera_id process_camera
+ FROM orders o JOIN tenants t ON t.id=o.tenant_id
+ JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
+ JOIN cameras c ON c.id=$3 AND c.tenant_id=o.tenant_id
+ WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.status='live'
+ AND o.deleted_at IS NULL AND t.status IN ('trial','active')`,[hash,token,config.cameraId]);
+ if(!found.rowCount)return bad(res,404,'Vídeo indisponível');
+ const order=found.rows[0];
+ const chosen=order.step_cameras?.[String(order.step_index)]||order.camera_id||order.process_camera;
+ if(chosen!==config.cameraId)return bad(res,404,'Vídeo indisponível');
+ const competing=await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
+ WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL
+ AND COALESCE(p.step_cameras->>(o.step_index::text),o.camera_id::text,p.camera_id::text)=$3 LIMIT 1`,[order.tenant_id,order.id,config.cameraId]);
+ if(competing.rowCount)return bad(res,409,'Câmera ocupada por outro pedido');
+ const url=new URL('/camera/'+asset,config.origin);
+ const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);
+ let upstream;
+ try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1'},redirect:'manual',signal:controller.signal});}
+ catch{return bad(res,502,'Falha ao carregar vídeo');}
+ finally{clearTimeout(timeout);}
+ if(!upstream.ok){await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}
+ const mime=asset.endsWith('.m3u8')?'application/vnd.apple.mpegurl':asset.endsWith('.ts')?'video/mp2t':'video/mp4';
+ res.set({'Content-Type':mime,'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff'});
+ if(asset.endsWith('.m3u8')){
+  let playlist=await upstream.text();
+  // Reject unexpected external references, keys, or absolute paths.
+  const lines=playlist.split(/\r?\n/);
+  for(const line of lines){
+   if(line.startsWith('#')&&(/URI=/i.test(line)))return bad(res,502,'Playlist não suportada');
+   if(line&& !line.startsWith('#') && !/^[A-Za-z0-9_.-]+\.(?:m3u8|ts|m4s|mp4)(?:\?[A-Za-z0-9_=.-]+)?$/.test(line))return bad(res,502,'Playlist inválida');
+  }
+  playlist=lines.map(line=>{
+   if(!line||line.startsWith('#'))return line;
+   const [file,query='']=line.split('?');
+   if(!allowedMediaAsset(file))return '';
+   return '/api/public/orders/'+encodeURIComponent(token)+'/live/'+file+(query?'?'+query:'');
+  }).join('\n');
+  return res.send(playlist);
+ }
+ const bytes=await upstream.arrayBuffer();
+ if(bytes.byteLength>8*1024*1024)return bad(res,502,'Segmento excede o limite');
+ res.send(Buffer.from(bytes));
+}));
 app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(async(req,res)=>{if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');const hash=crypto.createHash('sha256').update(req.params.token).digest('hex');const r=await q("SELECT o.id,o.status,o.step_index,o.external_reference,p.name process,p.steps,t.name store,t.logo_url,t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN (SELECT coalesce(json_agg(json_build_object('status',lr.status,'reward',lr.reward_snapshot,'issued_at',lr.issued_at,'redeemed_at',lr.redeemed_at) ORDER BY lr.issued_at DESC),'[]'::json) FROM loyalty_redemptions lr WHERE lr.tenant_id=o.tenant_id AND lr.customer_id=o.customer_id) ELSE '[]'::json END loyalty_history,(SELECT count(*)::int FROM orders x WHERE x.tenant_id=o.tenant_id AND x.camera_id IS NOT DISTINCT FROM o.camera_id AND x.status='queued' AND x.created_at<o.created_at)+1 queue_position FROM orders o JOIN processes p ON p.id=o.process_id JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND t.status IN ('trial','active')",[hash,req.params.token]);if(!r.rowCount)return bad(res,404,'Pedido não encontrado');res.set('Cache-Control','no-store');res.json(r.rows[0]);}));
 // Rota explícita da prévia, independente da resolução do diretório de trabalho.
 app.get('/loja-preview.html',(_req,res)=>res.sendFile('loja-preview.html',{root:new URL('../public/',import.meta.url).pathname}));

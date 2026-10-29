@@ -24,6 +24,8 @@ try {
   Check 'per-camera routing and fail-closed modes' {
     $camera=@{id=$idA;stream_path='camera_'+$idA}
     Assert ((Get-NvCameraPath @{mode='central_media'} $camera) -eq ('camera_'+$idA))
+    $databasePath='camera_'+$idA.Replace('-','')
+    Assert ((Get-NvCameraPath @{mode='central_media'} @{id=$idA;stream_path=$databasePath}) -eq $databasePath)
     Assert ($null -eq (Get-NvCameraPath @{mode='unconfigured'} $camera))
     Assert ($null -eq (Get-NvCameraPath @{mode='legacy_single_camera'} $camera))
     Assert ((Get-NvCameraPath @{mode='legacy_single_camera'} @{id=$idA;stream_path='camera'}) -eq 'camera')
@@ -119,7 +121,7 @@ try {
     if (-not $env:NV_TEST_SOURCE_A -or -not $env:NV_TEST_SOURCE_B) { throw 'The isolated media test requires two synthetic RTSP sources.' }
     $state=New-NvSupervisor
     $desired=@(
-      @{Id=$idA;Path=('camera_'+$idA);Url=$env:NV_TEST_SOURCE_A;Transport='udp';Revision='1'},
+      @{Id=$idA;Path=('camera_'+$idA.Replace('-',''));Url=$env:NV_TEST_SOURCE_A;Transport='udp';Revision='1'},
       @{Id=$idB;Path=('camera_'+$idB);Url=$env:NV_TEST_SOURCE_B;Transport='tcp';Revision='1'}
     )
     function AwaitFrames($Entry) {

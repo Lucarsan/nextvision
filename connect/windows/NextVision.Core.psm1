@@ -122,7 +122,7 @@ function Get-NvCameraPath($Response, $Camera) {
     return $null
   }
   if ($Response.mode -ne 'central_media') { return $null }
-  if ($Camera.stream_path -notmatch '^camera_[a-fA-F0-9-]{36}$') { throw 'Caminho de camera invalido.' }
+  if ($Camera.stream_path -notmatch '^camera_(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})$') { throw 'Caminho de camera invalido.' }
   return [string]$Camera.stream_path
 }
 function New-NvRtspUrl([string]$Address, [string]$Username, [string]$Password) {
@@ -158,7 +158,7 @@ function Sync-NvPublishers {
   $byId = @{}
   foreach ($item in $Desired) {
     Assert-NvId ([string]$item.Id)
-    if ($item.Path -notmatch '^(camera|camera_[a-fA-F0-9-]{36})$') { throw 'Destino nao autorizado.' }
+    if ($item.Path -notmatch '^(?:camera|camera_(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}))$') { throw 'Destino nao autorizado.' }
     if ($byId.ContainsKey($item.Id)) { throw 'Camera duplicada.' }
     $byId[$item.Id] = $item
   }

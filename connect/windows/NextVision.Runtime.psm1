@@ -9,7 +9,9 @@ function New-NvControlSecret {
   $bytes=New-Object byte[] 32
   $rng=[Security.Cryptography.RandomNumberGenerator]::Create()
   try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-  return [Convert]::ToBase64String($bytes)
+  # MediaMTX rejects some Base64 characters (notably /). Hex keeps all 256
+  # bits of randomness inside its supported credential alphabet.
+  return ([BitConverter]::ToString($bytes)).Replace('-','')
 }
 function Assert-NvLocalPortAvailable([int]$Port) {
   # A bind probe incorrectly treats sockets in TIME_WAIT as active listeners.
@@ -77,7 +79,7 @@ function Sync-NvRuntime {
     return @{RelayReady=$true;TunnelReady=$null;Generation=$State.RelayGeneration;Status='externo'}
   }
   $approved=@($Paths|Sort-Object -Unique)
-  foreach ($path in $approved) { if ($path -notmatch '^(camera|camera_[a-fA-F0-9-]{36})$') { throw 'Caminho local nao autorizado.' } }
+  foreach ($path in $approved) { if ($path -notmatch '^(?:camera|camera_(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}))$') { throw 'Caminho local nao autorizado.' } }
   if (-not $ReaderUsername -or -not $ReaderPassword -or $ReaderUsername -in @('any','nvctl')) { throw 'Configure uma credencial de leitura nao vazia e exclusiva.' }
   if (-not [IO.Path]::IsPathRooted($Config.relay_binary) -or -not [IO.File]::Exists($Config.relay_binary)) { throw 'MediaMTX local nao encontrado.' }
   if ($Config.tunnel_enabled) {

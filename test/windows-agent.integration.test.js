@@ -44,14 +44,14 @@ authInternalUsers:
     ips: [127.0.0.1]
     permissions:
       - action: publish
-        path: "~^(source_[ab]|camera_[a-f0-9-]{36})$"
+        path: "~^(source_[ab]|camera_(?:[a-f0-9]{32}|[a-f0-9-]{36}))$"
   - user: reader
     pass: synthetic-secret
     permissions:
       - action: read
-        path: "~^(source_[ab]|camera_[a-f0-9-]{36})$"
+        path: "~^(source_[ab]|camera_(?:[a-f0-9]{32}|[a-f0-9-]{36}))$"
 paths:
-  "~^(source_[ab]|camera_[a-f0-9-]{36})$":
+  "~^(source_[ab]|camera_(?:[a-f0-9]{32}|[a-f0-9-]{36}))$":
     source: publisher
 `,{mode:0o600});
   start(resolve(process.env.MEDIAMTX_BINARY),[config]);await waitForPort(8554);
@@ -71,7 +71,9 @@ paths:
   const paths=JSON.parse(await readFile(root+'/paths.json','utf8'));
   const recordings=await readdir(root+'/recorded videos');assert.equal(recordings.length,4,'TS and MP4 preserved for both cameras');
   for(const [key,channel]of [['a',0],['b',2]]){
-   const filename=root+'/recorded videos/'+paths[key].slice('camera_'.length)+'.mp4';
+   const suffix=paths[key].slice('camera_'.length);
+   const cameraId=suffix.length===32?suffix.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,'$1-$2-$3-$4-$5'):suffix;
+   const filename=root+'/recorded videos/'+cameraId+'.mp4';
    const probe=spawnSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=codec_name,width,height','-of','json',filename]);
    assert.equal(probe.status,0);const stream=JSON.parse(probe.stdout).streams[0];
    assert.deepEqual([stream.codec_name,stream.width,stream.height],['h264',1280,720]);
@@ -143,7 +145,7 @@ http.server.ThreadingHTTPServer(('127.0.0.1',49312),Handler).serve_forever()
   let output='';child.stdout.on('data',part=>{output+=part});child.stderr.on('data',part=>{output+=part});
   const timeout=setTimeout(()=>child.kill('SIGKILL'),90000);const [code]=await once(child,'exit');clearTimeout(timeout);
   assert.equal(code,0,output.replaceAll(/synthetic-[a-z-]+/g,'[redacted]'));
-  assert.match(output,/11 runtime checks passed/);
+  assert.match(output,/12 runtime checks passed/);
  }finally{
   for(const child of children.reverse()){
    if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await Promise.race([once(child,'exit'),sleep(3000)]);if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');}

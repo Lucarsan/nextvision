@@ -29,6 +29,15 @@ function AwaitFrames($Entry) {
   throw 'Synthetic camera did not produce frames'
 }
 try {
+  Check 'generated control credentials always use the MediaMTX-supported alphabet' {
+    $seen=@{}
+    for ($i=0;$i -lt 100;$i++) {
+      $secret=New-NvControlSecret
+      Assert ($secret -cmatch '^[A-F0-9]{64}$') 'Control credential contains unsupported characters'
+      Assert (-not $seen.ContainsKey($secret)) 'Unexpected random credential repetition'
+      $seen[$secret]=$true
+    }
+  }
   Check 'a named tunnel must have a fixed hostname' {
     Assert-NvTunnelHostname 'media.example.test'
     foreach ($bad in @('https://example.com','x.trycloudflare.com','localhost','example.com:8888','x.example.com/path')) {

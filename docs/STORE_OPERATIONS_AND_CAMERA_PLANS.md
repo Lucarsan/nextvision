@@ -93,7 +93,9 @@ etapa do pedido; não aceita escolher URL/câmera arbitrária pelo navegador.
 **Essa opção não instala infraestrutura de mídia.** Antes de habilitar o modo
 central em produção, provisionar a origem estável, autenticação de publicação
 por dispositivo/câmera e o agente Windows que configura cada fonte local em seu
-caminho aprovado. O script piloto atual ainda lê o RTSP local fixo `camera`.
+caminho aprovado. O agente passou a configurar fontes e supervisionar FFmpeg por câmera aprovada;
+continua publicando no relay local e depende da configuração externa desse relay
+e da origem estável. Ver `WINDOWS_AGENT_READINESS.md`.
 Vários equipamentos físicos e ingestão de várias lojas exigem esses passos e
 validação real; caminhos distintos no servidor não bastam.
 

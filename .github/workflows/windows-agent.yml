@@ -1,0 +1,23 @@
+name: Windows agent core
+on:
+  push:
+    paths:
+      - 'connect/windows/**'
+      - '.github/workflows/windows-agent.yml'
+  pull_request:
+    paths:
+      - 'connect/windows/**'
+      - '.github/workflows/windows-agent.yml'
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse, storage, DPAPI and owned Windows processes
+        shell: ${{ matrix.shell }}
+        run: ./connect/windows/tests/core.tests.ps1

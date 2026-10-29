@@ -28,6 +28,15 @@ test('centralized camera installation, replacement and device isolation', {skip:
    assert.equal((await api('/connect/cameras',{token:newDevice.device_token})).cameras.length,0);
    const ownerList=await api('/cameras');assert.ok(ownerList.every(c=>!('stream_path' in c)&&!('device_id' in c)));
   });
+  await t.test('metadata and temporary disable do not require reentering the camera source password',async()=>{
+   const before=(await api('/connect/cameras',{token:oldDevice.device_token})).cameras.find(c=>c.id===cameraA.id).config_version;
+   await api('/cameras/'+cameraA.id,{method:'PATCH',token:f.masterToken,body:{name:'Updated front camera',enabled:false}});
+   let camera=(await api('/connect/cameras',{token:oldDevice.device_token})).cameras.find(c=>c.id===cameraA.id);
+   assert.equal(camera.enabled,false);assert.equal(camera.config_version,before);
+   await api('/cameras/'+cameraA.id,{method:'PATCH',token:f.masterToken,body:{enabled:true}});
+   camera=(await api('/connect/cameras',{token:oldDevice.device_token})).cameras.find(c=>c.id===cameraA.id);
+   assert.equal(camera.enabled,true);assert.equal(camera.config_version,before);
+  });
   await t.test('rebinding closes the old capture and only the original device may confirm its completion',async()=>{
    const customer=await api('/customers',{method:'POST',body:{name:'Test customer'}},201);
    const process=await api('/processes',{method:'POST',body:{name:'Test process',steps:['Working'],camera_id:cameraA.id}},201);

@@ -10,6 +10,7 @@ const files = [
   '015_store_operations.sql', '016_camera_control.sql', '017_camera_plans.sql', '018_camera_paths.sql'
 ];
 let client;
+let currentMigration='connection';
 try {
   client = await db.connect();
   await client.query('BEGIN');
@@ -17,14 +18,17 @@ try {
   await client.query('CREATE TABLE IF NOT EXISTS nextvision_schema_migrations(name text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');
   for (const file of files) {
     if ((await client.query('SELECT 1 FROM nextvision_schema_migrations WHERE name=$1', [file])).rowCount) continue;
+    currentMigration=file;
     await client.query(await readFile(new URL('../sql/' + file, import.meta.url), 'utf8'));
     await client.query('INSERT INTO nextvision_schema_migrations(name) VALUES($1)', [file]);
   }
   await client.query('COMMIT');
   console.log('Migração concluída');
 } catch (error) {
-  if (client) await client.query('ROLLBACK');
-  throw error;
+  if (client) await client.query('ROLLBACK').catch(()=>{});
+  // PostgreSQL detail/row data and connection strings must not enter startup logs.
+  console.error('Migration failed', { migration: currentMigration, code: error.code || error.name });
+  process.exitCode=1;
 } finally {
   client?.release();
   await db.end();

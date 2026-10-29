@@ -355,7 +355,7 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
  try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1','User-Agent':'curl/8.0.0','Accept':'*/*'},redirect:'manual',signal:controller.signal});}
  catch(e){console.error('HLS upstream network failure:',e.cause?.code||e.name);return bad(res,e.name==='AbortError'?504:502,e.name==='AbortError'?'Tempo limite ao acessar transmissão':'Falha ao carregar vídeo');}
  finally{clearTimeout(timeout);}
- if(!upstream.ok){console.error('HLS denied',{status:upstream.status,contentType:upstream.headers.get('content-type'),originServer:upstream.headers.get('server'),hasCfRay:!!upstream.headers.get('cf-ray')});await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}
+ if(!upstream.ok){const body=(await upstream.text().catch(()=>'' )).slice(0,2048);const type=body.includes('cloudflare')?'cloudflare-page':body.includes('authentication failed')?'mediamtx-auth':body.includes('Unauthorized')?'unauthorized':'unknown';console.error('HLS denied',{status:upstream.status,contentType:upstream.headers.get('content-type'),originServer:upstream.headers.get('server'),hasCfRay:!!upstream.headers.get('cf-ray'),bodyType:type,bodyLength:body.length});return bad(res,502,'Origem do vídeo indisponível');}
  const mime=asset.endsWith('.m3u8')?'application/vnd.apple.mpegurl':asset.endsWith('.ts')?'video/mp2t':'video/mp4';
  res.set({'Content-Type':mime,'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff'});
  if(asset.endsWith('.m3u8')){

@@ -349,10 +349,10 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
   url.searchParams.set(key,value);
  }
  // Explicitly satisfy MediaMTX's initial cookieCheck redirect server-side.
- if(!url.searchParams.has('session'))url.searchParams.set('cookieCheck','1');
+ url.searchParams.set('cookieCheck','1');
  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),35000);
  let upstream;
- try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1'},redirect:'manual',signal:controller.signal});}
+ try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1','User-Agent':'curl/8.0.0','Accept':'*/*'},redirect:'manual',signal:controller.signal});}
  catch(e){console.error('HLS upstream network failure:',e.cause?.code||e.name);return bad(res,e.name==='AbortError'?504:502,e.name==='AbortError'?'Tempo limite ao acessar transmissão':'Falha ao carregar vídeo');}
  finally{clearTimeout(timeout);}
  if(!upstream.ok){console.error('HLS authentication challenge',upstream.status===401?upstream.headers.get('www-authenticate')?.slice(0,150)||'none':'not-applicable','server',upstream.headers.get('server')?.slice(0,60)||'unknown');console.error('HLS upstream HTTP',upstream.status,'asset type',asset.split('.').pop(),'host',config.origin.hostname,'userMatchesExpected',config.username==='teste','passwordLength',config.password.length,'passwordHasOuterWhitespace',config.password!==config.password.trim());await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}

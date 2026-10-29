@@ -350,10 +350,10 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
  }
  // Explicitly satisfy MediaMTX's initial cookieCheck redirect server-side.
  if(!url.searchParams.has('session'))url.searchParams.set('cookieCheck','1');
- const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);
+ const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),35000);
  let upstream;
  try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1'},redirect:'manual',signal:controller.signal});}
- catch(e){console.error('HLS upstream network failure:',e.cause?.code||e.name);return bad(res,502,'Falha ao carregar vídeo');}
+ catch(e){console.error('HLS upstream network failure:',e.cause?.code||e.name);return bad(res,e.name==='AbortError'?504:502,e.name==='AbortError'?'Tempo limite ao acessar transmissão':'Falha ao carregar vídeo');}
  finally{clearTimeout(timeout);}
  if(!upstream.ok){console.error('HLS upstream HTTP',upstream.status,'asset type',asset.split('.').pop());await upstream.body?.cancel();return bad(res,502,'Origem do vídeo indisponível');}
  const mime=asset.endsWith('.m3u8')?'application/vnd.apple.mpegurl':asset.endsWith('.ts')?'video/mp2t':'video/mp4';

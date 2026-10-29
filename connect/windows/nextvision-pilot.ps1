@@ -45,7 +45,7 @@ if ($Mode -in @('stop','uninstall')) {
 }
 if ($Mode -eq 'repair') {
   if (Test-NvAgentRunning (Join-Path $env:LOCALAPPDATA 'NextVisionConnect')) { throw 'O agente completo ja esta ativo. Nao instalar dois publicadores para a mesma camera.' }
-  if ($null -ne $PublisherToReplace -and $PublisherToReplace.ProcessName -ne 'ffmpeg') { throw 'A substituicao exige o objeto do FFmpeg iniciado nesta sessao, sem procurar por nome ou PID antigo.' }
+  if ($null -ne $PublisherToReplace -and -not $PublisherToReplace.HasExited -and $PublisherToReplace.ProcessName -ne 'ffmpeg') { throw 'A substituicao exige o objeto do FFmpeg iniciado nesta sessao, sem procurar por nome ou PID antigo.' }
   if ($null -ne $CameraPassword -or -not (Test-Path -LiteralPath $keyFile)) {
     if ($null -eq $CameraPassword) {
       $credential=Get-Credential -UserName $CameraUsername -Message 'Credencial NVR/RTSP do piloto; sera protegida neste computador'

@@ -69,6 +69,9 @@ test('HLS sessions through the real NextVision API and MediaMTX', {
         ADD loyalty_enabled boolean DEFAULT false, ADD loyalty_target integer DEFAULT 10, ADD loyalty_reward text;
       ALTER TABLE processes ADD name text DEFAULT 'Test service', ADD steps jsonb DEFAULT '["Reception","Repair"]';
       ALTER TABLE orders ADD customer_id uuid, ADD external_reference text, ADD created_at timestamptz DEFAULT now();
+      ALTER TABLE orders ADD process_snapshot jsonb;
+      UPDATE orders o SET process_snapshot=jsonb_build_object('name',p.name,'steps',p.steps,'camera_id',p.camera_id,'step_cameras',p.step_cameras)
+        FROM processes p WHERE p.id=o.process_id;
       CREATE TABLE loyalty_checkins(tenant_id uuid,customer_id uuid,redemption_id uuid);
       CREATE TABLE loyalty_redemptions(tenant_id uuid,customer_id uuid,status text,reward_snapshot text,issued_at timestamptz,redeemed_at timestamptz);
     `);
@@ -214,7 +217,7 @@ paths:
     });
     await t.test('another active order using the same camera blocks concurrent viewing', async () => {
       const competitor = crypto.randomUUID();
-      await db.query("INSERT INTO orders(id,tenant_id,process_id,camera_id,step_index,status) VALUES($1,$2,$3,$4,0,'live')", [competitor, tenant, processID, camera]);
+      await db.query("INSERT INTO orders(id,tenant_id,process_id,camera_id,step_index,status,process_snapshot) SELECT $1,$2,$3,$4,0,'live',process_snapshot FROM orders WHERE id=$5", [competitor, tenant, processID, camera, orderID]);
       try { assert.equal((await get(live(token))).status, 409); }
       finally { await db.query('DELETE FROM orders WHERE id=$1', [competitor]); }
     });

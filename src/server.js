@@ -341,6 +341,15 @@ app.get('/api/public/orders/:token/live/:asset',rateLimit({windowMs:60000,limit:
  AND COALESCE(p.step_cameras->>(o.step_index::text),o.camera_id::text,p.camera_id::text)=$3 LIMIT 1`,[order.tenant_id,order.id,config.cameraId]);
  if(competing.rowCount)return bad(res,409,'Câmera ocupada por outro pedido');
  const url=new URL('/camera/'+asset,config.origin);
+ // MediaMTX binds HLS child playlists/segments to a ?session= token.
+ // Preserve only known HLS query parameters, never arbitrary URLs.
+ const allowedQuery=new Set(['session','_HLS_msn','_HLS_part','_HLS_skip']);
+ for(const [key,value] of Object.entries(req.query)){
+  if(!allowedQuery.has(key)||typeof value!=='string'||value.length>160||!/^[a-zA-Z0-9_.-]+$/.test(value))return bad(res,400,'Parâmetro HLS inválido');
+  url.searchParams.set(key,value);
+ }
+ // Explicitly satisfy MediaMTX's initial cookieCheck redirect server-side.
+ if(!url.searchParams.has('session'))url.searchParams.set('cookieCheck','1');
  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);
  let upstream;
  try{upstream=await fetch(url,{headers:{Authorization:'Basic '+Buffer.from(config.username+':'+config.password).toString('base64'),'Cookie':'cookieCheck=1'},redirect:'manual',signal:controller.signal});}

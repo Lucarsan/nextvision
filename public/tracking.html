@@ -105,7 +105,7 @@ function render(p){
  (recs.length?'<section class="card rec"><h2>Vídeos das etapas</h2>'+recs.map(r=>'<div><strong>'+safe(cap(steps[Number(r.step_index)]||'Etapa'))+'</strong><video controls preload="metadata" src="'+safe(r.download_url)+'"></video><a href="'+safe(r.download_url)+'" download>Baixar vídeo</a></div>').join('')+'</section>':'')+
  (loyalty?'<section class="card loyalty"><h2>Sua fidelidade</h2><p>Você tem <strong>'+Number(p.loyalty_checkins)+'</strong> de <strong>'+Number(p.loyalty_target)+'</strong> check-ins.</p><div class="bar"><div style="width:'+Math.min(100,Math.round(Number(p.loyalty_checkins)/Math.max(1,Number(p.loyalty_target))*100))+'%"></div></div><p>Recompensa: '+safe(p.loyalty_reward||'Benefício da loja')+'</p>'+(claimable?'<button class="primary" id="claim">Solicitar recompensa</button>':'')+'<div id="couponArea"></div><details><summary>Histórico de recompensas</summary>'+(history.length?history.map(h=>'<p>'+safe(h.reward)+' · '+(h.status==='redeemed'?'Resgatada':'Cupom emitido')+' · '+new Date(h.issued_at).toLocaleDateString('pt-BR')+'</p>').join(''):'<p>Nenhuma recompensa solicitada até agora.</p>')+'</details></section>':'');
 }
-let hlsPlayer=null,liveVideo=null,liveRetryTimer=null,liveGeneration=0,liveRetryDelay=5000,liveFailed=false,hlsLibraryPromise=null;
+let hlsPlayer=null,liveVideo=null,liveRetryTimer=null,liveGeneration=0,liveRetryDelay=2000,liveFailed=false,hlsLibraryPromise=null;
 let liveProgress={generation:0,frames:null,time:0,at:Date.now()};
 setInterval(()=>{
  const video=liveVideo;
@@ -116,13 +116,13 @@ setInterval(()=>{
  }
  const progressed=frames===null?video.currentTime>liveProgress.time:frames>liveProgress.frames;
  if(progressed){liveProgress={generation:liveGeneration,frames,time:video.currentTime,at:Date.now()};return;}
- if(Date.now()-liveProgress.at>15000){if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null;}retryLive(video,'A imagem parou de receber novos quadros.');}
+ if(Date.now()-liveProgress.at>8000){if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null;}retryLive(video,'A imagem parou de receber novos quadros.');}
 },3000);
 const liveMessage=(video,text)=>{const node=video.parentElement?.querySelector('.nv-live-message');if(node)node.textContent=text;};
 function retryLive(video,message){
  liveFailed=true;
  if(!video.isConnected)return;
- const delay=liveRetryDelay;liveRetryDelay=Math.min(30000,delay*2);
+ const delay=liveRetryDelay;liveRetryDelay=Math.min(5000,delay+1000);
  liveMessage(video,message+' Reconectando em '+Math.round(delay/1000)+' segundos…');
  clearTimeout(liveRetryTimer);
  liveRetryTimer=setTimeout(()=>{liveRetryTimer=null;if(video.isConnected&&!document.hidden)void setupLivePlayer();},delay);
@@ -137,7 +137,7 @@ async function setupLivePlayer(){
  const src='/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8';
  liveMessage(video,'Conectando à transmissão autorizada…');
  video.onended=()=>{if(generation===liveGeneration)retryLive(video,'A transmissão foi interrompida.');};
- video.onplaying=()=>{if(generation===liveGeneration){liveRetryDelay=5000;liveFailed=false;liveMessage(video,'Ao vivo');}};
+ video.onplaying=()=>{if(generation===liveGeneration){liveRetryDelay=2000;liveFailed=false;liveMessage(video,'Ao vivo');}};
  if(video.canPlayType('application/vnd.apple.mpegurl')){
   video.onerror=()=>{if(generation===liveGeneration)retryLive(video,'Transmissão temporariamente indisponível.');};
   video.src=src;video.play().catch(()=>{});return;
@@ -150,7 +150,7 @@ async function setupLivePlayer(){
  if(!window.Hls?.isSupported()){liveMessage(video,'Reprodução de vídeo não suportada neste navegador.');return;}
  const player=new Hls({enableWorker:true,lowLatencyMode:true});hlsPlayer=player;
  player.on(Hls.Events.MANIFEST_PARSED,()=>{if(generation===liveGeneration)video.play().catch(()=>{});});
- player.on(Hls.Events.FRAG_BUFFERED,()=>{if(generation===liveGeneration){liveMessage(video,'Ao vivo');liveRetryDelay=5000;}});
+ player.on(Hls.Events.FRAG_BUFFERED,()=>{if(generation===liveGeneration){liveMessage(video,'Ao vivo');liveRetryDelay=2000;}});
  player.on(Hls.Events.ERROR,(_event,data)=>{
   if(generation!==liveGeneration)return;
   if(!data.fatal){if(data.type===Hls.ErrorTypes.NETWORK_ERROR)liveMessage(video,'Conexão instável. Reconectando…');return;}

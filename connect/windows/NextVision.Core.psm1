@@ -102,7 +102,7 @@ function Assert-NvLocalPortAvailable([int]$Port) {
   $client=[Net.Sockets.TcpClient]::new()
   try {
     $pending=$client.BeginConnect([Net.IPAddress]::Loopback,$Port,$null,$null)
-    if (-not $pending.AsyncWaitHandle.WaitOne(300)) { throw 'Nao foi possivel confirmar o estado da porta local.' }
+    if (-not $pending.AsyncWaitHandle.WaitOne(2500)) { throw 'Nao foi possivel confirmar o estado da porta local.' }
     try { $client.EndConnect($pending) }
     catch [Net.Sockets.SocketException] {
       if ($_.Exception.SocketErrorCode -eq [Net.Sockets.SocketError]::ConnectionRefused) { return }
@@ -141,7 +141,7 @@ function New-NvConcatInput([string]$Url, [ValidateSet('tcp','udp')][string]$Tran
   # A bounded input timeout also makes unavailable sources exit for supervisor retry.
   $tls=''
   if ($Url.StartsWith('rtsps://')) { $tls="option tls_verify 1`n" }
-  return "ffconcat version 1.0`nfile '$Url'`noption rtsp_transport $Transport`noption timeout 10000000`n$tls"
+  return "ffconcat version 1.0`nfile '$Url'`noption rtsp_transport $Transport`noption timeout 5000000`n$tls"
 }
 function Start-NvMedia([string]$Binary, [string]$Url, [ValidateSet('tcp','udp')][string]$Transport, [string[]]$OutputArguments) {
   $arguments = @('-hide_banner','-loglevel','error','-nostats','-progress','pipe:1',
@@ -154,7 +154,7 @@ function Stop-NvPublishers($State) {
   foreach ($key in @($State.Keys)) { Stop-NvMedia $State[$key].Media; $State.Remove($key) }
 }
 function Sync-NvPublishers {
-  param($State, [array]$Desired, [string]$Binary='ffmpeg', [datetime]$Now=[datetime]::UtcNow, [int]$StallSeconds=45)
+  param($State, [array]$Desired, [string]$Binary='ffmpeg', [datetime]$Now=[datetime]::UtcNow, [int]$StallSeconds=12)
   $byId = @{}
   foreach ($item in $Desired) {
     Assert-NvId ([string]$item.Id)
@@ -177,7 +177,7 @@ function Sync-NvPublishers {
         $reason=$(if (-not $entry.Media.HasExited) {'sem progresso de video'} elseif ($entry.Media.ErrorCategory) {$entry.Media.ErrorCategory} else {'processo encerrou'})
         Stop-NvMedia $entry.Media; $entry.Media = $null
         $entry.Failures = [Math]::Min(6, $entry.Failures + 1)
-        $entry.NextAttempt = $Now.AddSeconds([Math]::Min(60, [Math]::Pow(2,$entry.Failures)))
+        $entry.NextAttempt = $Now.AddSeconds([Math]::Min(5, [Math]::Pow(2,$entry.Failures)))
         $entry.Status = 'reconectando: '+$reason
       } elseif (($Now - $entry.StartedAt).TotalSeconds -gt 60) { $entry.Failures = 0 }
     }
@@ -189,7 +189,7 @@ function Sync-NvPublishers {
         $entry.StartedAt = $Now; $entry.Status = 'iniciando'
       } catch {
         $entry.Failures = [Math]::Min(6,$entry.Failures+1)
-        $entry.NextAttempt = $Now.AddSeconds([Math]::Min(60,[Math]::Pow(2,$entry.Failures)))
+        $entry.NextAttempt = $Now.AddSeconds([Math]::Min(5,[Math]::Pow(2,$entry.Failures)))
         $entry.Status = 'falha ao iniciar'
       }
     } elseif ($null -ne $entry.Media -and $entry.Media.HasProgress -and $entry.Media.IdleSeconds -lt 5) { $entry.Status = 'imagem recebida' }

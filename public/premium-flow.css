@@ -104,3 +104,12 @@ body{font-family:"Plus Jakarta Sans",system-ui,sans-serif;font-weight:400;letter
 .fp-queue-item div{flex:1;min-width:0}.fp-queue-item strong{display:block;font-size:14px}.fp-queue-item p{margin:2px 0 0;font-size:12px;color:#4B5563}
 .fp-kpis{margin-bottom:18px}.fp-all{margin-bottom:18px}
 .fp-empty{font-size:14px;color:#4B5563;padding:14px 4px;margin:0}
+
+/* Ficou Pronto — acabamento do painel */
+.nv-card{border-color:#ECEDF0;box-shadow:none;border-radius:22px}
+.nv-number{font-weight:500;font-size:40px;letter-spacing:-1.5px}
+.nv-top h1{font-weight:600;letter-spacing:-.6px}
+.nv-sidebar{border-right-color:#ECEDF0}
+.nv-brand-word{display:block;font-size:12px;font-weight:700;color:#4B5563;letter-spacing:-.2px;padding:0 12px;margin-top:-14px}
+.nv-brand-word .p,.nv-brand-word .mark{color:#F25C1F}
+.nv-button{border-radius:11px}

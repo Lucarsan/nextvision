@@ -528,7 +528,7 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
  const r=await q(`SELECT o.id,o.status,o.step_index,o.camera_id,o.external_reference,
  EXISTS(SELECT 1 FROM cameras available WHERE available.id=o.camera_id AND available.tenant_id=o.tenant_id AND available.enabled AND available.deleted_at IS NULL AND (available.device_id IS NULL OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=available.device_id AND d.tenant_id=available.tenant_id AND d.enabled AND d.revoked_at IS NULL))) camera_available,
- o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,
+ o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,o.details->>'brand' item_brand,o.details->>'model' item_model,
  t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,
  CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN
  (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,

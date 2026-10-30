@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Central | Ficou Pronto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/central.css?v=1">
+</head>
+<body>
+<div class="ct-shell">
+  <aside class="ct-side" aria-label="Navegação da central">
+    <a class="ct-logo" href="/central.html" aria-label="Ficou Pronto — Central">FP</a>
+    <nav id="nav" class="ct-nav"></nav>
+    <button type="button" class="ct-nav-btn ct-logout" id="logout"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/></svg><span>Sair</span></button>
+  </aside>
+  <main class="ct-main">
+    <header class="ct-head">
+      <div><h1 id="pageTitle">Visão geral</h1><p id="pageSub" class="ct-muted">Central Ficou Pronto</p></div>
+      <div class="ct-head-actions" id="headActions"></div>
+    </header>
+    <p id="feedback" class="ct-feedback" role="status"></p>
+    <div id="content"></div>
+  </main>
+</div>
+<dialog id="ctDialog" class="ct-dialog"></dialog>
+<script src="/app.js?v=3" defer></script>
+</body>
+</html>

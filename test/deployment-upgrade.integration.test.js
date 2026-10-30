@@ -42,7 +42,7 @@ test('upgrade from schema 13 boots the new API while the bridge remains compatib
   assert.equal((await db.query('SELECT count(*)::int n FROM recordings')).rows[0].n,1);
   start('src/start.js',resolve('.'),{...env,PORT:String(newPort),PUBLIC_BASE_URL:newBase,NEXTVISION_BUILD_REVISION:'1234567890abcdef'});
   await wait(newBase,'portal-operations');
-  assert.equal((await db.query('SELECT count(*)::int n FROM nextvision_schema_migrations')).rows[0].n,18);
+  assert.equal((await db.query('SELECT count(*)::int n FROM nextvision_schema_migrations')).rows[0].n,19);
   assert.equal((await db.query('SELECT process_snapshot->>\'name\' name FROM orders WHERE id=$1',[before.id])).rows[0].name,'Existing process');
   // The prior bridge is still serving during Render's rolling transition.
   const during=await create(bridgeBase,'Bridge after schema upgrade');await move(bridgeBase,during,'start');

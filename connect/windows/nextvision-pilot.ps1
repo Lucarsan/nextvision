@@ -54,10 +54,10 @@ if ($Mode -eq 'repair') {
     }
     $credential=New-Object Management.Automation.PSCredential($CameraUsername,$CameraPassword)
     $url=New-NvRtspUrl $CameraAddress $CameraUsername $credential.GetNetworkCredential().Password
-    $ffmpeg=(Get-Command ffmpeg -CommandType Application -ErrorAction Stop).Source
+    $ffmpeg=@(Get-Command ffmpeg -CommandType Application -ErrorAction Stop)[0].Source
     if (-not $MediaMTXPath) {
       $command=Get-Command mediamtx -CommandType Application -ErrorAction SilentlyContinue
-      if ($null -ne $command) { $MediaMTXPath=$command.Source }
+      if ($null -ne $command) { $MediaMTXPath=@($command)[0].Source }
       else { $MediaMTXPath=Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\bluenviron.mediamtx_Microsoft.Winget.Source_8wekyb3d8bbwe\mediamtx.exe' }
     }
     if (-not $MediaMTXConfig) { $MediaMTXConfig=Join-Path $env:USERPROFILE 'mediamtx.yml' }
@@ -105,7 +105,7 @@ try {
     }
     if ($null -ne $relay -and $relay.HasExited) {
       Stop-NvMedia $relay;$relay=$null;$relayFailures=[Math]::Min(6,$relayFailures+1)
-      $relayRetry=[datetime]::UtcNow.AddSeconds([Math]::Min(60,[Math]::Pow(2,$relayFailures)))
+      $relayRetry=[datetime]::UtcNow.AddSeconds([Math]::Min(10,[Math]::Pow(2,$relayFailures)))
     }
     if ($null -eq $relay -and [datetime]::UtcNow -ge $relayRetry) {
       $portAvailable=$true
@@ -127,7 +127,7 @@ try {
     $entry=$state[[string]$source.id]
     $ownedId=$(if ($null -ne $entry.Media -and -not $entry.Media.HasExited) {$entry.Media.Process.Id} else {$null})
     Write-NvJson $statusFile @{observed_at=[datetime]::UtcNow.ToString('o');status=$entry.Status;publisher_pid=$ownedId}
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 1
   }
 } finally {
   Stop-NvPublishers $state

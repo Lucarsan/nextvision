@@ -168,3 +168,10 @@ body{font-family:"Plus Jakarta Sans",system-ui,sans-serif;font-weight:400;letter
 .fp-icon-btn{width:36px;height:36px;border:1px solid #F3D4D4;border-radius:10px;background:#fff;color:#B91C1C;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}.fp-icon-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 @media(max-width:900px){.fp-proc3,.fp-proc-cols{grid-template-columns:1fr}.fp-proc3>.fp-col,.fp-col-steps{border-right:0;border-bottom:1px solid #ECEDF0}.fp-row{grid-template-columns:1fr}.fp-row-actions{justify-content:flex-start}}
 a.nv-button{text-decoration:none}
+.nv-brand-btn{border:0;background:none;padding:0;font:inherit;font-weight:700;color:inherit;cursor:pointer;text-align:left;width:100%}.nv-brand-btn:hover #storeBrandName{color:#C2410C}
+.fp-queue-item{touch-action:pan-y}.fp-drag-sm{flex:0 0 28px;width:28px;height:40px}
+.fp-support-grid{display:grid;grid-template-columns:minmax(240px,.8fr) minmax(320px,1.4fr);gap:16px}.fp-support-grid .nv-card{margin:0}
+.fp-ticket{align-items:flex-start}.fp-ticket p{margin:4px 0 0}.fp-ticket-reply{background:#F3F4F6;border-radius:10px;padding:8px 10px;font-size:13px}
+.fp-addr{max-width:none}.fp-addr input{width:100%}.fp-addr-hint{margin:-6px 0 10px}
+@media(max-width:820px){.fp-support-grid{grid-template-columns:1fr}}
+.fp-support-grid+.nv-card{margin-top:16px}

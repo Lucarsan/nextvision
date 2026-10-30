@@ -23,17 +23,69 @@ async function api(path, method = 'GET', body) {
   if (!response.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), {status:response.status});
   return data;
 }
+function showUndo(id, [action, label]) {
+  const node = $('panelFeedback'); const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'nv-button secondary fp-undo'; btn.textContent = label; btn.dataset.transitionId = id; btn.dataset.action = action;
+  node.append(' ', btn); clearTimeout(showUndo.timer); showUndo.timer = setTimeout(() => btn.remove(), 15000);
+}
+function showWhatsOffer(o) {
+  const node = $('panelFeedback'); const a = document.createElement('a'); a.className = 'nv-button fp-whats'; a.target = '_blank'; a.rel = 'noopener'; a.href = whatsUrl(o); a.textContent = whatsPhone(o) ? 'Enviar link no WhatsApp do cliente' : 'Enviar link no WhatsApp';
+  node.append(' ', a);
+}
 function feedback(message, error = false) {
   const node = $('panelFeedback'); node.textContent = message; node.classList.toggle('error', error); node.hidden = !message;
 }
 const stepsView = o => `<div class="nv-steps">${(o.steps || []).map((step, i) => `<span class="nv-step ${o.status === 'completed' || i < o.step_index ? 'done' : i === o.step_index && o.status === 'live' ? 'active' : ''}">${i + 1}. ${safe(cap(step))}</span>`).join('')}</div>`;
+
+const canReopen = o => o.status === 'completed' && o.completed_at && Date.now() - new Date(o.completed_at) < 24 * 3600000;
+function undoButtons(o, b) {
+  if (['live', 'paused'].includes(o.status) && o.step_index > 0) return b('back', 'Voltar etapa');
+  if (['live', 'paused'].includes(o.status) && o.started_at) return b('back', 'Voltar para a fila');
+  if (canReopen(o)) return b('reopen', 'Reabrir pedido');
+  return '';
+}
+const undoOf = { advance: ['back', 'Desfazer avanço'], complete: ['reopen', 'Reabrir pedido'], start: ['back', 'Desfazer início'], back: null };
+function startMessage(o) {
+  const nome = cap(firstName(o.customer));
+  return (nome ? 'Olá, ' + nome + '! ' : 'Olá! ') + 'Recebemos seu ' + itemLabel(o) + ' na ' + (storeSettings.name || 'loja') + ' (pedido ' + (o.external_reference || o.order_number || '') + '). Acompanhe por aqui, inclusive ao vivo: ' + trackingUrl(o);
+}
+const whatsUrl = o => { const phone = whatsPhone(o); return 'https://wa.me/' + (phone || '') + '?text=' + encodeURIComponent(startMessage(o)); };
+function compressPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let max = 1280, quality = 0.8, data = '';
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const scale = Math.min(1, max / Math.max(img.width, img.height)), canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        data = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+        if (data.length * 0.75 <= 290000) return resolve({ mime_type: 'image/jpeg', base64: data });
+        quality -= 0.1; max = Math.round(max * 0.85);
+      }
+      reject(Error('Não foi possível reduzir a foto. Tente outra imagem.'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(Error('Arquivo não é uma imagem válida.')); };
+    img.src = url;
+  });
+}
+async function uploadPhotos(orderId, files, status) {
+  const list = [...files].slice(0, 6); let sent = 0;
+  for (const file of list) { if (status) status.textContent = 'Enviando foto ' + (sent + 1) + ' de ' + list.length + '…'; await api('/orders/' + orderId + '/photos', 'POST', await compressPhoto(file)); sent++; }
+  return sent;
+}
+const photoUrl = (o, id) => '/api/public/orders/' + encodeURIComponent(o.share_code) + '/photos/' + id;
+function photoStrip(o) {
+  const photos = o.photos || [];
+  return `<div class="fp-photos"><strong>Como chegou</strong><div class="fp-photo-row">${photos.map(id => `<span class="fp-photo"><a href="${photoUrl(o, id)}" target="_blank" rel="noopener"><img src="${photoUrl(o, id)}" alt="Foto do pedido" loading="lazy"></a><button type="button" class="fp-photo-del" data-photo-del="${safe(id)}" data-photo-order="${safe(o.id)}" aria-label="Apagar foto">×</button></span>`).join('')}${photos.length < 6 ? `<label class="fp-photo-add">+ Foto<input type="file" accept="image/*" multiple hidden data-photo-order="${safe(o.id)}"></label>` : ''}</div></div>`;
+}
 function transitionActions(o) {
   const button = (action, label, primary = false) => `<button type="button" class="nv-button ${primary ? '' : 'secondary'}" data-transition-id="${safe(o.id)}" data-action="${action}">${label}</button>`;
   let html = '';
   if (o.status === 'queued') html += button('start', 'Iniciar atendimento', true) + button('pause', 'Pausar');
   if (o.status === 'live') html += button(o.step_index < o.steps.length - 1 ? 'advance' : 'complete', o.step_index < o.steps.length - 1 ? 'Próxima etapa' : 'Concluir pedido', true) + button('pause', 'Pausar');
   if (o.status === 'paused') html += button('resume', o.started_at ? 'Retomar atendimento' : 'Retomar fila', true);
-  if (['live', 'paused'].includes(o.status) && o.step_index > 0) html += button('back', 'Voltar etapa');
+  html += undoButtons(o, button);
   return html;
 }
 const nicheNoun = () => ({ electronics: 'aparelho', automotive: 'veículo', carwash: 'veículo', pet: 'pet', food: 'pedido' }[storeSettings.niche] || 'pedido');
@@ -63,7 +115,7 @@ function liveActions(o) {
   if (o.status === 'live') html += isLastStep(o) ? finishButtons(o) : b('advance', 'Avançar para ' + safe(cap(o.steps[o.step_index + 1])), true);
   if (o.status === 'live') html += b('pause', 'Pausar');
   if (o.status === 'paused') html += b('resume', o.started_at ? 'Retomar atendimento' : 'Retomar fila', true);
-  if (['live', 'paused'].includes(o.status) && o.step_index > 0) html += b('back', 'Voltar etapa');
+  html += undoButtons(o, b);
   return html + `<button type="button" class="nv-button secondary fp-more" data-edit-order="${safe(o.id)}">Detalhes</button>`;
 }
 function liveCard(o) {
@@ -96,7 +148,7 @@ function orderCard(o) {
     <div class="nv-order-actions">${transitionActions(o)}<button class="nv-button secondary nv-danger" data-delete-order="${safe(o.id)}">Excluir pedido</button></div>
     <details class="nv-order-details" data-details-id="${safe(o.id)}" ${openedOrders.has(o.id) ? 'open' : ''}><summary>Detalhes do pedido</summary>
       <dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${info('Tipo', detailLabels[d.item_type] || 'Item / serviço')}${info('Marca', d.brand)}${info('Modelo', d.model)}${info('Placa / número de série', d.identifier)}${info('Cor', d.color)}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}</dl>
-      <div class="nv-order-actions"><button class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar pedido</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(trackingUrl(o))}">Ver acompanhamento</a><button class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button><button class="nv-button secondary" data-send-order="${safe(o.id)}">WhatsApp</button></div>
+      <div class="nv-order-actions"><button class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar pedido</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(trackingUrl(o))}">Ver acompanhamento</a><button class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(whatsUrl(o))}">${whatsPhone(o) ? 'WhatsApp do cliente' : 'WhatsApp'}</a></div>${photoStrip(o)}
     </details>`;
 }
 function renderOrderList(container, orders) {
@@ -180,7 +232,7 @@ async function loadOrders(box, version) {
   box.innerHTML = `<section class="nv-card" id="newOrderCard"><div class="nv-heading"><h2>Novo pedido</h2><span class="nv-help">Cadastre e acompanhe por aqui</span></div><form id="completeForm">
     <section class="nv-form-panel"><div class="nv-heading"><h3>1. Cliente</h3><button type="button" class="nv-button secondary" id="addInlineCustomer">+ Cadastrar cliente</button></div><label class="nv-field">Cliente<select name="customer_id" required><option value="">Selecione o cliente</option>${selectOptions(customers)}</select></label>
       <div id="inlineCustomer" class="nv-inline-panel" hidden><h4>Novo cliente</h4><div class="nv-form-grid">${field('inline_name', 'Nome completo')}${field('inline_phone', 'Telefone / WhatsApp')}${field('inline_email', 'E-mail', '', 'email')}${field('inline_address', 'Endereço')}</div><button type="button" class="nv-button secondary" id="saveInlineCustomer">Salvar cliente e selecionar</button><button type="button" class="nv-button secondary" id="cancelInlineCustomer">Cancelar</button><p id="inlineCustomerStatus" role="status"></p></div>
-    </section><section class="nv-form-panel"><h3>2. Dados do item</h3>${detailFields()}</section>
+    </section><section class="nv-form-panel"><h3>2. Dados do item</h3>${detailFields()}<label class="nv-field">Fotos de como chegou (opcional, até 6)<input type="file" name="photos" accept="image/*" multiple></label><p class="nv-help">No celular, toque para tirar a foto na hora. O cliente vê essas fotos no acompanhamento.</p></section>
     <section class="nv-form-panel"><h3>3. Serviço e acompanhamento</h3><div class="nv-form-grid">${field('reference', 'Número do pedido (opcional)')}<label class="nv-field">Processo<select name="process_id" required><option value="">Selecione o processo</option>${selectOptions(processes)}</select></label></div><div id="processPreview" class="nv-help">Selecione um processo para visualizar as etapas.</div>${serviceFields()}</section>
     <button class="nv-button" type="submit">Criar pedido</button><p id="completeStatus" role="status"></p></form><div id="completeLink" hidden></div></section>
     <section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><span class="nv-help" id="orderCount"></span></div>${toolbar('orders')}<div class="nv-datebar"><label>Dia <input id="orderDate" type="date" aria-label="Selecionar dia" value="${orderDate}"></label><button class="nv-button secondary" id="allDates">Todos os dias</button></div><div class="nv-list" id="datedOrders"></div></section>`;
@@ -204,9 +256,14 @@ async function loadOrders(box, version) {
     e.preventDefault(); const data = new FormData(form), button = form.querySelector('[type="submit"]'); button.disabled = true; $('completeStatus').textContent = '';
     try {
       const result = await api('/orders', 'POST', { customer_id: data.get('customer_id'), process_id: data.get('process_id'), reference: String(data.get('reference')).trim(), details: readDetails(data) });
+      const files = form.elements.photos?.files ? [...form.elements.photos.files] : [];
+      let photoNote = '';
+      if (files.length) { try { const n = await uploadPhotos(result.id, files, $('completeStatus')); photoNote = ' ' + n + ' foto(s) anexada(s).'; } catch (err) { photoNote = ' Fotos não enviadas: ' + err.message; } }
       form.reset(); $('inlineCustomer').hidden = true; $('processPreview').textContent = 'Selecione um processo para visualizar as etapas.';
-      $('completeStatus').textContent = 'Pedido criado e lista atualizada.'; $('completeLink').hidden = false;
-      $('completeLink').innerHTML = `<label class="nv-field">Link de acompanhamento<input readonly value="${safe(result.tracking_url)}"></label><a target="_blank" rel="noopener" href="${safe(result.tracking_url)}">Abrir acompanhamento</a>`;
+      const created = { ...result, external_reference: String(data.get('reference') || '').trim() || null, customer: cachedCustomers.find(c => c.id === data.get('customer_id'))?.name, customer_phone: cachedCustomers.find(c => c.id === data.get('customer_id'))?.phone, details: readDetails(data) };
+      const link = created.share_code ? trackingUrl(created) : result.tracking_url;
+      $('completeStatus').textContent = 'Pedido ' + (created.external_reference || created.order_number || '') + ' criado.' + photoNote; $('completeLink').hidden = false;
+      $('completeLink').innerHTML = `<label class="nv-field">Link de acompanhamento<input readonly value="${safe(link)}"></label><div class="nv-order-actions"><a class="nv-button fp-whats" target="_blank" rel="noopener" href="${safe(whatsUrl(created))}">${whatsPhone(created) ? 'Enviar no WhatsApp do cliente' : 'Enviar no WhatsApp'}</a><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(link)}">Abrir acompanhamento</a></div>`;
       orderDate = isoLocal(new Date()); $('orderDate').value = orderDate; filters.orders.search = ''; filters.orders.status = ''; document.querySelectorAll('[data-filter-scope="orders"]').forEach(node => { if (node.dataset.filter !== 'sort') node.value = ''; });
       await reload(true); feedback('Pedido criado com sucesso.');
     } catch (error) { $('completeStatus').textContent = error.message; }
@@ -301,6 +358,11 @@ document.addEventListener('toggle', e => {
   const id = e.target.dataset?.detailsId; if (!id || !e.target.isConnected) return;
   if (e.target.open) openedOrders.add(id); else openedOrders.delete(id);
 }, true);
+document.addEventListener('change', async e => {
+  const input = e.target; if (input.type !== 'file' || !input.dataset.photoOrder || !input.files.length) return;
+  try { const n = await uploadPhotos(input.dataset.photoOrder, input.files, $('panelFeedback')); $('panelFeedback').hidden = false; await reload(true); feedback(n + ' foto(s) anexada(s).'); }
+  catch (error) { feedback(error.message, true); } finally { input.value = ''; }
+});
 document.addEventListener('input', e => {
   if (!e.target.dataset.filter) return;
   filters[e.target.dataset.filterScope][e.target.dataset.filter] = e.target.value; renderLiveLists();
@@ -315,7 +377,7 @@ document.addEventListener('click', async e => {
     if (button.dataset.transitionId) {
       const o = cachedOrders.find(o => o.id === button.dataset.transitionId); if (!o) return;
       button.disabled = true;
-      try { await api('/orders/' + o.id + '/transition', 'POST', { action: button.dataset.action, expected_step_index: o.step_index, expected_status: o.status }); await reload(true); feedback('Pedido atualizado.'); }
+      try { const action = button.dataset.action; await api('/orders/' + o.id + '/transition', 'POST', { action, expected_step_index: o.step_index, expected_status: o.status }); await reload(true); feedback('Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); if (action === 'start') showWhatsOffer(o); }
       catch (error) { await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
     }
@@ -334,7 +396,8 @@ document.addEventListener('click', async e => {
       return;
     }
     if (button.dataset.copyOrder) { const o = cachedOrders.find(o => o.id === button.dataset.copyOrder); await navigator.clipboard.writeText(trackingUrl(o)); feedback('Link copiado.'); }
-    if (button.dataset.sendOrder) { const o = cachedOrders.find(o => o.id === button.dataset.sendOrder); window.open('https://wa.me/?text=' + encodeURIComponent('Acompanhe seu pedido: ' + trackingUrl(o)), '_blank', 'noopener,noreferrer'); }
+    if (button.dataset.sendOrder) { const o = cachedOrders.find(o => o.id === button.dataset.sendOrder); window.open(whatsUrl(o), '_blank', 'noopener,noreferrer'); }
+    if (button.dataset.photoDel && confirm('Apagar esta foto?')) { await api('/orders/' + button.dataset.photoOrder + '/photos/' + button.dataset.photoDel, 'DELETE'); await reload(true); feedback('Foto apagada.'); }
     if (button.dataset.deleteOrder && confirm('Excluir este pedido? O link será desativado, o vídeo ao vivo será bloqueado e gravações em andamento serão finalizadas. Os arquivos já gravados não serão apagados do computador.')) { await api('/orders/' + button.dataset.deleteOrder, 'DELETE'); await reload(true); feedback('Pedido excluído.'); }
     if (button.dataset.queueId) {
       const ids = cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a)).map(o => o.id);

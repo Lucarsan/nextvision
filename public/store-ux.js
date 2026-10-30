@@ -115,30 +115,45 @@
 
   // Endereço: CEP preenche sozinho; digitando a rua, sugere ruas da cidade da loja (ViaCEP, gratuito).
   function addressAssist(form, store) {
-    const cep = form.querySelector('[data-cep]'), street = form.querySelector('[data-street]'); if (!street) return;
-    const id = 'addr-' + Math.random().toString(36).slice(2, 7);
-    const dl = document.createElement('datalist'); dl.id = id; street.setAttribute('list', id); street.after(dl);
-    let timer = null, lastQuery = '';
-    const fill = r => { street.value = [r.logradouro, r.bairro, r.localidade + '/' + r.uf].filter(Boolean).join(', '); if (cep && r.cep) cep.value = r.cep; };
+    const cep = form.querySelector('[data-cep]'), street = form.querySelector('[data-street]'); if (!street || street.dataset.assist) return;
+    street.dataset.assist = '1';
+    const wrap = document.createElement('div'); wrap.className = 'fp-combo fp-addr'; street.parentNode.insertBefore(wrap, street); wrap.append(street);
+    const list = document.createElement('ul'); list.className = 'fp-combo-list'; list.hidden = true; list.setAttribute('role', 'listbox'); wrap.append(list);
+    const hint = document.createElement('p'); hint.className = 'nv-help fp-addr-hint'; wrap.after(hint);
+    let timer = null, rows = [], active = -1, seq = 0;
+    const label = r => [r.logradouro, r.bairro, r.localidade + '/' + r.uf].filter(Boolean).join(', ');
+    const fill = r => { street.value = label(r) + ', '; if (cep && r.cep) cep.value = r.cep; list.hidden = true; street.focus(); hint.textContent = 'Complete com o número.'; };
+    const draw = () => { list.innerHTML = rows.map((r, i) => `<li role="option" data-i="${i}" class="${i === active ? 'active' : ''}"><strong>${esc(r.logradouro)}</strong><span>${esc([r.bairro, r.cep].filter(Boolean).join(' · '))}</span></li>`).join(''); list.hidden = !rows.length; };
+    const city = () => ({ city: store.city || '', state: store.state || '' });
+    if (!city().city) hint.textContent = 'Para sugerir ruas enquanto digita, informe a cidade da loja em Configurações → Perfil. Pelo CEP já funciona.';
     cep && cep.addEventListener('input', async () => {
       const d = cep.value.replace(/\D/g, ''); if (d.length !== 8) return;
-      try { const r = await (await fetch('https://viacep.com.br/ws/' + d + '/json/')).json(); if (!r.erro) fill(r); } catch {}
+      try { const r = await (await fetch('https://viacep.com.br/ws/' + d + '/json/')).json(); if (!r.erro) fill(r); else hint.textContent = 'CEP não encontrado.'; } catch { hint.textContent = 'Não foi possível consultar o CEP agora.'; }
     });
     street.addEventListener('input', () => {
-      clearTimeout(timer);
-      const typed = street.value.trim(); if (!store.city || !store.state || typed.length < 3 || typed.includes(',')) return;
+      clearTimeout(timer); const { city: c, state: uf } = city();
+      const typed = street.value.trim(); if (typed.includes(',')) { list.hidden = true; return; }
+      const q = typed.replace(/^(rua|r\.|avenida|av\.?|travessa|tv\.?|alameda|al\.?)\s+/i, '');
+      if (!c || !uf || q.length < 3) { rows = []; draw(); return; }
       timer = setTimeout(async () => {
-        const q = typed.replace(/^(rua|r\.|avenida|av\.?|travessa|tv\.?)\s+/i, '');
-        if (q.length < 3 || q === lastQuery) return; lastQuery = q;
+        const mine = ++seq;
         try {
-          const rows = await (await fetch('https://viacep.com.br/ws/' + encodeURIComponent(store.state) + '/' + encodeURIComponent(store.city) + '/' + encodeURIComponent(q) + '/json/')).json();
-          if (!Array.isArray(rows)) return;
-          dl.innerHTML = rows.slice(0, 12).map(r => `<option value="${esc([r.logradouro, r.bairro, r.localidade + '/' + r.uf].filter(Boolean).join(', '))}">${esc(r.cep)}</option>`).join('');
-          street._viacep = rows;
-        } catch {}
-      }, 300);
+          const res = await (await fetch('https://viacep.com.br/ws/' + encodeURIComponent(uf) + '/' + encodeURIComponent(c) + '/' + encodeURIComponent(q) + '/json/')).json();
+          if (mine !== seq) return;
+          rows = Array.isArray(res) ? res.slice(0, 10) : []; active = -1; draw();
+          hint.textContent = rows.length ? '' : 'Nenhuma rua encontrada em ' + c + '/' + uf + ' com esse nome.';
+        } catch { hint.textContent = 'Sugestões indisponíveis no momento; digite o endereço completo.'; }
+      }, 280);
     });
-    street.addEventListener('change', () => { const r = (street._viacep || []).find(r => street.value.startsWith(r.logradouro)); if (r && cep) cep.value = r.cep; });
+    street.addEventListener('keydown', e => {
+      if (list.hidden) return;
+      if (e.key === 'ArrowDown') { active = Math.min(rows.length - 1, active + 1); draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); draw(); e.preventDefault(); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (rows[Math.max(0, active)]) fill(rows[Math.max(0, active)]); }
+      else if (e.key === 'Escape') list.hidden = true;
+    });
+    list.addEventListener('mousedown', e => { const li = e.target.closest('li'); if (!li) return; e.preventDefault(); fill(rows[Number(li.dataset.i)]); });
+    street.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
   }
   const formatCpf = v => { const d = String(v || '').replace(/\D/g, '').slice(0, 11); return d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2'); };
   function customerFields(c = {}, prefix = '') {

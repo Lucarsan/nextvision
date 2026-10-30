@@ -203,6 +203,23 @@ app.get('/api/master/overview',auth,roles('master'),route(async(_req,res)=>{
   FROM tenants t ORDER BY t.created_at DESC`);
  res.json(r.rows);
 }));
+const ticketCategories=['video','camera','pedidos','acesso','cobranca','outro'];
+app.get('/api/store/support',auth,roles('owner','operator'),route(async(req,res)=>{
+ const [t,c]=await Promise.all([q('SELECT number,category,subject,description,status,central_note,created_at,updated_at,resolved_at FROM support_tickets WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 50',[tid(req)]),q('SELECT coalesce(support_whatsapp,sales_whatsapp) whatsapp FROM platform_settings WHERE id=true')]);
+ res.json({tickets:t.rows,whatsapp:c.rows[0]?.whatsapp||''});
+}));
+app.post('/api/store/support',auth,roles('owner','operator'),rateLimit({windowMs:3600000,limit:20}),route(async(req,res)=>{
+ const v=valid(z.object({category:z.enum(ticketCategories),subject:z.string().trim().min(3).max(140),description:z.string().trim().min(5).max(4000),contact_phone:z.string().trim().max(30).optional()}).strict(),req,res);if(!v)return;
+ const r=await q('INSERT INTO support_tickets(tenant_id,created_by,category,subject,description,contact_phone) VALUES($1,$2,$3,$4,$5,$6) RETURNING number,status,created_at',[tid(req),req.user.id,v.category,v.subject,v.description,v.contact_phone||null]);
+ await audit(req,'create','support_ticket',tid(req));res.status(201).json(r.rows[0]);
+}));
+app.get('/api/master/support',auth,roles('master'),route(async(_req,res)=>res.json((await q("SELECT s.id,s.number,s.category,s.subject,s.description,s.contact_phone,s.status,s.central_note,s.created_at,s.updated_at,t.name store,t.slug,u.name author,u.email author_email FROM support_tickets s JOIN tenants t ON t.id=s.tenant_id LEFT JOIN users u ON u.id=s.created_by ORDER BY (s.status='resolved'),s.created_at DESC LIMIT 200")).rows)));
+app.patch('/api/master/support/:id',auth,roles('master'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
+ const v=valid(z.object({status:z.enum(['open','in_progress','resolved']),central_note:z.string().trim().max(2000).optional()}).strict(),req,res);if(!v)return;
+ const r=await q("UPDATE support_tickets SET status=$1,central_note=COALESCE($2,central_note),updated_at=now(),resolved_at=CASE WHEN $1='resolved' THEN now() ELSE NULL END WHERE id=$3 RETURNING id,status",[v.status,v.central_note??null,req.params.id]);
+ if(!r.rowCount)return bad(res,404,'Chamado não encontrado');await audit(req,'update','support_ticket',req.params.id);res.json(r.rows[0]);
+}));
 app.get('/api/master/stats',auth,roles('master'),route(async(req,res)=>{
  const r=await q(`SELECT count(*)::int tenants,
  count(*) FILTER(WHERE t.status='active')::int active_tenants,
@@ -214,16 +231,16 @@ app.get('/api/master/stats',auth,roles('master'),route(async(req,res)=>{
  (SELECT count(*)::int FROM invoices WHERE status='overdue' OR (status='open' AND due_date<current_date)) overdue_invoices
  FROM tenants t`);res.json({...r.rows[0],billing_automation_configured:false});
 }));
-app.get('/api/master/settings',auth,roles('master'),route(async(_req,res)=>res.json((await q('SELECT sales_whatsapp FROM platform_settings WHERE id=true')).rows[0])));
+app.get('/api/master/settings',auth,roles('master'),route(async(_req,res)=>res.json((await q('SELECT sales_whatsapp,support_whatsapp FROM platform_settings WHERE id=true')).rows[0])));
 app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
- const v=valid(z.object({sales_whatsapp:z.string().regex(/^(?:[0-9]{10,15})?$/)}).strict(),req,res);if(!v)return;
- const result=await q('UPDATE platform_settings SET sales_whatsapp=$1 WHERE id=true RETURNING sales_whatsapp',[v.sales_whatsapp]);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
+ const v=valid(z.object({sales_whatsapp:z.string().regex(/^(?:[0-9]{10,15})?$/),support_whatsapp:z.string().regex(/^(?:[0-9]{10,15})?$/).optional()}).strict(),req,res);if(!v)return;
+ const result=await q('UPDATE platform_settings SET sales_whatsapp=$1,support_whatsapp=CASE WHEN $2::boolean THEN NULLIF($3,\'\') ELSE support_whatsapp END WHERE id=true RETURNING sales_whatsapp,support_whatsapp',[v.sales_whatsapp,v.support_whatsapp!==undefined,v.support_whatsapp||'']);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,t.whatsapp,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
 }));
-app.patch('/api/store/location',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({city:z.string().trim().max(80),state:z.union([z.literal(''),z.string().regex(/^[A-Z]{2}$/)])}).strict(),req,res);if(!v)return;const r=await q('UPDATE tenants SET city=$1,state=$2 WHERE id=$3 RETURNING city,state',[v.city||null,v.state||null,tid(req)]);await audit(req,'update','tenant_location',tid(req));res.json(r.rows[0]);}));
+app.patch('/api/store/location',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({city:z.string().trim().max(80),state:z.union([z.literal(''),z.string().regex(/^[A-Z]{2}$/)]),whatsapp:z.preprocess(digitsOnly,z.union([z.literal(''),z.string().regex(/^\d{10,15}$/,'WhatsApp inválido: use DDD + número')])).optional()}).strict(),req,res);if(!v)return;const wa=v.whatsapp?(v.whatsapp.length<=11?'55'+v.whatsapp:v.whatsapp):null;const r=await q('UPDATE tenants SET city=$1,state=$2,whatsapp=CASE WHEN $4 THEN $5 ELSE whatsapp END WHERE id=$3 RETURNING city,state,whatsapp',[v.city||null,v.state||null,tid(req),v.whatsapp!==undefined,wa]);await audit(req,'update','tenant_location',tid(req));res.json(r.rows[0]);}));
 app.patch('/api/store/message-templates',auth,roles('owner'),route(async(req,res)=>{const t=z.string().trim().max(1000);const v=valid(z.object({created:t,started:t,advanced:t,paused:t}).partial().strict(),req,res);if(!v)return;const r=await q("UPDATE tenants SET message_templates=message_templates || $1::jsonb WHERE id=$2 RETURNING message_templates",[JSON.stringify(v),tid(req)]);await audit(req,'update','tenant_messages',tid(req));res.json(r.rows[0]);}));
 app.patch('/api/store/settings',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),logo_url:z.union([z.string().url().startsWith('https://').max(1000),z.literal('')]),email_notifications:z.enum(['off','steps','completed','all'])}).strict(),req,res);if(!v)return;
  const c=await db.connect();
@@ -329,10 +346,11 @@ const cameraMapping=z.record(z.string().regex(/^([0-9]|[12][0-9])$/),uuid.nullab
 app.patch('/api/processes/:id',auth,roles('owner'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
  const v=valid(z.object({name:z.string().trim().min(2).max(120),steps:z.array(z.string().trim().min(1).max(120)).min(1).max(30),camera_id:uuid.nullish(),step_cameras:cameraMapping}),req,res);if(!v)return;if(!await checkCameraMapping(tid(req),v.camera_id,v.step_cameras))return bad(res,400,'Câmera inválida');if(Object.keys(v.step_cameras).some(i=>Number(i)>=v.steps.length))return bad(res,400,'Etapa de câmera inválida');
- const r=await q('UPDATE processes SET name=$1,steps=$2,camera_id=$5,step_cameras=$6 WHERE id=$3 AND tenant_id=$4 RETURNING *',[v.name,JSON.stringify(v.steps),req.params.id,tid(req),v.camera_id||null,JSON.stringify(v.step_cameras)]);
+ const r=await q('UPDATE processes SET name=$1,steps=$2,camera_id=$5,step_cameras=$6 WHERE id=$3 AND tenant_id=$4 AND archived_at IS NULL RETURNING *',[v.name,JSON.stringify(v.steps),req.params.id,tid(req),v.camera_id||null,JSON.stringify(v.step_cameras)]);
  if(!r.rowCount)return bad(res,404,'Processo não encontrado');await audit(req,'update','process',req.params.id);res.json(r.rows[0]);
 }));
-app.get('/api/processes',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM processes WHERE tenant_id=$1 ORDER BY created_at DESC',[tid(req)])).rows)));
+app.get('/api/processes',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM processes WHERE tenant_id=$1 AND archived_at IS NULL ORDER BY created_at DESC',[tid(req)])).rows)));
+app.delete('/api/processes/:id',auth,roles('owner'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const r=await q('UPDATE processes SET archived_at=now() WHERE id=$1 AND tenant_id=$2 AND archived_at IS NULL',[req.params.id,tid(req)]);if(!r.rowCount)return bad(res,404,'Processo não encontrado');await audit(req,'archive','process',req.params.id);res.status(204).end();}));
 app.post('/api/processes',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2),steps:z.array(z.string().min(1)).min(1).max(30),camera_id:uuid.nullish(),step_cameras:cameraMapping}),req,res);if(!v)return;if(!await checkCameraMapping(tid(req),v.camera_id,v.step_cameras))return bad(res,400,'Câmera inválida');if(Object.keys(v.step_cameras).some(i=>Number(i)>=v.steps.length))return bad(res,400,'Etapa de câmera inválida');const r=await q('INSERT INTO processes(tenant_id,name,steps,camera_id,step_cameras) VALUES($1,$2,$3,$4,$5) RETURNING *',[tid(req),v.name,JSON.stringify(v.steps),v.camera_id||null,JSON.stringify(v.step_cameras)]);res.status(201).json(r.rows[0]);}));
 app.put('/api/orders/queue-order',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({ids:z.array(uuid).max(500)}),req,res);if(!v)return;
@@ -363,7 +381,7 @@ app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.j
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({customer_id:uuid,process_id:uuid,reference:z.string().trim().max(70).default(''),details:orderDetails.default({})}),req,res);if(!v)return;
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
- const r=await q("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1) RETURNING id,status,order_number,share_code",[tid(req),v.customer_id,v.process_id,hash,v.reference||null,JSON.stringify(v.details)]);
+ const r=await q("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tid(req),v.customer_id,v.process_id,hash,v.reference||null,JSON.stringify(v.details)]);
  if(!r.rowCount)return bad(res,400,'Cliente ou processo inválido');await audit(req,'create','order',r.rows[0].id);
  res.status(201).json({...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token});
 }));
@@ -382,9 +400,9 @@ app.post('/api/orders/quick',auth,roles('owner','operator'),route(async(req,res)
  try{
   await client.query('BEGIN');
   let processId=v.process_id;
-  if(processId){const p=await client.query('SELECT id FROM processes WHERE id=$1 AND tenant_id=$2',[processId,tid(req)]);if(!p.rowCount){await client.query('ROLLBACK');return bad(res,400,'Processo inválido para esta loja');}}
+  if(processId){const p=await client.query('SELECT id FROM processes WHERE id=$1 AND tenant_id=$2 AND archived_at IS NULL',[processId,tid(req)]);if(!p.rowCount){await client.query('ROLLBACK');return bad(res,400,'Processo inválido para esta loja');}}
   else{
-   const p=await client.query("SELECT id FROM processes WHERE tenant_id=$1 AND name='Acompanhamento rápido' ORDER BY created_at LIMIT 1",[tid(req)]);
+   const p=await client.query("SELECT id FROM processes WHERE tenant_id=$1 AND name='Acompanhamento rápido' AND archived_at IS NULL ORDER BY created_at LIMIT 1",[tid(req)]);
    if(p.rowCount)processId=p.rows[0].id;
    else {const created=await client.query("INSERT INTO processes(tenant_id,name,steps) VALUES($1,'Acompanhamento rápido',$2) RETURNING id",[tid(req),JSON.stringify(['Recebido','Em preparação','Pronto para entrega'])]);processId=created.rows[0].id;}
   }
@@ -603,7 +621,7 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
  const r=await q(`SELECT o.id,o.status,o.step_index,o.camera_id,o.external_reference,
  EXISTS(SELECT 1 FROM cameras available WHERE available.id=o.camera_id AND available.tenant_id=o.tenant_id AND available.enabled AND available.deleted_at IS NULL AND (available.device_id IS NULL OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=available.device_id AND d.tenant_id=available.tenant_id AND d.enabled AND d.revoked_at IS NULL))) camera_available,
- o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,o.details->>'brand' item_brand,o.details->>'model' item_model,
+ o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,o.details->>'brand' item_brand,o.details->>'model' item_model,
  t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,
  CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN
  (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,

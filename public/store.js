@@ -147,7 +147,8 @@ function renderNow() {
   const queue = queuedOrders();
   setHtml($('liveOrders'), live.length ? live.map(liveCard).join('') : '<p class="fp-empty">Nenhum pedido em atendimento. Inicie o próximo da fila.</p>');
   if ($('liveCount')) $('liveCount').textContent = live.length + (live.length === 1 ? ' pedido' : ' pedidos');
-  setHtml($('homeQueue'), queue.length ? queue.map((o, i) => `<div class="fp-queue-item"><span class="fp-pos">${i + 1}</span><div><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · esperando há ${minutesSince(o.created_at)}</p></div><button type="button" class="nv-button" data-transition-id="${safe(o.id)}" data-action="start">Iniciar</button></div>`).join('') : '<p class="fp-empty">Ninguém esperando.</p>');
+  if (!$('homeQueue')?.dataset.dragging) setHtml($('homeQueue'), queue.length ? queue.map((o, i) => `<div class="fp-queue-item" data-id="${safe(o.id)}"><button type="button" class="fp-drag fp-drag-sm" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · esperando há ${minutesSince(o.created_at)}</p></div><button type="button" class="nv-button" data-transition-id="${safe(o.id)}" data-action="start">Iniciar</button></div>`).join('') : '<p class="fp-empty">Ninguém esperando.</p>');
+  enableQueueDrag($('homeQueue'), '.fp-queue-item');
   if ($('queueCount')) $('queueCount').textContent = queue.length + ' esperando';
   const actions = [];
   const ready = live.find(o => o.status === 'live' && isLastStep(o));
@@ -292,19 +293,21 @@ async function loadOrders(box, version) {
   };
   renderLiveLists();
 }
+function enableQueueDrag(container, itemSelector) {
+  if (!container || container.dataset.sortable) return;
+  container.dataset.sortable = '1';
+  container.addEventListener('pointerdown', e => { if (e.target.closest('[data-drag-handle]')) container.dataset.dragging = '1'; }, true);
+  FP.sortable(container, itemSelector, async ids => {
+    delete container.dataset.dragging;
+    try { await api('/orders/queue-order', 'PUT', { ids }); await reload(true); feedback('Ordem da fila atualizada.'); } catch (error) { feedback(error.message, true); await reload(true); }
+  });
+}
 function drawQueue() {
   const container = $('queueList'); if (!container || container.dataset.dragging) return;
   const orders = cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
   const html = orders.map((o, i) => `<article class="nv-order fp-queue-row" data-id="${safe(o.id)}"><button type="button" class="fp-drag" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div class="fp-queue-info"><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · ${safe(o.process)} · esperando há ${minutesSince(o.created_at)}</p></div></article>`).join('') || notice('Nenhum pedido aguardando.');
   if (container.innerHTML !== html) container.innerHTML = html;
-  if (!container.dataset.sortable) {
-    container.dataset.sortable = '1';
-    container.addEventListener('pointerdown', e => { if (e.target.closest('[data-drag-handle]')) container.dataset.dragging = '1'; }, true);
-    FP.sortable(container, '.fp-queue-row', async ids => {
-      delete container.dataset.dragging;
-      try { await api('/orders/queue-order', 'PUT', { ids }); await reload(true); feedback('Ordem da fila atualizada.'); } catch (error) { feedback(error.message, true); await reload(true); }
-    });
-  }
+  enableQueueDrag(container, '.fp-queue-row');
 }
 function customerFields(c = {}) { return FP.customerFields(c); }
 function drawCustomers() {
@@ -474,7 +477,7 @@ function settingsTabs(box, settings) {
   const [identity, ready, loyalty, redeem] = cards;
   const tpl = settings.message_templates || {};
   const loc = document.createElement('section'); loc.className = 'nv-card';
-  loc.innerHTML = '<h2>Endereço da loja</h2><p class="nv-help">Usado para sugerir endereços ao cadastrar clientes.</p><form id="locationForm" class="nv-form-grid"><label class="nv-field">Cidade<input name="city" maxlength="80" value="' + safe(settings.city || '') + '" placeholder="Ex.: Fortaleza"></label><label class="nv-field">UF<input name="state" maxlength="2" value="' + safe(settings.state || '') + '" placeholder="CE" style="text-transform:uppercase"></label><div><button class="nv-button">Salvar endereço</button><p id="locationStatus" role="status"></p></div></form>';
+  loc.innerHTML = '<h2>Endereço e contato da loja</h2><p class="nv-help">A cidade serve para sugerir endereços ao cadastrar clientes. O WhatsApp aparece para o cliente no acompanhamento.</p><form id="locationForm" class="nv-form-grid"><label class="nv-field">Cidade<input name="city" maxlength="80" value="' + safe(settings.city || '') + '" placeholder="Ex.: Fortaleza"></label><label class="nv-field">UF<input name="state" maxlength="2" value="' + safe(settings.state || '') + '" placeholder="CE" style="text-transform:uppercase"></label><label class="nv-field">WhatsApp da loja (para o cliente falar com vocês)<input name="whatsapp" inputmode="tel" maxlength="20" value="' + safe(settings.whatsapp || '') + '" placeholder="DDD + número"></label><div><button class="nv-button">Salvar</button><p id="locationStatus" role="status"></p></div></form>';
   const msgs = document.createElement('section'); msgs.className = 'nv-card';
   msgs.innerHTML = '<h2>Mensagens por ação</h2><p class="nv-help">Textos usados nos botões de WhatsApp. Variáveis: {cliente}, {item}, {loja}, {pedido}, {etapa} e {link}.</p><form id="templatesForm">' + Object.entries(TEMPLATE_LABELS).map(([k, label]) => '<label class="nv-field">' + label + '<textarea name="' + k + '" rows="2" maxlength="1000">' + safe(tpl[k] || DEFAULT_TEMPLATES[k]) + '</textarea></label>').join('') + '<button class="nv-button">Salvar mensagens</button><p id="templatesStatus" role="status"></p></form>';
   const tabs = [['Perfil', [identity, loc]], ['Mensagens', [msgs, ready]], ['Fidelidade', [loyalty, redeem]]];
@@ -484,8 +487,22 @@ function settingsTabs(box, settings) {
   tabs.forEach(([name]) => { const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.dataset.tab = name; b.textContent = name; b.onclick = () => select(name); bar.append(b); });
   if (ready) { const h = ready.querySelector('h2'); if (h) h.textContent = 'Ao concluir (pedido pronto)'; }
   select('Perfil');
-  $('locationForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { const r = await api('/store/location', 'PATCH', { city: f.elements.city.value.trim(), state: f.elements.state.value.trim().toUpperCase() }); storeSettings.city = r.city; storeSettings.state = r.state; $('locationStatus').textContent = 'Endereço salvo'; } catch (err) { $('locationStatus').textContent = err.message; } };
+  $('locationForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { const r = await api('/store/location', 'PATCH', { city: f.elements.city.value.trim(), state: f.elements.state.value.trim().toUpperCase(), whatsapp: f.elements.whatsapp.value.trim() }); storeSettings.city = r.city; storeSettings.state = r.state; storeSettings.whatsapp = r.whatsapp; f.elements.whatsapp.value = r.whatsapp || ''; $('locationStatus').textContent = 'Salvo'; } catch (err) { $('locationStatus').textContent = err.message; } };
   $('templatesForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; const body = Object.fromEntries(Object.keys(TEMPLATE_LABELS).map(k => [k, f.elements[k].value.trim()])); try { const r = await api('/store/message-templates', 'PATCH', body); storeSettings.message_templates = r.message_templates; $('templatesStatus').textContent = 'Mensagens salvas'; } catch (err) { $('templatesStatus').textContent = err.message; } };
+}
+const TICKET_CATS = { video: 'Vídeo ao vivo não aparece', camera: 'Câmera / imagem', pedidos: 'Pedidos ou painel', acesso: 'Acesso / login', cobranca: 'Plano ou cobrança', outro: 'Outro assunto' };
+const TICKET_STATUS = { open: ['orange', 'Aberto'], in_progress: ['', 'Em andamento'], resolved: ['green', 'Resolvido'] };
+async function loadSupport(box, version) {
+  const data = await api('/store/support'); if (version !== viewVersion) return;
+  const wa = data.whatsapp ? 'https://wa.me/' + data.whatsapp + '?text=' + encodeURIComponent('Olá! Sou da loja ' + (storeSettings.name || '') + ' (' + (storeSettings.slug || '') + ') e preciso de ajuda com o Ficou Pronto.') : '';
+  box.innerHTML = `<div class="fp-support-grid"><section class="nv-card"><h2>Falar agora</h2><p class="nv-help">Atendimento direto com a equipe Ficou Pronto pelo WhatsApp.</p>${wa ? `<a class="nv-button fp-whats" target="_blank" rel="noopener" href="${safe(wa)}">Chamar o suporte no WhatsApp</a>` : '<p class="nv-help">O WhatsApp do suporte ainda não foi configurado pela central. Abra um chamado ao lado.</p>'}</section>
+  <section class="nv-card"><h2>Abrir chamado</h2><p class="nv-help">Descreva o que aconteceu. A central acompanha e responde por aqui.</p><form id="ticketForm"><div class="nv-form-grid"><label class="nv-field">Assunto<select name="category" required>${Object.entries(TICKET_CATS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label><label class="nv-field">Telefone para retorno (opcional)<input name="contact_phone" inputmode="tel" maxlength="30"></label></div><label class="nv-field">Título<input name="subject" required minlength="3" maxlength="140" placeholder="Ex.: vídeo não aparece para o cliente"></label><label class="nv-field">O que aconteceu?<textarea name="description" required minlength="5" maxlength="4000" rows="4" placeholder="Quando começou, em qual pedido, o que aparece na tela…"></textarea></label><button class="nv-button">Enviar chamado</button><p id="ticketStatus" role="status"></p></form></section></div>
+  <section class="nv-card"><h2>Meus chamados</h2><div class="nv-list">${data.tickets.length ? data.tickets.map(t => `<article class="nv-order fp-ticket"><div><strong>#${t.number} · ${safe(t.subject)}</strong><p>${safe(TICKET_CATS[t.category] || t.category)} · aberto em ${new Date(t.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</p>${t.central_note ? `<p class="fp-ticket-reply"><strong>Resposta da central:</strong> ${safe(t.central_note)}</p>` : ''}</div><span class="nv-pill ${TICKET_STATUS[t.status][0]}">${TICKET_STATUS[t.status][1]}</span></article>`).join('') : notice('Nenhum chamado aberto.')}</div></section>`;
+  $('ticketForm').onsubmit = async e => {
+    e.preventDefault(); const f = e.currentTarget, b = f.querySelector('button'); b.disabled = true;
+    try { const r = await api('/store/support', 'POST', { category: f.elements.category.value, subject: f.elements.subject.value.trim(), description: f.elements.description.value.trim(), contact_phone: f.elements.contact_phone.value.trim() }); await loadSupport(box, viewVersion); feedback('Chamado #' + r.number + ' aberto. A central foi avisada.'); }
+    catch (err) { $('ticketStatus').textContent = err.message; b.disabled = false; }
+  };
 }
 async function loadEditor(view, box, version) {
  if(view==='cameras'){
@@ -512,7 +529,7 @@ async function loadEditor(view, box, version) {
   +'<div class="fp-cam-list" role="radiogroup" aria-label="Câmera da etapa">'
   +[['', 'Usar a câmera padrão do processo'],['none','Sem câmera nesta etapa']].concat(cameras.map(c=>[c.id,c.name+(c.station?' · '+c.station:'')])).map(([v,l])=>'<label class="fp-cam-opt"><input type="radio" name="stepCam" value="'+safe(v)+'" '+((st.camera||'')===v?'checked':'')+'><span>'+safe(l)+'</span></label>').join('')+'</div>'
   +'<label class="nv-field fp-default-cam">Câmera padrão do processo<select name="camera_id">'+camOptions(current.camera_id,false)+'</select></label>'
-  +'<div class="fp-proc-actions"><span class="nv-help">Alterações valem para novos pedidos.</span><button class="nv-button" type="submit">'+(current.id==='new'?'Criar processo':'Salvar alterações')+'</button></div><p id="procStatus" role="status" class="nv-help"></p></div></form>';};
+  +'<div class="fp-proc-actions">'+(current.id!=='new'?'<button type="button" class="nv-button secondary nv-danger" id="deleteProc">Excluir processo</button>':'')+'<span class="nv-help">Alterações valem para novos pedidos.</span><button class="nv-button" type="submit">'+(current.id==='new'?'Criar processo':'Salvar alterações')+'</button></div><p id="procStatus" role="status" class="nv-help"></p></div></form>';};
  const draw=()=>{box.innerHTML='<section class="nv-card fp-proc3"><div class="fp-col fp-col-procs"><div class="fp-col-head">Processos</div><div class="fp-proc-list" aria-label="Processos">'+listHtml()+'</div></div>'+editorHtml()+'</section>';bind()};
  const sync=()=>{const f=$('procEditor');current.name=f.elements.name.value;current.camera_id=f.elements.camera_id.value;f.querySelectorAll('[data-step-name]').forEach(x=>current.steps[+x.dataset.stepName].name=x.value);const r=f.querySelector('[name="stepCam"]:checked');if(r&&current.steps[selStep])current.steps[selStep].camera=r.value};
  const bind=()=>{
@@ -523,6 +540,7 @@ async function loadEditor(view, box, version) {
   $('addStep').onclick=()=>{sync();current.steps.push({name:'',camera:''});selStep=current.steps.length-1;draw();box.querySelector('[data-step-name="'+(current.steps.length-1)+'"]')?.focus()};
   box.querySelectorAll('[data-step-move]').forEach(b=>b.onclick=()=>{sync();const i=+b.dataset.stepMove,j=i+Number(b.dataset.dir);[current.steps[i],current.steps[j]]=[current.steps[j],current.steps[i]];if(selStep===i)selStep=j;draw()});
   box.querySelectorAll('[data-step-del]').forEach(b=>b.onclick=()=>{sync();current.steps.splice(+b.dataset.stepDel,1);selStep=Math.max(0,Math.min(selStep,current.steps.length-1));draw()});
+  if($('deleteProc'))$('deleteProc').onclick=async()=>{if(!confirm('Excluir o processo "'+current.name+'"? Ele deixa de aparecer para novos pedidos. Pedidos já criados com ele continuam com o histórico.'))return;try{await api('/processes/'+current.id,'DELETE');const fresh=await api('/processes');processes.splice(0,processes.length,...fresh);state.selected=processes[0]?.id||'new';current=draft(state.selected);selStep=0;draw();$('procStatus').textContent='Processo excluído.';await reload()}catch(err){$('procStatus').textContent=err.message}};
   $('procEditor').onsubmit=async e=>{e.preventDefault();sync();const steps=current.steps.map(s=>({...s,name:cap(s.name)})).filter(s=>s.name);
    const body={name:cap(current.name),steps:steps.map(s=>s.name),camera_id:current.camera_id||null,step_cameras:Object.fromEntries(steps.map((s,i)=>[String(i),s.camera]).filter(([,v])=>v).map(([k,v])=>[k,v==='none'?null:v]))};
    const status=$('procStatus');try{const saved=await api(current.id==='new'?'/processes':'/processes/'+current.id,current.id==='new'?'POST':'PATCH',body);const fresh=await api('/processes');processes.splice(0,processes.length,...fresh);state.selected=saved.id;current=draft(saved.id);draw();$('procStatus').textContent='Processo salvo.';await reload()}catch(err){status.textContent=err.message}};
@@ -548,5 +566,5 @@ async function loadEditor(view, box, version) {
  box.innerHTML='<section class="nv-card"><h2>Meu plano</h2><p class="nv-help">A quantidade de câmeras é liberada pela central. Solicitar uma alteração não modifica o plano automaticamente.</p><div class="nv-form-grid"><div class="nv-form-panel"><h3>Câmeras contratadas</h3><strong class="nv-number">'+settings.camera_limit+'</strong></div><div class="nv-form-panel"><h3>Câmeras cadastradas</h3><strong class="nv-number">'+settings.camera_count+'</strong></div></div><label class="nv-field">Quantidade de câmeras desejada<input id="requestedCameras" type="number" min="1" max="128" value="'+Math.min(128,settings.camera_limit+1)+'"></label><a id="salesContact" class="nv-button" target="_blank" rel="noopener">Conversar sobre meu plano no WhatsApp</a><p id="salesContactStatus" class="nv-help"></p></section>';
  const updateLink=()=>{const quantity=Number($('requestedCameras').value),link=$('salesContact');if(!settings.sales_whatsapp){link.removeAttribute('href');link.setAttribute('aria-disabled','true');$('salesContactStatus').textContent='O contato comercial ainda não foi configurado pela central.';return;}if(!Number.isInteger(quantity)||quantity<1||quantity>128){link.removeAttribute('href');$('salesContactStatus').textContent='Informe uma quantidade entre 1 e 128 câmeras.';return;}link.removeAttribute('aria-disabled');link.href='https://wa.me/'+settings.sales_whatsapp+'?text='+encodeURIComponent('Olá! Sou da loja '+settings.name+' ('+settings.slug+'). Meu plano permite '+settings.camera_limit+' câmera(s) e gostaria de contratar um plano para '+quantity+' câmera(s).');$('salesContactStatus').textContent='Você falará diretamente com os atendentes da central.';};
  $('requestedCameras').oninput=updateLink;updateLink();
- }else if(view==='support'){box.innerHTML='<section class="nv-card"><h2>Suporte Ficou Pronto</h2><p class="nv-help">Entre em contato pelo canal indicado na contratação.</p></section>'}
+ }else if(view==='support'){await loadSupport(box,version)}
 }

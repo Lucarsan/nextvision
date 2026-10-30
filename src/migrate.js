@@ -7,7 +7,7 @@ const files = [
   '007_process_camera_mapping.sql', '008_technician_assignments.sql',
   '009_order_share_links.sql', '010_order_soft_delete.sql', '011_shop_devices.sql',
   '012_step_recordings.sql', '013_camera_device_binding.sql', '014_order_process_snapshot.sql',
-  '015_store_operations.sql', '016_camera_control.sql', '017_camera_plans.sql', '018_camera_paths.sql', '019_ready_message.sql', '020_short_order_links.sql', '021_order_photos.sql'
+  '015_store_operations.sql', '016_camera_control.sql', '017_camera_plans.sql', '018_camera_paths.sql', '019_ready_message.sql', '020_short_order_links.sql', '021_order_photos.sql', '022_store_panel_fields.sql'
 ];
 let client;
 let currentMigration='connection';

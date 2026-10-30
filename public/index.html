@@ -1,1 +1,122 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ficou Pronto | Painel</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/ui.css?v=2"></head><body><header><strong class="fp-wordmark" aria-label="Ficou Pronto">ficou<span class="p">pronto</span><span class="mark">?</span></strong><span id="who"></span></header><main><section id="login"><h1>Acessar Ficou Pronto</h1><form id="loginForm"><label>E-mail<input id="email" type="email" required></label><label>Senha<input id="password" type="password" required></label><button>Entrar</button></form></section><section id="app" hidden><nav id="nav"></nav><div id="content"></div><button class="secondary" id="logout">Sair</button></section><p id="feedback" role="status"></p></main><script src="/app.js" defer></script></body></html>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ficou Pronto — seu cliente acompanha o serviço ao vivo</title>
+<meta name="description" content="Ficou Pronto: o cliente acompanha pelo celular cada etapa do serviço, com vídeo ao vivo da bancada. Para assistências técnicas, oficinas, lava-jatos, pet shops e mais.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/home.css?v=1">
+</head>
+<body>
+<header class="hm-top">
+  <a class="fp-wordmark" href="/" aria-label="Ficou Pronto">ficou<span class="p">pronto</span><span class="mark">?</span></a>
+  <nav class="hm-nav" aria-label="Seções">
+    <a href="#como-funciona">Como funciona</a>
+    <a href="#para-quem">Para quem</a>
+    <a href="#lojas">Lojas</a>
+  </nav>
+  <button type="button" class="hm-btn hm-btn-dark" id="openLogin">Entrar</button>
+</header>
+
+<main>
+  <section class="hm-hero">
+    <div class="hm-hero-text">
+      <span class="hm-eyebrow">Acompanhamento de serviços</span>
+      <h1>Seu cliente vê o serviço ficando pronto. Ao vivo.</h1>
+      <p>O cliente recebe um link no WhatsApp e acompanha pelo celular a fila, cada etapa e o vídeo da bancada enquanto o serviço é feito. Menos ligação perguntando "já ficou pronto?", mais confiança na sua loja.</p>
+      <div class="hm-cta">
+        <a class="hm-btn hm-btn-accent" id="ctaWhats" href="#contato">Quero na minha loja</a>
+        <a class="hm-btn hm-btn-ghost" href="#como-funciona">Ver como funciona</a>
+      </div>
+    </div>
+    <div class="hm-phone" aria-hidden="true">
+      <div class="hm-phone-card">
+        <span class="hm-chip">Em atendimento</span>
+        <strong>Seu iPhone 13 está em reparo</strong>
+        <span class="hm-muted">Etapa 2 de 3</span>
+        <div class="hm-video"><span class="hm-live">AO VIVO</span></div>
+        <ol class="hm-steps"><li class="done">Recebido</li><li class="now">Reparo</li><li>Pronto para retirada</li></ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="hm-section" id="como-funciona">
+    <h2>Como funciona</h2>
+    <div class="hm-grid3">
+      <article class="hm-card"><span class="hm-num">1</span><h3>Recebeu, registrou</h3><p>A loja abre o pedido no celular ou no computador, tira fotos de como o item chegou e envia o link ao cliente pelo WhatsApp.</p></article>
+      <article class="hm-card"><span class="hm-num">2</span><h3>O cliente acompanha</h3><p>Pelo link, ele vê a posição na fila, a etapa atual e o vídeo ao vivo da bancada nas etapas que a loja escolher.</p></article>
+      <article class="hm-card"><span class="hm-num">3</span><h3>Ficou pronto, avisou</h3><p>Ao concluir, a loja avisa no WhatsApp com um toque. O histórico do pedido fica guardado para consulta.</p></article>
+    </div>
+  </section>
+
+  <section class="hm-section" id="para-quem">
+    <h2>Para quem</h2>
+    <ul class="hm-tags">
+      <li>Assistência técnica</li><li>Oficina mecânica</li><li>Funilaria e pintura</li><li>Lava-jato</li><li>Pet shop · banho e tosa</li><li>Delivery e cozinha</li>
+    </ul>
+    <p class="hm-muted">Cada loja configura as etapas do seu serviço e quais câmeras aparecem em cada etapa. A instalação das câmeras é feita pela nossa equipe.</p>
+  </section>
+
+  <section class="hm-section hm-map" id="lojas">
+    <div>
+      <h2>Encontre lojas com Ficou Pronto</h2>
+      <p class="hm-muted">Em breve: um mapa com as lojas perto de você que mostram o serviço ao vivo.</p>
+    </div>
+    <div class="hm-map-box" aria-hidden="true"><span></span><span></span><span></span></div>
+  </section>
+
+  <section class="hm-section hm-contact" id="contato">
+    <h2>Quer o Ficou Pronto na sua loja?</h2>
+    <p>Fale com a gente: explicamos o funcionamento, os planos por quantidade de câmeras e agendamos a instalação.</p>
+    <a class="hm-btn hm-btn-accent" id="ctaWhats2" href="#contato">Conversar no WhatsApp</a>
+  </section>
+</main>
+
+<footer class="hm-foot"><span class="fp-wordmark">ficou<span class="p">pronto</span><span class="mark">?</span></span><span>© <span id="year"></span> Ficou Pronto</span></footer>
+
+<dialog class="hm-login" id="loginDialog" aria-labelledby="loginTitle">
+  <form id="loginForm">
+    <div class="hm-login-head"><h2 id="loginTitle">Entrar</h2><button type="button" class="hm-x" id="closeLogin" aria-label="Fechar">×</button></div>
+    <p class="hm-muted">Acesso para lojas, técnicos e central.</p>
+    <label>E-mail<input id="email" name="email" type="email" autocomplete="username" required></label>
+    <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="hm-btn hm-btn-accent hm-full" id="loginBtn">Entrar</button>
+    <p id="loginError" class="hm-error" role="alert"></p>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  $('year').textContent = new Date().getFullYear();
+  const dialog = $('loginDialog');
+  const open = () => { if (!dialog.open) dialog.showModal(); setTimeout(() => $('email').focus(), 30); };
+  $('openLogin').onclick = open;
+  $('closeLogin').onclick = () => dialog.close();
+  if (location.hash === '#entrar') open();
+  const go = role => location.replace(role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html');
+  // Sessão já aberta neste navegador: o botão leva direto ao painel.
+  const saved = sessionStorage.getItem('nv_token');
+  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openLogin').textContent = 'Abrir painel'; $('openLogin').onclick = () => go(u.role); } }).catch(() => {});
+  $('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
+    try {
+      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw Error(data.error || 'Não foi possível entrar');
+      sessionStorage.setItem('nv_token', data.token);
+      go(data.user.role);
+    } catch (err) { $('loginError').textContent = err.message; btn.disabled = false; }
+  });
+  fetch('/api/public/contact').then(r => r.ok ? r.json() : {}).then(c => {
+    if (!c.sales_whatsapp) return;
+    const href = 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent('Olá! Quero saber mais sobre o Ficou Pronto para a minha loja.');
+    for (const id of ['ctaWhats', 'ctaWhats2']) { const a = $(id); a.href = href; a.target = '_blank'; a.rel = 'noopener'; }
+  }).catch(() => {});
+})();
+</script>
+</body>
+</html>

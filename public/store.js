@@ -425,7 +425,7 @@ document.addEventListener('visibilitychange', refreshVisible);
 window.addEventListener('focus', refreshVisible);
 setInterval(refreshVisible, 5000);
 (async () => {
-  if (!token) { location.replace('/'); return; }
+  if (!token) { location.replace('/#entrar'); return; }
   try {
     const me = await api('/me'); if (!['owner', 'operator'].includes(me.role)) { location.replace('/'); return; }
     storeSettings = await api('/store/settings');

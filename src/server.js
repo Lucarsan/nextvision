@@ -183,6 +183,21 @@ app.patch('/api/technician/assignments/:id',auth,roles('technician'),route(async
  if(!r.rowCount)return bad(res,409,'Instalação não disponível');res.json(r.rows[0]);
 }));
 app.get('/api/master/invoices',auth,roles('master'),route(async(req,res)=>res.json((await q('SELECT i.*,t.name tenant_name FROM invoices i JOIN tenants t ON t.id=i.tenant_id ORDER BY i.created_at DESC')).rows)));
+app.get('/api/public/contact',rateLimit({windowMs:60000,limit:60}),route(async(_req,res)=>{const r=await q('SELECT sales_whatsapp FROM platform_settings WHERE id=true');res.set('Cache-Control','public, max-age=300');res.json({sales_whatsapp:r.rows[0]?.sales_whatsapp||''});}));
+app.get('/api/master/overview',auth,roles('master'),route(async(_req,res)=>{
+ const r=await q(`SELECT t.id,t.name,t.slug,t.niche,t.status,t.camera_limit,t.created_at,
+  (SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) cameras,
+  (SELECT count(*)::int FROM shop_devices d WHERE d.tenant_id=t.id AND d.revoked_at IS NULL) devices,
+  (SELECT count(*)::int FROM shop_devices d WHERE d.tenant_id=t.id AND d.revoked_at IS NULL AND d.enabled AND d.last_seen_at > now() - interval '3 minutes') devices_online,
+  (SELECT max(d.last_seen_at) FROM shop_devices d WHERE d.tenant_id=t.id AND d.revoked_at IS NULL) last_seen_at,
+  (SELECT count(*)::int FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL AND o.created_at >= date_trunc('day', now() AT TIME ZONE 'America/Fortaleza') AT TIME ZONE 'America/Fortaleza') orders_today,
+  (SELECT count(*)::int FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL AND o.status='live') orders_live,
+  (SELECT max(o.created_at) FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL) last_order_at,
+  (SELECT i.status FROM invoices i WHERE i.tenant_id=t.id ORDER BY i.due_date DESC LIMIT 1) last_invoice_status,
+  (SELECT i.due_date FROM invoices i WHERE i.tenant_id=t.id ORDER BY i.due_date DESC LIMIT 1) last_invoice_due
+  FROM tenants t ORDER BY t.created_at DESC`);
+ res.json(r.rows);
+}));
 app.get('/api/master/stats',auth,roles('master'),route(async(req,res)=>{
  const r=await q(`SELECT count(*)::int tenants,
  count(*) FILTER(WHERE t.status='active')::int active_tenants,

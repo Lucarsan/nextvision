@@ -36,6 +36,57 @@ function transitionActions(o) {
   if (['live', 'paused'].includes(o.status) && o.step_index > 0) html += button('back', 'Voltar etapa');
   return html;
 }
+const nicheNoun = () => ({ electronics: 'aparelho', automotive: 'veículo', carwash: 'veículo', pet: 'pet', food: 'pedido' }[storeSettings.niche] || 'pedido');
+const itemLabel = o => { const d = o.details || {}; return [d.brand, d.model].filter(Boolean).join(' ') || nicheNoun(); };
+const orderRef = o => o.external_reference ? 'Pedido ' + o.external_reference : 'Pedido ' + o.id.slice(0, 8);
+const firstName = name => String(name || '').trim().split(/\s+/)[0] || '';
+function whatsPhone(o) {
+  let digits = String(o.customer_phone || '').replace(/\D/g, '');
+  if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
+  return /^55\d{10,11}$/.test(digits) ? digits : null;
+}
+function readyMessage(o) {
+  const template = storeSettings.ready_message || 'Olá, {cliente}! Seu {item} está pronto para retirada na {loja}. Acompanhe: {link}';
+  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || '', link: o.share_code ? trackingUrl(o) : '' };
+  return template.replace(/\{(cliente|item|loja|pedido|link)\}/g, (_, key) => values[key]).replace(/\s*Acompanhe:\s*$/, '').trim();
+}
+const minutesSince = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'min'; };
+const isLastStep = o => o.step_index >= (o.steps || []).length - 1;
+const queuedOrders = () => cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
+function finishButtons(o) {
+  const phone = whatsPhone(o);
+  return `<button type="button" class="nv-button fp-whats" data-finish-id="${safe(o.id)}" data-notify="1" ${phone ? '' : 'disabled title="Cliente sem telefone válido cadastrado"'}>Finalizar e avisar no WhatsApp</button><button type="button" class="nv-button secondary" data-finish-id="${safe(o.id)}" data-notify="0">Só finalizar</button>`;
+}
+function liveActions(o) {
+  const b = (action, label, primary = false) => `<button type="button" class="nv-button ${primary ? '' : 'secondary'}" data-transition-id="${safe(o.id)}" data-action="${action}">${label}</button>`;
+  let html = '';
+  if (o.status === 'live') html += isLastStep(o) ? finishButtons(o) : b('advance', 'Avançar para ' + safe(cap(o.steps[o.step_index + 1])), true);
+  if (o.status === 'live') html += b('pause', 'Pausar');
+  if (o.status === 'paused') html += b('resume', o.started_at ? 'Retomar atendimento' : 'Retomar fila', true);
+  if (['live', 'paused'].includes(o.status) && o.step_index > 0) html += b('back', 'Voltar etapa');
+  return html + `<button type="button" class="nv-button secondary fp-more" data-edit-order="${safe(o.id)}">Detalhes</button>`;
+}
+function liveCard(o) {
+  const steps = (o.steps || []).map((step, i) => `<span class="${i < o.step_index ? 'done' : i === o.step_index ? 'current' : ''}">${safe(cap(step))}</span>`).join('');
+  const pill = o.status === 'paused' ? '<span class="nv-pill orange">Pausado</span>' : isLastStep(o) ? '<span class="nv-pill green">Pronto</span>' : '<span class="nv-pill">Em andamento</span>';
+  return `<article class="fp-card" data-live-id="${safe(o.id)}"><div class="fp-card-head"><div><strong>${safe(orderRef(o))}</strong> ${pill}<p>${safe(cap(o.customer || 'Cliente não vinculado'))} · ${safe(itemLabel(o))}</p></div><span class="nv-help">${safe(cap(currentStep(o)))}</span></div><div class="fp-bar" aria-label="Etapas">${steps}</div><div class="fp-buttons">${liveActions(o)}</div></article>`;
+}
+function setHtml(node, html) { if (node && node.dataset.signature !== html) { node.innerHTML = html; node.dataset.signature = html; } }
+function renderNow() {
+  const live = cachedOrders.filter(o => ['live', 'paused'].includes(o.status) && o.started_at).sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
+  const queue = queuedOrders();
+  setHtml($('liveOrders'), live.length ? live.map(liveCard).join('') : '<p class="fp-empty">Nenhum pedido em atendimento. Inicie o próximo da fila.</p>');
+  if ($('liveCount')) $('liveCount').textContent = live.length + (live.length === 1 ? ' pedido' : ' pedidos');
+  setHtml($('homeQueue'), queue.length ? queue.map((o, i) => `<div class="fp-queue-item"><span class="fp-pos">${i + 1}</span><div><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · esperando há ${minutesSince(o.created_at)}</p></div><button type="button" class="nv-button" data-transition-id="${safe(o.id)}" data-action="start">Iniciar</button></div>`).join('') : '<p class="fp-empty">Ninguém esperando.</p>');
+  if ($('queueCount')) $('queueCount').textContent = queue.length + ' esperando';
+  const actions = [];
+  const ready = live.find(o => o.status === 'live' && isLastStep(o));
+  if (ready) actions.push(`<div class="fp-action ready"><span class="fp-kind"><span class="fp-dot"></span>Pronto para avisar</span><strong>${safe(orderRef(ready))} · ${safe(itemLabel(ready))}</strong><p>Chegou em ${safe(cap(currentStep(ready)))}. Finalize e avise o cliente.</p><div class="fp-buttons">${finishButtons(ready)}</div></div>`);
+  const paused = live.find(o => o.status === 'paused');
+  if (paused) actions.push(`<div class="fp-action paused"><span class="fp-kind"><span class="fp-dot"></span>Pausado</span><strong>${safe(orderRef(paused))} · ${safe(itemLabel(paused))}</strong><p>Parado em ${safe(cap(currentStep(paused)))}.</p><button type="button" class="nv-button secondary" data-transition-id="${safe(paused.id)}" data-action="resume">Retomar</button></div>`);
+  if (queue[0]) actions.push(`<div class="fp-action next"><span class="fp-kind"><span class="fp-dot"></span>Próximo da fila</span><strong>${safe(orderRef(queue[0]))} · ${safe(cap(firstName(queue[0].customer) || 'Cliente'))}</strong><p>${safe(itemLabel(queue[0]))} · esperando há ${minutesSince(queue[0].created_at)}.</p><button type="button" class="nv-button" data-transition-id="${safe(queue[0].id)}" data-action="start">Iniciar atendimento</button></div>`);
+  setHtml($('nowActions'), actions.length ? actions.join('') : '<div class="fp-action"><span class="fp-kind"><span class="fp-dot"></span>Tudo em dia</span><strong>Nada pendente agora</strong><p>Crie um pedido quando o próximo cliente chegar.</p></div>');
+}
 function orderCard(o) {
   const d = o.details || {};
   const item = [d.brand, d.model, d.identifier].filter(Boolean).join(' · ');
@@ -72,6 +123,7 @@ function filteredOrders(scope) {
   return cachedOrders.filter(o => (!state.status || o.status === state.status) && (scope !== 'orders' || !orderDate || isoLocal(new Date(o.created_at)) === orderDate) && (!term || [o.external_reference, o.customer, o.process, ...Object.values(o.details || {})].some(value => String(value || '').toLocaleLowerCase('pt-BR').includes(term)))).sort(state.sort === 'oldest' ? (a, b) => newest(b, a) : newest);
 }
 function renderLiveLists() {
+  renderNow();
   const home = filteredOrders('home'); renderOrderList($('ordersList'), home);
   if ($('homeCount')) $('homeCount').textContent = `${home.length} de ${cachedOrders.length} pedidos`;
   const orders = filteredOrders('orders'); renderOrderList($('datedOrders'), orders);
@@ -267,6 +319,20 @@ document.addEventListener('click', async e => {
       catch (error) { await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
     }
+    if (button.dataset.finishId) {
+      const o = cachedOrders.find(o => o.id === button.dataset.finishId); if (!o) return;
+      const notify = button.dataset.notify === '1', phone = notify ? whatsPhone(o) : null;
+      if (notify && !phone) throw Error('Este cliente não tem telefone válido cadastrado. Use "Só finalizar" ou edite o cliente.');
+      const win = notify ? window.open('about:blank', '_blank') : null;
+      button.disabled = true;
+      try {
+        await api('/orders/' + o.id + '/transition', 'POST', { action: 'complete', expected_step_index: o.step_index, expected_status: o.status });
+        if (win) { win.opener = null; win.location.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(readyMessage(o)); }
+        await reload(true); feedback(notify ? 'Pedido finalizado. Envie a mensagem que abriu no WhatsApp.' : 'Pedido finalizado.');
+      } catch (error) { win?.close(); await reload(true); throw error; }
+      finally { if (button.isConnected) button.disabled = false; }
+      return;
+    }
     if (button.dataset.copyOrder) { const o = cachedOrders.find(o => o.id === button.dataset.copyOrder); await navigator.clipboard.writeText(trackingUrl(o)); feedback('Link copiado.'); }
     if (button.dataset.sendOrder) { const o = cachedOrders.find(o => o.id === button.dataset.sendOrder); window.open('https://wa.me/?text=' + encodeURIComponent('Acompanhe seu pedido: ' + trackingUrl(o)), '_blank', 'noopener,noreferrer'); }
     if (button.dataset.deleteOrder && confirm('Excluir este pedido? O link será desativado, o vídeo ao vivo será bloqueado e gravações em andamento serão finalizadas. Os arquivos já gravados não serão apagados do computador.')) { await api('/orders/' + button.dataset.deleteOrder, 'DELETE'); await reload(true); feedback('Pedido excluído.'); }
@@ -329,7 +395,8 @@ async function loadEditor(view, box, version) {
 
  const [settings,loyalty]=await Promise.all([api('/store/settings'),api('/store/loyalty')]);
  if(version!==viewVersion)return;
- box.innerHTML='<section class="nv-card"><h2>Identidade da loja</h2><p class="nv-help">Nicho: '+safe(settings.niche_label||'Serviços em geral')+' · Definido pelo administrador.</p><form id="settingsForm">'+field('name','Nome da loja',settings.name)+'<label class="nv-field">Logo da loja (PNG, JPG ou WebP, até 256 KB)<input id="logoFile" type="file" accept="image/png,image/jpeg,image/webp"></label><div id="logoDrop" class="nv-drop" tabindex="0">Arraste a imagem aqui ou selecione acima</div><img id="logoPreview" hidden alt="Prévia da imagem" style="width:90px;height:90px;object-fit:contain"><button class="nv-button" type="button" id="uploadLogo">Enviar logo</button><button class="nv-button secondary" type="submit">Salvar nome da loja</button><p id="settingsStatus" role="status"></p></form></section><section class="nv-card"><h2>Programa de fidelidade</h2><form id="loyaltyForm"><label><input type="checkbox" name="enabled" '+(loyalty.loyalty_enabled?'checked':'')+'> Ativar fidelidade</label>'+field('target','Check-ins necessários',loyalty.loyalty_target,'number')+'<label class="nv-field">Recompensa<textarea name="reward">'+safe(loyalty.loyalty_reward||'')+'</textarea></label><button class="nv-button">Salvar fidelidade</button><p id="loyaltyStatus" role="status"></p></form></section><section class="nv-card"><h2>Validar cupom</h2><form id="redeemForm">'+field('code','Código')+'<button class="nv-button">Validar cupom</button><p id="redeemFeedback" role="status"></p></form></section>';
+ box.innerHTML='<section class="nv-card"><h2>Identidade da loja</h2><p class="nv-help">Nicho: '+safe(settings.niche_label||'Serviços em geral')+' · Definido pelo administrador.</p><form id="settingsForm">'+field('name','Nome da loja',settings.name)+'<label class="nv-field">Logo da loja (PNG, JPG ou WebP, até 256 KB)<input id="logoFile" type="file" accept="image/png,image/jpeg,image/webp"></label><div id="logoDrop" class="nv-drop" tabindex="0">Arraste a imagem aqui ou selecione acima</div><img id="logoPreview" hidden alt="Prévia da imagem" style="width:90px;height:90px;object-fit:contain"><button class="nv-button" type="button" id="uploadLogo">Enviar logo</button><button class="nv-button secondary" type="submit">Salvar nome da loja</button><p id="settingsStatus" role="status"></p></form></section><section class="nv-card"><h2>Mensagem de pedido pronto</h2><p class="nv-help">Enviada pelo WhatsApp quando você usa "Finalizar e avisar". Use {cliente}, {item}, {loja}, {pedido} e {link}.</p><form id="messageForm"><label class="nv-field">Mensagem<textarea name="ready_message" rows="3" maxlength="1000" required>'+safe(settings.ready_message||'')+'</textarea></label><button class="nv-button">Salvar mensagem</button><p id="messageStatus" role="status"></p></form></section><section class="nv-card"><h2>Programa de fidelidade</h2><form id="loyaltyForm"><label><input type="checkbox" name="enabled" '+(loyalty.loyalty_enabled?'checked':'')+'> Ativar fidelidade</label>'+field('target','Check-ins necessários',loyalty.loyalty_target,'number')+'<label class="nv-field">Recompensa<textarea name="reward">'+safe(loyalty.loyalty_reward||'')+'</textarea></label><button class="nv-button">Salvar fidelidade</button><p id="loyaltyStatus" role="status"></p></form></section><section class="nv-card"><h2>Validar cupom</h2><form id="redeemForm">'+field('code','Código')+'<button class="nv-button">Validar cupom</button><p id="redeemFeedback" role="status"></p></form></section>';
+ $('messageForm').onsubmit=async e=>{e.preventDefault();try{const r=await api('/store/messages','PATCH',{ready_message:e.currentTarget.elements.ready_message.value.trim()});storeSettings.ready_message=r.ready_message;$('messageStatus').textContent='Mensagem salva'}catch(err){$('messageStatus').textContent=err.message}};
  $('settingsForm').onsubmit=async e=>{e.preventDefault();const name=e.currentTarget.elements.name.value.trim();try{await api('/store/settings','PATCH',{name,logo_url:settings.logo_url||'',email_notifications:settings.email_notifications||'off'});$('storeBrandName').textContent=name;document.querySelector('.nv-profile span').textContent=name;$('settingsStatus').textContent='Nome atualizado'}catch(err){$('settingsStatus').textContent=err.message}};
  const fileInput=$('logoFile'),drop=$('logoDrop');let selected=null;const preview=file=>{if(!file)return;selected=file;drop.textContent=file.name;const im=$('logoPreview');im.hidden=false;im.src=URL.createObjectURL(file)};
  fileInput.onchange=()=>preview(fileInput.files[0]);drop.ondragover=e=>{e.preventDefault();drop.classList.add('drag')};drop.ondragleave=()=>drop.classList.remove('drag');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('drag');preview(e.dataTransfer.files[0])};drop.onclick=()=>fileInput.click();

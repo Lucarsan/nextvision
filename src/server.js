@@ -199,10 +199,15 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
  const result=await q('UPDATE platform_settings SET sales_whatsapp=$1 WHERE id=true RETURNING sales_whatsapp',[v.sales_whatsapp]);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.camera_limit,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType});
 }));
 app.patch('/api/store/settings',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),logo_url:z.union([z.string().url().startsWith('https://').max(1000),z.literal('')]),email_notifications:z.enum(['off','steps','completed','all'])}).strict(),req,res);if(!v)return;const r=await q('UPDATE tenants SET name=$1,logo_url=$2,email_notifications=$3 WHERE id=$4 RETURNING name,slug,logo_url,email_notifications',[v.name,v.logo_url||null,v.email_notifications,tid(req)]);await audit(req,'update','tenant_settings',tid(req));res.json(r.rows[0]);}));
+app.patch('/api/store/messages',auth,roles('owner'),route(async(req,res)=>{
+ const v=valid(z.object({ready_message:z.string().trim().min(10).max(1000)}).strict(),req,res);if(!v)return;
+ const r=await q('UPDATE tenants SET ready_message=$1 WHERE id=$2 RETURNING ready_message',[v.ready_message,tid(req)]);
+ await audit(req,'update','store_messages',tid(req));res.json(r.rows[0]);
+}));
 app.get('/api/store/loyalty',auth,roles('owner','operator'),route(async(req,res)=>{
  const r=await q('SELECT loyalty_enabled,loyalty_target,loyalty_reward FROM tenants WHERE id=$1',[tid(req)]);
  res.json(r.rows[0]||{loyalty_enabled:false,loyalty_target:10,loyalty_reward:''});

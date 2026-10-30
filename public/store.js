@@ -27,8 +27,8 @@ function showUndo(id, [action, label]) {
   const node = $('panelFeedback'); const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'nv-button secondary fp-undo'; btn.textContent = label; btn.dataset.transitionId = id; btn.dataset.action = action;
   node.append(' ', btn); clearTimeout(showUndo.timer); showUndo.timer = setTimeout(() => btn.remove(), 15000);
 }
-function showWhatsOffer(o) {
-  const node = $('panelFeedback'); const a = document.createElement('a'); a.className = 'nv-button fp-whats'; a.target = '_blank'; a.rel = 'noopener'; a.href = whatsUrl(o); a.textContent = whatsPhone(o) ? 'Enviar link no WhatsApp do cliente' : 'Enviar link no WhatsApp';
+function showWhatsOffer(o, key = 'started') {
+  const node = $('panelFeedback'); const a = document.createElement('a'); a.className = 'nv-button fp-whats'; a.target = '_blank'; a.rel = 'noopener'; a.href = whatsFor(o, key); a.textContent = whatsPhone(o) ? 'Avisar cliente no WhatsApp' : 'Avisar no WhatsApp';
   node.append(' ', a);
 }
 function feedback(message, error = false) {
@@ -44,11 +44,24 @@ function undoButtons(o, b) {
   return '';
 }
 const undoOf = { advance: ['back', 'Desfazer avanço'], complete: ['reopen', 'Reabrir pedido'], start: ['back', 'Desfazer início'], back: null };
+const DEFAULT_TEMPLATES = {
+  created: 'Olá, {cliente}! Recebemos seu {item} na {loja} (pedido {pedido}). Acompanhe por aqui, inclusive ao vivo: {link}',
+  started: 'Olá, {cliente}! Começamos o atendimento do seu {item}. Acompanhe ao vivo: {link}',
+  advanced: 'Olá, {cliente}! Seu {item} passou para a etapa "{etapa}". Acompanhe: {link}',
+  paused: 'Olá, {cliente}! O atendimento do seu {item} está pausado no momento. Avisaremos quando retomar. {link}'
+};
+const TEMPLATE_LABELS = { created: 'Ao criar o pedido', started: 'Ao iniciar o atendimento', advanced: 'Ao avançar de etapa', paused: 'Ao pausar' };
+function messageFor(o, key) {
+  const template = key === 'ready' ? (storeSettings.ready_message || 'Olá, {cliente}! Seu {item} está pronto para retirada na {loja}. Acompanhe: {link}') : ((storeSettings.message_templates || {})[key] || DEFAULT_TEMPLATES[key]);
+  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '', etapa: cap(currentStep(o)) };
+  return template.replace(/\{(cliente|item|loja|pedido|link|etapa)\}/g, (_, k) => values[k]).replace(/\s+/g, ' ').trim();
+}
+const whatsFor = (o, key) => { const phone = whatsPhone(o); return 'https://wa.me/' + (phone || '') + '?text=' + encodeURIComponent(messageFor(o, key)); };
 function startMessage(o) {
   const nome = cap(firstName(o.customer));
   return (nome ? 'Olá, ' + nome + '! ' : 'Olá! ') + 'Recebemos seu ' + itemLabel(o) + ' na ' + (storeSettings.name || 'loja') + ' (pedido ' + (o.external_reference || o.order_number || '') + '). Acompanhe por aqui, inclusive ao vivo: ' + trackingUrl(o);
 }
-const whatsUrl = o => { const phone = whatsPhone(o); return 'https://wa.me/' + (phone || '') + '?text=' + encodeURIComponent(startMessage(o)); };
+const whatsUrl = o => whatsFor(o, o.status === 'queued' ? 'created' : o.status === 'paused' ? 'paused' : o.status === 'completed' ? 'ready' : 'started');
 function compressPhoto(file) {
   return new Promise((resolve, reject) => {
     const img = new Image(), url = URL.createObjectURL(file);
@@ -89,7 +102,7 @@ function transitionActions(o) {
   return html;
 }
 const nicheNoun = () => ({ electronics: 'aparelho', automotive: 'veículo', carwash: 'veículo', pet: 'pet', food: 'pedido' }[storeSettings.niche] || 'pedido');
-const itemLabel = o => { const d = o.details || {}; return [d.brand, d.model].filter(Boolean).join(' ') || nicheNoun(); };
+const itemLabel = o => FP.itemLabel(storeSettings.niche, o.details || {});
 const orderRef = o => 'Pedido ' + (o.external_reference || o.order_number || o.id.slice(0, 8));
 const firstName = name => String(name || '').trim().split(/\s+/)[0] || '';
 function whatsPhone(o) {
@@ -116,12 +129,17 @@ function liveActions(o) {
   if (o.status === 'live') html += b('pause', 'Pausar');
   if (o.status === 'paused') html += b('resume', o.started_at ? 'Retomar atendimento' : 'Retomar fila', true);
   html += undoButtons(o, b);
-  return html + `<button type="button" class="nv-button secondary fp-more" data-edit-order="${safe(o.id)}">Detalhes</button>`;
+  return html + `<a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(trackingUrl(o))}">Acompanhamento</a><a class="nv-button secondary fp-whats-soft" target="_blank" rel="noopener" href="${safe(whatsUrl(o))}">Enviar ao cliente</a><button type="button" class="nv-button secondary fp-more" data-expand-live="${safe(o.id)}" aria-expanded="${expandedLive.has(o.id)}">${expandedLive.has(o.id) ? 'Menos' : 'Detalhes'}</button>`;
 }
 function liveCard(o) {
   const steps = (o.steps || []).map((step, i) => `<span class="${i < o.step_index ? 'done' : i === o.step_index ? 'current' : ''}">${safe(cap(step))}</span>`).join('');
   const pill = o.status === 'paused' ? '<span class="nv-pill orange">Pausado</span>' : isLastStep(o) ? '<span class="nv-pill green">Pronto</span>' : '<span class="nv-pill">Em andamento</span>';
-  return `<article class="fp-card" data-live-id="${safe(o.id)}"><div class="fp-card-head"><div><strong>${safe(orderRef(o))}</strong> ${pill}<p>${safe(cap(o.customer || 'Cliente não vinculado'))} · ${safe(itemLabel(o))}</p></div><span class="nv-help">${safe(cap(currentStep(o)))}</span></div><div class="fp-bar" aria-label="Etapas">${steps}</div><div class="fp-buttons">${liveActions(o)}</div></article>`;
+  return `<article class="fp-card" data-live-id="${safe(o.id)}"><div class="fp-card-head"><div><strong>${safe(orderRef(o))}</strong> ${pill}<p>${safe(cap(o.customer || 'Cliente não vinculado'))} · ${safe(itemLabel(o))}</p></div><span class="nv-help">${safe(cap(currentStep(o)))}</span></div><div class="fp-bar" aria-label="Etapas">${steps}</div><div class="fp-buttons">${liveActions(o)}</div>${expandedLive.has(o.id) ? liveDetails(o) : ''}</article>`;
+}
+const expandedLive = new Set();
+function liveDetails(o) {
+  const d = o.details || {}, info = (k, v) => v ? `<div><dt>${safe(k)}</dt><dd>${safe(v)}</dd></div>` : '';
+  return `<div class="fp-live-details"><dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}${info('Recebido em', new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}</dl>${photoStrip(o)}<div class="fp-buttons"><button type="button" class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar dados</button><button type="button" class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button></div></div>`;
 }
 function setHtml(node, html) { if (node && node.dataset.signature !== html) { node.innerHTML = html; node.dataset.signature = html; } }
 function renderNow() {
@@ -141,13 +159,13 @@ function renderNow() {
 }
 function orderCard(o) {
   const d = o.details || {};
-  const item = [d.brand, d.model, d.identifier].filter(Boolean).join(' · ');
+  const item = FP.itemLabel(storeSettings.niche, d);
   const info = (label, value) => `<div><dt>${label}</dt><dd>${safe(value || 'Não informado')}</dd></div>`;
-  return `<div class="nv-order-header"><div><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))}</span><h3>${safe(cap(o.customer || 'Cliente não vinculado'))}</h3><p>${safe(o.process)}${item ? ' · ' + safe(item) : ''}</p></div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span></div>
-    <div class="nv-order-progress"><strong>${safe(currentStep(o))}</strong><span>${new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div>${stepsView(o)}
-    <div class="nv-order-actions">${transitionActions(o)}<button class="nv-button secondary nv-danger" data-delete-order="${safe(o.id)}">Excluir pedido</button></div>
+  return `<div class="fp-row"><div class="fp-row-main"><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))} · ${new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span><h3>${safe(cap(o.customer || 'Cliente não vinculado'))}</h3><p>${safe(item)} · ${safe(o.process)}</p></div>
+    <div class="fp-row-step"><div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span> <strong>${safe(currentStep(o))}</strong></div>${stepsView(o)}</div>
+    <div class="fp-row-actions">${transitionActions(o)}<button class="fp-icon-btn" data-delete-order="${safe(o.id)}" aria-label="Excluir pedido" title="Excluir pedido"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div></div>
     <details class="nv-order-details" data-details-id="${safe(o.id)}" ${openedOrders.has(o.id) ? 'open' : ''}><summary>Detalhes do pedido</summary>
-      <dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${info('Tipo', detailLabels[d.item_type] || 'Item / serviço')}${info('Marca', d.brand)}${info('Modelo', d.model)}${info('Placa / número de série', d.identifier)}${info('Cor', d.color)}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}</dl>
+      <dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}</dl>
       <div class="nv-order-actions"><button class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar pedido</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(trackingUrl(o))}">Ver acompanhamento</a><button class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(whatsUrl(o))}">${whatsPhone(o) ? 'WhatsApp do cliente' : 'WhatsApp'}</a></div>${photoStrip(o)}
     </details>`;
 }
@@ -206,9 +224,7 @@ async function reload(force = false) {
   })().finally(() => { refreshPromise = null; });
   return refreshPromise;
 }
-function detailFields(d = {}) {
-  return `<div class="nv-form-grid"><label class="nv-field">Tipo<select name="detail_item_type">${Object.entries(detailLabels).map(([key, label]) => `<option value="${key}" ${key === (d.item_type || storeSettings.default_item_type || 'other') ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${field('detail_brand', 'Marca', d.brand)}${field('detail_model', 'Modelo', d.model)}${field('detail_identifier', 'Placa / número de série', d.identifier)}${field('detail_color', 'Cor', d.color)}</div>`;
-}
+function detailFields(d = {}) { return FP.itemFields(storeSettings.niche, d) || '<p class="nv-help">Este tipo de loja não precisa de dados do item.</p>'; }
 const serviceFields = d => `${field('detail_service', 'Serviço solicitado', d?.service)}<label class="nv-field">Observações internas<textarea name="detail_notes" rows="3" maxlength="2000">${safe(d?.notes)}</textarea></label>`;
 const readDetails = data => Object.fromEntries([...data].filter(([key]) => key.startsWith('detail_')).map(([key, value]) => [key.slice(7), String(value).trim()]));
 function openDialog(html, orderId = '') {
@@ -230,40 +246,45 @@ async function editOrder(id) {
 async function loadOrders(box, version) {
   const [customers, processes] = await Promise.all([api('/customers'), api('/processes')]); if(version !== viewVersion) return; cachedCustomers = customers;
   box.innerHTML = `<section class="nv-card" id="newOrderCard"><div class="nv-heading"><h2>Novo pedido</h2><span class="nv-help">Cadastre e acompanhe por aqui</span></div><form id="completeForm">
-    <section class="nv-form-panel"><div class="nv-heading"><h3>1. Cliente</h3><button type="button" class="nv-button secondary" id="addInlineCustomer">+ Cadastrar cliente</button></div><label class="nv-field">Cliente<select name="customer_id" required><option value="">Selecione o cliente</option>${selectOptions(customers)}</select></label>
-      <div id="inlineCustomer" class="nv-inline-panel" hidden><h4>Novo cliente</h4><div class="nv-form-grid">${field('inline_name', 'Nome completo')}${field('inline_phone', 'Telefone / WhatsApp')}${field('inline_email', 'E-mail', '', 'email')}${field('inline_address', 'Endereço')}</div><button type="button" class="nv-button secondary" id="saveInlineCustomer">Salvar cliente e selecionar</button><button type="button" class="nv-button secondary" id="cancelInlineCustomer">Cancelar</button><p id="inlineCustomerStatus" role="status"></p></div>
+    <section class="nv-form-panel"><div class="nv-heading"><h3>1. Cliente</h3><button type="button" class="nv-button secondary" id="addInlineCustomer">+ Cadastrar cliente</button></div><div id="customerPicker"></div>
+      <div id="inlineCustomer" class="nv-inline-panel" hidden><h4>Novo cliente</h4>${FP.customerFields({}, 'inline_').replace(/ required/g, '')}<button type="button" class="nv-button secondary" id="saveInlineCustomer">Salvar cliente e selecionar</button><button type="button" class="nv-button secondary" id="cancelInlineCustomer">Cancelar</button><p id="inlineCustomerStatus" role="status"></p></div>
     </section><section class="nv-form-panel"><h3>2. Dados do item</h3>${detailFields()}<label class="nv-field">Fotos de como chegou (opcional, até 6)<input type="file" name="photos" accept="image/*" multiple></label><p class="nv-help">No celular, toque para tirar a foto na hora. O cliente vê essas fotos no acompanhamento.</p></section>
-    <section class="nv-form-panel"><h3>3. Serviço e acompanhamento</h3><div class="nv-form-grid">${field('reference', 'Número do pedido (opcional)')}<label class="nv-field">Processo<select name="process_id" required><option value="">Selecione o processo</option>${selectOptions(processes)}</select></label></div><div id="processPreview" class="nv-help">Selecione um processo para visualizar as etapas.</div>${serviceFields()}</section>
+    <section class="nv-form-panel"><h3>3. Serviço e acompanhamento</h3><div class="fp-proc-cards" role="radiogroup" aria-label="Processo">${processes.map(p => `<label class="fp-proc-card"><input type="radio" name="process_id" value="${safe(p.id)}" required><strong>${safe(p.name)}</strong><span>${(p.steps || []).length} etapas · ${safe((p.steps || []).slice(0, 3).join(' → '))}${(p.steps || []).length > 3 ? '…' : ''}</span></label>`).join('') || '<p class="nv-help">Cadastre um processo na aba Processos.</p>'}</div><div id="processPreview" class="nv-help"></div>${field('reference', 'Número próprio do pedido (opcional)')}${serviceFields()}</section>
     <button class="nv-button" type="submit">Criar pedido</button><p id="completeStatus" role="status"></p></form><div id="completeLink" hidden></div></section>
     <section class="nv-card"><div class="nv-heading"><h2>Pedidos da loja</h2><span class="nv-help" id="orderCount"></span></div>${toolbar('orders')}<div class="nv-datebar"><label>Dia <input id="orderDate" type="date" aria-label="Selecionar dia" value="${orderDate}"></label><button class="nv-button secondary" id="allDates">Todos os dias</button></div><div class="nv-list" id="datedOrders"></div></section>`;
   const form = $('completeForm');
+  const picker = FP.customerPicker($('customerPicker'), cachedCustomers, () => {});
+  FP.addressAssist($('inlineCustomer'), storeSettings);
+  $('customerPicker').addEventListener('fp-new-customer', e => { $('inlineCustomer').hidden = false; form.elements.inline_name.value = e.detail || ''; form.elements.inline_phone.focus(); });
   $('addInlineCustomer').onclick = () => { $('inlineCustomer').hidden = false; form.elements.inline_name.focus(); };
   $('cancelInlineCustomer').onclick = () => { $('inlineCustomer').hidden = true; };
   $('saveInlineCustomer').onclick = async () => {
     const button = $('saveInlineCustomer'); button.disabled = true;
     try {
-      const customer = await api('/customers', 'POST', { name: form.elements.inline_name.value.trim(), phone: form.elements.inline_phone.value.trim(), email: form.elements.inline_email.value.trim(), address: form.elements.inline_address.value.trim() });
-      cachedCustomers.push(customer); form.elements.customer_id.add(new Option(customer.name, customer.id)); form.elements.customer_id.value = customer.id; $('inlineCustomer').hidden = true; $('inlineCustomerStatus').textContent = '';
-      for (const name of ['inline_name', 'inline_phone', 'inline_email', 'inline_address']) form.elements[name].value = '';
+      const customer = await api('/customers', 'POST', FP.readCustomer(form, 'inline_'));
+      picker.add(customer); picker.pick(customer); $('inlineCustomer').hidden = true; $('inlineCustomerStatus').textContent = '';
+      $('inlineCustomer').querySelectorAll('input').forEach(input => { input.value = ''; });
       feedback('Cliente cadastrado e selecionado para este pedido.');
     } catch (error) { $('inlineCustomerStatus').textContent = error.message; }
     finally { button.disabled = false; }
   };
-  form.elements.process_id.onchange = () => { const p = processes.find(p => p.id === form.elements.process_id.value); $('processPreview').innerHTML = p ? stepsView({ steps: p.steps, status: 'queued', step_index: 0 }) : 'Selecione um processo para visualizar as etapas.'; };
+  form.addEventListener('change', e => { if (e.target.name !== 'process_id') return; const p = processes.find(p => p.id === e.target.value); $('processPreview').innerHTML = p ? stepsView({ steps: p.steps, status: 'queued', step_index: 0 }) : ''; });
   $('orderDate').onchange = e => { orderDate = e.target.value; renderLiveLists(); };
   $('allDates').onclick = () => { orderDate = ''; $('orderDate').value = ''; renderLiveLists(); };
   form.onsubmit = async e => {
-    e.preventDefault(); const data = new FormData(form), button = form.querySelector('[type="submit"]'); button.disabled = true; $('completeStatus').textContent = '';
+    e.preventDefault(); const data = new FormData(form), button = form.querySelector('[type="submit"]');
+    if (!data.get('customer_id')) { $('completeStatus').textContent = 'Selecione ou cadastre o cliente.'; form.querySelector('.fp-combo-input')?.focus(); return; }
+    button.disabled = true; $('completeStatus').textContent = '';
     try {
       const result = await api('/orders', 'POST', { customer_id: data.get('customer_id'), process_id: data.get('process_id'), reference: String(data.get('reference')).trim(), details: readDetails(data) });
       const files = form.elements.photos?.files ? [...form.elements.photos.files] : [];
       let photoNote = '';
       if (files.length) { try { const n = await uploadPhotos(result.id, files, $('completeStatus')); photoNote = ' ' + n + ' foto(s) anexada(s).'; } catch (err) { photoNote = ' Fotos não enviadas: ' + err.message; } }
-      form.reset(); $('inlineCustomer').hidden = true; $('processPreview').textContent = 'Selecione um processo para visualizar as etapas.';
+      form.reset(); picker.reset(); $('inlineCustomer').hidden = true; $('processPreview').textContent = '';
       const created = { ...result, external_reference: String(data.get('reference') || '').trim() || null, customer: cachedCustomers.find(c => c.id === data.get('customer_id'))?.name, customer_phone: cachedCustomers.find(c => c.id === data.get('customer_id'))?.phone, details: readDetails(data) };
       const link = created.share_code ? trackingUrl(created) : result.tracking_url;
       $('completeStatus').textContent = 'Pedido ' + (created.external_reference || created.order_number || '') + ' criado.' + photoNote; $('completeLink').hidden = false;
-      $('completeLink').innerHTML = `<label class="nv-field">Link de acompanhamento<input readonly value="${safe(link)}"></label><div class="nv-order-actions"><a class="nv-button fp-whats" target="_blank" rel="noopener" href="${safe(whatsUrl(created))}">${whatsPhone(created) ? 'Enviar no WhatsApp do cliente' : 'Enviar no WhatsApp'}</a><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(link)}">Abrir acompanhamento</a></div>`;
+      $('completeLink').innerHTML = `<label class="nv-field">Link de acompanhamento<input readonly value="${safe(link)}"></label><div class="nv-order-actions"><a class="nv-button fp-whats" target="_blank" rel="noopener" href="${safe(whatsFor({ ...created, status: 'queued', steps: [] }, 'created'))}">${whatsPhone(created) ? 'Enviar no WhatsApp do cliente' : 'Enviar no WhatsApp'}</a><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(link)}">Abrir acompanhamento</a></div>`;
       orderDate = isoLocal(new Date()); $('orderDate').value = orderDate; filters.orders.search = ''; filters.orders.status = ''; document.querySelectorAll('[data-filter-scope="orders"]').forEach(node => { if (node.dataset.filter !== 'sort') node.value = ''; });
       await reload(true); feedback('Pedido criado com sucesso.');
     } catch (error) { $('completeStatus').textContent = error.message; }
@@ -272,12 +293,20 @@ async function loadOrders(box, version) {
   renderLiveLists();
 }
 function drawQueue() {
-  const container = $('queueList'); if (!container) return;
+  const container = $('queueList'); if (!container || container.dataset.dragging) return;
   const orders = cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
-  const html = orders.map((o, i) => `<article class="nv-order"><div><strong>${i + 1}º · #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))}</strong><p>${safe(o.customer || o.process)}</p></div><div class="nv-queue-actions"><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir na fila">↑</button><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="1" ${i === orders.length - 1 ? 'disabled' : ''} aria-label="Descer na fila">↓</button></div></article>`).join('') || notice('Nenhum pedido aguardando.');
+  const html = orders.map((o, i) => `<article class="nv-order fp-queue-row" data-id="${safe(o.id)}"><button type="button" class="fp-drag" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div class="fp-queue-info"><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · ${safe(o.process)} · esperando há ${minutesSince(o.created_at)}</p></div></article>`).join('') || notice('Nenhum pedido aguardando.');
   if (container.innerHTML !== html) container.innerHTML = html;
+  if (!container.dataset.sortable) {
+    container.dataset.sortable = '1';
+    container.addEventListener('pointerdown', e => { if (e.target.closest('[data-drag-handle]')) container.dataset.dragging = '1'; }, true);
+    FP.sortable(container, '.fp-queue-row', async ids => {
+      delete container.dataset.dragging;
+      try { await api('/orders/queue-order', 'PUT', { ids }); await reload(true); feedback('Ordem da fila atualizada.'); } catch (error) { feedback(error.message, true); await reload(true); }
+    });
+  }
 }
-function customerFields(c = {}) { return `<div class="nv-form-grid">${field('name', 'Nome completo', c.name)}${field('phone', 'Telefone / WhatsApp', c.phone)}${field('email', 'E-mail', c.email, 'email')}${field('address', 'Endereço', c.address)}</div>`; }
+function customerFields(c = {}) { return FP.customerFields(c); }
 function drawCustomers() {
   const container = $('customerList'); if (!container) return;
   const search = ($('customerSearch')?.value || '').trim().toLocaleLowerCase('pt-BR');
@@ -288,9 +317,10 @@ function drawCustomers() {
 function editCustomer(id) {
   const c = cachedCustomers.find(c => c.id === id); if (!c) return;
   openDialog(`${dialogHeader('Editar cliente')}<form id="editCustomerForm">${customerFields(c)}<div class="nv-row"><button class="nv-button">Salvar alterações</button><button type="button" class="nv-button secondary" data-close-dialog>Cancelar</button></div><p role="status"></p></form>`);
+  FP.addressAssist($('editCustomerForm'), storeSettings);
   $('editCustomerForm').onsubmit = async e => {
     e.preventDefault(); const form = e.currentTarget;
-    try { await api('/customers/' + id, 'PATCH', Object.fromEntries(new FormData(form))); cachedCustomers = await api('/customers'); drawCustomers(); $('editorDialog').close(); await reload(true); feedback('Cliente atualizado.'); }
+    try { await api('/customers/' + id, 'PATCH', FP.readCustomer(form)); cachedCustomers = await api('/customers'); drawCustomers(); $('editorDialog').close(); await reload(true); feedback('Cliente atualizado.'); }
     catch (error) { form.querySelector('[role="status"]').textContent = error.message; }
   };
 }
@@ -314,7 +344,7 @@ async function loadCustomers(box, version) {
   $('customerSearch').oninput = drawCustomers;
   $('newCustomer').onclick = () => {
     openDialog(`${dialogHeader('Cadastrar cliente')}<form id="customerForm">${customerFields()}<button class="nv-button">Cadastrar cliente</button><p role="status"></p></form>`);
-    $('customerForm').onsubmit = async e => { e.preventDefault(); const form = e.currentTarget; try { await api('/customers', 'POST', Object.fromEntries(new FormData(form))); cachedCustomers = await api('/customers'); drawCustomers(); $('editorDialog').close(); feedback('Cliente cadastrado.'); } catch (error) { form.querySelector('[role="status"]').textContent = error.message; } };
+    FP.addressAssist($('customerForm'), storeSettings); $('customerForm').onsubmit = async e => { e.preventDefault(); const form = e.currentTarget; try { await api('/customers', 'POST', FP.readCustomer(form)); cachedCustomers = await api('/customers'); drawCustomers(); $('editorDialog').close(); feedback('Cliente cadastrado.'); } catch (error) { form.querySelector('[role="status"]').textContent = error.message; } };
   };
   let importRows = [];
   $('customerCsv').onchange = async e => {
@@ -336,13 +366,14 @@ async function loadCustomers(box, version) {
 
 // Existing camera, process and settings editors are kept below.
 async function loadSection(view) {
+  const fb = $('panelFeedback'); if (fb && !fb.classList.contains('error')) { fb.hidden = true; fb.textContent = ''; }
   const box = $('sectionContent'), version = ++viewVersion;
   box.innerHTML = '<section class="nv-card">Carregando…</section>';
   try {
     if (view === 'orders') return await loadOrders(box, version);
     if (view === 'customers') return await loadCustomers(box, version);
     if (view === 'more') { box.innerHTML = '<section class="nv-card"><h2>Mais opções</h2><div class="nv-list">'+[['customers','Clientes'],['processes','Processos'],['plan','Meu plano'],['settings','Configurações'],['support','Suporte']].map(([key,label])=>'<button class="nv-button secondary" data-view="'+key+'">'+label+'</button>').join('')+'</div></section>';return;}
-    if (view === 'queues') { box.innerHTML = '<section class="nv-card"><h2>Fila de atendimento</h2><p class="nv-help">Atendimento por ordem de chegada. Use as setas para definir uma prioridade manual.</p><div id="queueList" class="nv-list"></div></section>'; drawQueue(); return; }
+    if (view === 'queues') { box.innerHTML = '<section class="nv-card"><h2>Fila de atendimento</h2><p class="nv-help">Atendimento por ordem de chegada. Arraste pelo ⋮⋮ para mudar a ordem.</p><div id="queueList" class="nv-list"></div></section>'; drawQueue(); return; }
     await loadEditor(view, box, version);
   } catch (error) { if (version === viewVersion) box.innerHTML = `<section class="nv-card" role="alert">${safe(error.message)}</section>`; }
 }
@@ -372,12 +403,13 @@ document.addEventListener('click', async e => {
   try {
     if (button.dataset.view) { await switchView(button.dataset.view); return; }
     if (button.hasAttribute('data-close-dialog')) { $('editorDialog').close(); return; }
+    if (button.dataset.expandLive) { const id = button.dataset.expandLive; expandedLive.has(id) ? expandedLive.delete(id) : expandedLive.add(id); renderNow(); return; }
     if (button.dataset.editOrder) { await editOrder(button.dataset.editOrder); return; }
     if (button.dataset.editCustomer) { editCustomer(button.dataset.editCustomer); return; }
     if (button.dataset.transitionId) {
       const o = cachedOrders.find(o => o.id === button.dataset.transitionId); if (!o) return;
       button.disabled = true;
-      try { const action = button.dataset.action; await api('/orders/' + o.id + '/transition', 'POST', { action, expected_step_index: o.step_index, expected_status: o.status }); await reload(true); feedback('Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); if (action === 'start') showWhatsOffer(o); }
+      try { const action = button.dataset.action; await api('/orders/' + o.id + '/transition', 'POST', { action, expected_step_index: o.step_index, expected_status: o.status }); await reload(true); feedback('Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); const fresh = cachedOrders.find(x => x.id === o.id) || o; const key = { start: 'started', advance: 'advanced', pause: 'paused', resume: 'started' }[action]; if (key) showWhatsOffer(fresh, key); }
       catch (error) { await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
     }
@@ -437,6 +469,24 @@ setInterval(refreshVisible, 5000);
   } catch (error) { feedback(error.message, true); }
 })();
 
+function settingsTabs(box, settings) {
+  const cards = [...box.querySelectorAll(':scope > section, :scope > details')];
+  const [identity, ready, loyalty, redeem] = cards;
+  const tpl = settings.message_templates || {};
+  const loc = document.createElement('section'); loc.className = 'nv-card';
+  loc.innerHTML = '<h2>Endereço da loja</h2><p class="nv-help">Usado para sugerir endereços ao cadastrar clientes.</p><form id="locationForm" class="nv-form-grid"><label class="nv-field">Cidade<input name="city" maxlength="80" value="' + safe(settings.city || '') + '" placeholder="Ex.: Fortaleza"></label><label class="nv-field">UF<input name="state" maxlength="2" value="' + safe(settings.state || '') + '" placeholder="CE" style="text-transform:uppercase"></label><div><button class="nv-button">Salvar endereço</button><p id="locationStatus" role="status"></p></div></form>';
+  const msgs = document.createElement('section'); msgs.className = 'nv-card';
+  msgs.innerHTML = '<h2>Mensagens por ação</h2><p class="nv-help">Textos usados nos botões de WhatsApp. Variáveis: {cliente}, {item}, {loja}, {pedido}, {etapa} e {link}.</p><form id="templatesForm">' + Object.entries(TEMPLATE_LABELS).map(([k, label]) => '<label class="nv-field">' + label + '<textarea name="' + k + '" rows="2" maxlength="1000">' + safe(tpl[k] || DEFAULT_TEMPLATES[k]) + '</textarea></label>').join('') + '<button class="nv-button">Salvar mensagens</button><p id="templatesStatus" role="status"></p></form>';
+  const tabs = [['Perfil', [identity, loc]], ['Mensagens', [msgs, ready]], ['Fidelidade', [loyalty, redeem]]];
+  const bar = document.createElement('div'); bar.className = 'fp-tabs'; bar.setAttribute('role', 'tablist');
+  box.prepend(bar); if (identity) identity.after(loc); else box.append(loc); if (ready) ready.before(msgs); else box.append(msgs);
+  const select = name => { bar.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name))); tabs.forEach(([n, els]) => els.forEach(el => { if (el) el.hidden = n !== name; })); };
+  tabs.forEach(([name]) => { const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.dataset.tab = name; b.textContent = name; b.onclick = () => select(name); bar.append(b); });
+  if (ready) { const h = ready.querySelector('h2'); if (h) h.textContent = 'Ao concluir (pedido pronto)'; }
+  select('Perfil');
+  $('locationForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { const r = await api('/store/location', 'PATCH', { city: f.elements.city.value.trim(), state: f.elements.state.value.trim().toUpperCase() }); storeSettings.city = r.city; storeSettings.state = r.state; $('locationStatus').textContent = 'Endereço salvo'; } catch (err) { $('locationStatus').textContent = err.message; } };
+  $('templatesForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; const body = Object.fromEntries(Object.keys(TEMPLATE_LABELS).map(k => [k, f.elements[k].value.trim()])); try { const r = await api('/store/message-templates', 'PATCH', body); storeSettings.message_templates = r.message_templates; $('templatesStatus').textContent = 'Mensagens salvas'; } catch (err) { $('templatesStatus').textContent = err.message; } };
+}
 async function loadEditor(view, box, version) {
  if(view==='cameras'){
  const cameras=await api('/cameras');if(version!==viewVersion)return;
@@ -451,16 +501,28 @@ async function loadEditor(view, box, version) {
  const draft=id=>{const p=processes.find(x=>x.id===id);return p?{id:p.id,name:p.name,camera_id:p.camera_id||'',steps:p.steps.map((name,i)=>({name,camera:Object.hasOwn(p.step_cameras||{},String(i))?(p.step_cameras[i]===null?'none':p.step_cameras[i]):''}))}:{id:'new',name:'',camera_id:'',steps:[{name:'',camera:''}]}};
  let current=draft(state.selected);
  const listHtml=()=>processes.map(p=>'<button type="button" class="fp-proc-item '+(p.id===state.selected?'active':'')+'" data-proc="'+safe(p.id)+'"><strong>'+safe(cap(p.name))+'</strong><span>'+p.steps.length+' etapa'+(p.steps.length===1?'':'s')+' · '+safe(p.camera_id?camName(p.camera_id):'sem câmera padrão')+'</span></button>').join('')+'<button type="button" class="fp-proc-item fp-proc-new '+(state.selected==='new'?'active':'')+'" data-proc="new"><strong>+ Novo processo</strong><span>Criar do zero</span></button>';
- const editorHtml=()=>'<form id="procEditor" class="fp-proc-editor"><div class="fp-proc-top"><label class="nv-field">Nome do processo<input name="name" required maxlength="120" value="'+safe(current.name)+'" placeholder="Ex.: Troca de tela"></label><label class="nv-field">Câmera padrão<select name="camera_id">'+camOptions(current.camera_id,false)+'</select></label></div>'+
-  '<div class="fp-steps-head"><span>#</span><span>Etapa</span><span>Câmera</span><span><span class="fp-sr">Ordem</span></span></div><ol class="fp-steps">'+current.steps.map((st,i)=>'<li><span class="fp-step-n">'+(i+1)+'</span><input aria-label="Nome da etapa '+(i+1)+'" data-step-name="'+i+'" required maxlength="120" value="'+safe(st.name)+'" placeholder="Nome da etapa"><select aria-label="Câmera da etapa '+(i+1)+'" data-step-cam="'+i+'">'+camOptions(st.camera,true)+'</select><span class="fp-step-tools"><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="-1" aria-label="Subir etapa" '+(i===0?'disabled':'')+'>↑</button><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="1" aria-label="Descer etapa" '+(i===current.steps.length-1?'disabled':'')+'>↓</button><button type="button" class="fp-icon" data-step-del="'+i+'" aria-label="Remover etapa" '+(current.steps.length===1?'disabled':'')+'>✕</button></span></li>').join('')+'</ol>'+
-  '<div class="fp-proc-actions"><button type="button" class="nv-button secondary" id="addStep" '+(current.steps.length>=30?'disabled':'')+'>+ Adicionar etapa</button><span class="nv-help">Alterações valem para novos pedidos.</span><button class="nv-button" type="submit">'+(current.id==='new'?'Criar processo':'Salvar alterações')+'</button></div><p id="procStatus" role="status" class="nv-help"></p></form>';
- const draw=()=>{box.innerHTML='<section class="nv-card fp-proc"><div class="fp-proc-list" aria-label="Processos">'+listHtml()+'</div>'+editorHtml()+'</section>';bind()};
- const sync=()=>{const f=$('procEditor');current.name=f.elements.name.value;current.camera_id=f.elements.camera_id.value;f.querySelectorAll('[data-step-name]').forEach(x=>current.steps[+x.dataset.stepName].name=x.value);f.querySelectorAll('[data-step-cam]').forEach(x=>current.steps[+x.dataset.stepCam].camera=x.value)};
+ let selStep=0;
+ const camLabel=v=>v==='none'?'Sem câmera':v?camName(v):'Câmera padrão'+(current.camera_id?' ('+camName(current.camera_id)+')':'');
+ const editorHtml=()=>{if(selStep>=current.steps.length)selStep=current.steps.length-1;const st=current.steps[selStep]||{camera:''};
+  return '<form id="procEditor" class="fp-proc-cols">'
+  +'<div class="fp-col fp-col-steps"><div class="fp-col-head">Etapas</div><label class="nv-field">Nome do processo<input name="name" required maxlength="120" value="'+safe(current.name)+'" placeholder="Ex.: Troca de tela"></label>'
+  +'<ol class="fp-steps3">'+current.steps.map((x,i)=>'<li class="'+(i===selStep?'active':'')+'" data-step-pick="'+i+'"><span class="fp-step-n">'+(i+1)+'</span><input aria-label="Nome da etapa '+(i+1)+'" data-step-name="'+i+'" required maxlength="120" value="'+safe(x.name)+'" placeholder="Nome da etapa"><span class="fp-step-cam">'+safe(camLabel(x.camera))+'</span><span class="fp-step-tools"><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="-1" aria-label="Subir etapa" '+(i===0?'disabled':'')+'>↑</button><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="1" aria-label="Descer etapa" '+(i===current.steps.length-1?'disabled':'')+'>↓</button><button type="button" class="fp-icon" data-step-del="'+i+'" aria-label="Remover etapa" '+(current.steps.length===1?'disabled':'')+'>✕</button></span></li>').join('')+'</ol>'
+  +'<button type="button" class="nv-button secondary" id="addStep" '+(current.steps.length>=30?'disabled':'')+'>+ Adicionar etapa</button></div>'
+  +'<div class="fp-col fp-col-cams"><div class="fp-col-head">Câmera da etapa '+(selStep+1)+(st.name?' · '+safe(cap(st.name)):'')+'</div>'
+  +'<div class="fp-cam-list" role="radiogroup" aria-label="Câmera da etapa">'
+  +[['', 'Usar a câmera padrão do processo'],['none','Sem câmera nesta etapa']].concat(cameras.map(c=>[c.id,c.name+(c.station?' · '+c.station:'')])).map(([v,l])=>'<label class="fp-cam-opt"><input type="radio" name="stepCam" value="'+safe(v)+'" '+((st.camera||'')===v?'checked':'')+'><span>'+safe(l)+'</span></label>').join('')+'</div>'
+  +'<label class="nv-field fp-default-cam">Câmera padrão do processo<select name="camera_id">'+camOptions(current.camera_id,false)+'</select></label>'
+  +'<div class="fp-proc-actions"><span class="nv-help">Alterações valem para novos pedidos.</span><button class="nv-button" type="submit">'+(current.id==='new'?'Criar processo':'Salvar alterações')+'</button></div><p id="procStatus" role="status" class="nv-help"></p></div></form>';};
+ const draw=()=>{box.innerHTML='<section class="nv-card fp-proc3"><div class="fp-col fp-col-procs"><div class="fp-col-head">Processos</div><div class="fp-proc-list" aria-label="Processos">'+listHtml()+'</div></div>'+editorHtml()+'</section>';bind()};
+ const sync=()=>{const f=$('procEditor');current.name=f.elements.name.value;current.camera_id=f.elements.camera_id.value;f.querySelectorAll('[data-step-name]').forEach(x=>current.steps[+x.dataset.stepName].name=x.value);const r=f.querySelector('[name="stepCam"]:checked');if(r&&current.steps[selStep])current.steps[selStep].camera=r.value};
  const bind=()=>{
-  box.querySelectorAll('[data-proc]').forEach(b=>b.onclick=()=>{state.selected=b.dataset.proc;current=draft(state.selected);draw()});
-  $('addStep').onclick=()=>{sync();current.steps.push({name:'',camera:''});draw();box.querySelector('[data-step-name="'+(current.steps.length-1)+'"]')?.focus()};
-  box.querySelectorAll('[data-step-move]').forEach(b=>b.onclick=()=>{sync();const i=+b.dataset.stepMove,j=i+Number(b.dataset.dir);[current.steps[i],current.steps[j]]=[current.steps[j],current.steps[i]];draw()});
-  box.querySelectorAll('[data-step-del]').forEach(b=>b.onclick=()=>{sync();current.steps.splice(+b.dataset.stepDel,1);draw()});
+  box.querySelectorAll('[data-proc]').forEach(b=>b.onclick=()=>{state.selected=b.dataset.proc;current=draft(state.selected);selStep=0;draw()});
+  box.querySelectorAll('[data-step-pick]').forEach(li=>li.addEventListener('click',e=>{if(e.target.closest('button'))return;const i=+li.dataset.stepPick;if(i===selStep)return;sync();selStep=i;draw();box.querySelector('[data-step-name="'+i+'"]')?.focus()}));
+  box.querySelectorAll('[name="stepCam"]').forEach(r=>r.onchange=()=>{sync();draw()});
+  $('procEditor').elements.camera_id.onchange=()=>{sync();draw()};
+  $('addStep').onclick=()=>{sync();current.steps.push({name:'',camera:''});selStep=current.steps.length-1;draw();box.querySelector('[data-step-name="'+(current.steps.length-1)+'"]')?.focus()};
+  box.querySelectorAll('[data-step-move]').forEach(b=>b.onclick=()=>{sync();const i=+b.dataset.stepMove,j=i+Number(b.dataset.dir);[current.steps[i],current.steps[j]]=[current.steps[j],current.steps[i]];if(selStep===i)selStep=j;draw()});
+  box.querySelectorAll('[data-step-del]').forEach(b=>b.onclick=()=>{sync();current.steps.splice(+b.dataset.stepDel,1);selStep=Math.max(0,Math.min(selStep,current.steps.length-1));draw()});
   $('procEditor').onsubmit=async e=>{e.preventDefault();sync();const steps=current.steps.map(s=>({...s,name:cap(s.name)})).filter(s=>s.name);
    const body={name:cap(current.name),steps:steps.map(s=>s.name),camera_id:current.camera_id||null,step_cameras:Object.fromEntries(steps.map((s,i)=>[String(i),s.camera]).filter(([,v])=>v).map(([k,v])=>[k,v==='none'?null:v]))};
    const status=$('procStatus');try{const saved=await api(current.id==='new'?'/processes':'/processes/'+current.id,current.id==='new'?'POST':'PATCH',body);const fresh=await api('/processes');processes.splice(0,processes.length,...fresh);state.selected=saved.id;current=draft(saved.id);draw();$('procStatus').textContent='Processo salvo.';await reload()}catch(err){status.textContent=err.message}};
@@ -478,6 +540,7 @@ async function loadEditor(view, box, version) {
  fileInput.onchange=()=>preview(fileInput.files[0]);drop.ondragover=e=>{e.preventDefault();drop.classList.add('drag')};drop.ondragleave=()=>drop.classList.remove('drag');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('drag');preview(e.dataTransfer.files[0])};drop.onclick=()=>fileInput.click();
  $('uploadLogo').onclick=async()=>{if(!selected){$('settingsStatus').textContent='Selecione uma imagem';return}if(selected.size>262144){$('settingsStatus').textContent='Imagem maior que 256 KB. Reduza o tamanho.';return}try{const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(selected)});const r=await api('/store/logo','PUT',{mime_type:selected.type,base64});settings.logo_url=r.logo_url;$('storeBrandIcon').innerHTML='<img src="'+safe(r.logo_url)+'?v='+Date.now()+'" alt="Logo" style="width:100%;height:100%;object-fit:contain">';$('settingsStatus').textContent='Logo atualizado'}catch(err){$('settingsStatus').textContent=err.message}};
  $('loyaltyForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/store/loyalty','PATCH',{loyalty_enabled:f.elements.enabled.checked,loyalty_target:Number(f.elements.target.value),loyalty_reward:f.elements.reward.value.trim()});$('loyaltyStatus').textContent='Fidelidade atualizada'}catch(err){$('loyaltyStatus').textContent=err.message}};
+ settingsTabs(box,settings);
  $('redeemForm').onsubmit=async e=>{e.preventDefault();try{const r=await api('/store/loyalty/redeem','POST',{code:e.currentTarget.elements.code.value.trim().toUpperCase()});$('redeemFeedback').textContent='Cupom validado: '+r.reward}catch(err){$('redeemFeedback').textContent=err.message}};
  
  }else if(view==='plan'){

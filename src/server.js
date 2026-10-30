@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
-import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';
+import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -42,6 +42,7 @@ const deviceAuth=route(async(req,res,next)=>{
  if(!result.rowCount||!result.rows[0].enabled||result.rows[0].revoked_at||!['trial','active'].includes(result.rows[0].tenant_status))return bad(res,403,'Dispositivo bloqueado');
  req.device=result.rows[0];next();
 });
+registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
  const store=await q("SELECT id,status FROM tenants WHERE id=$1",[req.params.id]);
@@ -518,43 +519,39 @@ app.get('/api/public/orders/:token/photos/:photoId',rateLimit({windowMs:60000,li
 const purgeOldPhotos=()=>q("DELETE FROM order_photos ph USING tenants t WHERE t.id=ph.tenant_id AND ph.created_at < now() - make_interval(days => t.retention_days)").catch(e=>console.error('Limpeza de fotos falhou:',e.code||e.name));
 setTimeout(purgeOldPhotos,60000).unref();setInterval(purgeOldPhotos,6*3600000).unref();
 
-const liveMediaConfig=()=>{
- const {MEDIA_UPSTREAM_URL,MEDIA_USERNAME,MEDIA_PASSWORD,LIVE_CAMERA_ID}=process.env;
- if(!MEDIA_UPSTREAM_URL||!MEDIA_USERNAME||!MEDIA_PASSWORD||(LIVE_CAMERA_ID&&!uuid.safeParse(LIVE_CAMERA_ID).success)||(!LIVE_CAMERA_ID&&process.env.MEDIA_MULTI_CAMERA_ENABLED!=='true'))return null;
- let origin;try{origin=new URL(MEDIA_UPSTREAM_URL);}catch{return null;}
- if(origin.protocol!=='https:'||origin.username||origin.password||origin.search||origin.hash||origin.pathname!=='/')return null;
- return {origin,username:MEDIA_USERNAME,password:MEDIA_PASSWORD,cameraId:LIVE_CAMERA_ID||null};
-};
 const allowedMediaAsset=name=>/^(index|stream|segment|part|init)[A-Za-z0-9_.-]{0,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name)||/^[A-Za-z0-9_-]{1,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name);
 // Several customers of the same store share one public IP (store/home Wi-Fi), and
 // LL-HLS polls parts every second. Limit per IP generously and per order link tightly.
 const hlsPerIp=rateLimit({windowMs:60000,limit:1800,standardHeaders:'draft-7',legacyHeaders:false});
 const hlsPerLink=rateLimit({windowMs:60000,limit:600,standardHeaders:'draft-7',legacyHeaders:false,keyGenerator:req=>'hls-link:'+String(req.params.token||'').slice(0,100)});
 app.get('/api/public/orders/:token/live/:asset',hlsPerIp,hlsPerLink,route(async(req,res)=>{
- const config=liveMediaConfig();
- if(!config){console.error('HLS configuration incomplete');return bad(res,503,'Vídeo indisponível');}
+ const legacy=legacyMediaConfig();
  const {token,asset}=req.params;
  if(!/^[\w-]{16,100}$/.test(token)||!allowedMediaAsset(asset))return bad(res,404,'Não encontrado');
  const hash=crypto.createHash('sha256').update(token).digest('hex');
  // A camera must belong to this tenant and this active order; never expose a general camera feed
- const found=await q(`SELECT o.id,o.tenant_id,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera
+ const found=await q(`SELECT o.id,o.tenant_id,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  JOIN cameras c ON c.id=(CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text THEN o.process_snapshot->'step_cameras'->>o.step_index::text ELSE o.process_snapshot->>'camera_id' END)::uuid AND c.tenant_id=o.tenant_id AND c.enabled AND c.deleted_at IS NULL
- AND ((c.device_id IS NULL AND $3::uuid IS NOT NULL) OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=c.device_id AND d.tenant_id=c.tenant_id AND d.enabled AND d.revoked_at IS NULL))
+ AND ((c.device_id IS NULL AND c.id=$3::uuid) OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=c.device_id AND d.tenant_id=c.tenant_id AND d.enabled AND d.revoked_at IS NULL))
+ LEFT JOIN store_media sm ON sm.tenant_id=o.tenant_id
  WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.status='live'
- AND o.deleted_at IS NULL AND t.status IN ('trial','active') AND ($3::uuid IS NULL OR c.id=$3)`,[hash,token,config.cameraId]);
+ AND o.deleted_at IS NULL AND t.status IN ('trial','active') AND (sm.tenant_id IS NOT NULL OR c.id=$3::uuid OR $4::boolean)`,[hash,token,legacy?.cameraId||null,Boolean(legacy&&!legacy.cameraId)]);
  if(!found.rowCount)return bad(res,404,'Vídeo indisponível');
  const order=found.rows[0];
+ // Vídeo da própria loja (túnel da loja); senão, a origem antiga configurada no Render.
+ const config=mediaConfigFor(order,legacy);
+ if(!config){console.error('HLS configuration incomplete');return bad(res,503,'Vídeo indisponível');}
  const chosen=cameraForStep(order.step_cameras,order.process_camera,order.step_index);
- if(chosen!==order.media_camera||(config.cameraId&&chosen!==config.cameraId))return bad(res,404,'Vídeo indisponível');
+ if(chosen!==order.media_camera||(!config.perStore&&config.cameraId&&chosen!==config.cameraId))return bad(res,404,'Vídeo indisponível');
  const competing=await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL
  AND (CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text
  THEN o.process_snapshot->'step_cameras'->>o.step_index::text
  ELSE o.process_snapshot->>'camera_id' END)=$3 LIMIT 1`,[order.tenant_id,order.id,chosen]);
  if(competing.rowCount)return bad(res,409,'Câmera ocupada por outro pedido');
- const streamPath=config.cameraId?'camera':order.stream_path;
+ const streamPath=streamPathFor({id:chosen,stream_path:order.stream_path},legacy);
  if(!/^[A-Za-z0-9_-]{1,100}$/.test(streamPath||''))return bad(res,503,'Câmera sem caminho de transmissão');
  const url=new URL('/'+streamPath+'/'+asset,config.origin);
  // MediaMTX binds HLS child playlists/segments to a ?session= token.

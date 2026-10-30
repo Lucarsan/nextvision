@@ -9,7 +9,7 @@ const isoLocal = d => [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'
 const labels = { queued: 'Na fila', live: 'Em atendimento', paused: 'Pausado', completed: 'Finalizado' };
 const detailLabels = { vehicle: 'Veículo', device: 'Aparelho', other: 'Item / serviço' };
 const currentStep = o => o.status === 'completed' ? 'Finalizado' : cap(o.steps?.[o.step_index] || labels[o.status]);
-const trackingUrl = o => location.origin + '/p/' + o.share_code;
+const trackingUrl = o => (o.order_number && storeSettings.slug) ? (storeSettings.short_link_base || location.origin) + '/' + storeSettings.slug + '/' + o.order_number : location.origin + '/p/' + o.share_code;
 const newest = (a, b) => new Date(b.created_at) - new Date(a.created_at) || b.id.localeCompare(a.id);
 let activeView = 'home', storeSettings = {}, cachedOrders = [], cachedProcesses = [], cachedCustomers = [];
 let refreshPromise = null, refreshAgain = false, viewVersion = 0;
@@ -38,7 +38,7 @@ function transitionActions(o) {
 }
 const nicheNoun = () => ({ electronics: 'aparelho', automotive: 'veículo', carwash: 'veículo', pet: 'pet', food: 'pedido' }[storeSettings.niche] || 'pedido');
 const itemLabel = o => { const d = o.details || {}; return [d.brand, d.model].filter(Boolean).join(' ') || nicheNoun(); };
-const orderRef = o => o.external_reference ? 'Pedido ' + o.external_reference : 'Pedido ' + o.id.slice(0, 8);
+const orderRef = o => 'Pedido ' + (o.external_reference || o.order_number || o.id.slice(0, 8));
 const firstName = name => String(name || '').trim().split(/\s+/)[0] || '';
 function whatsPhone(o) {
   let digits = String(o.customer_phone || '').replace(/\D/g, '');
@@ -47,7 +47,7 @@ function whatsPhone(o) {
 }
 function readyMessage(o) {
   const template = storeSettings.ready_message || 'Olá, {cliente}! Seu {item} está pronto para retirada na {loja}. Acompanhe: {link}';
-  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || '', link: o.share_code ? trackingUrl(o) : '' };
+  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '' };
   return template.replace(/\{(cliente|item|loja|pedido|link)\}/g, (_, key) => values[key]).replace(/\s*Acompanhe:\s*$/, '').trim();
 }
 const minutesSince = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'min'; };
@@ -91,7 +91,7 @@ function orderCard(o) {
   const d = o.details || {};
   const item = [d.brand, d.model, d.identifier].filter(Boolean).join(' · ');
   const info = (label, value) => `<div><dt>${label}</dt><dd>${safe(value || 'Não informado')}</dd></div>`;
-  return `<div class="nv-order-header"><div><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.id.slice(0, 8))}</span><h3>${safe(cap(o.customer || 'Cliente não vinculado'))}</h3><p>${safe(o.process)}${item ? ' · ' + safe(item) : ''}</p></div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span></div>
+  return `<div class="nv-order-header"><div><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))}</span><h3>${safe(cap(o.customer || 'Cliente não vinculado'))}</h3><p>${safe(o.process)}${item ? ' · ' + safe(item) : ''}</p></div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span></div>
     <div class="nv-order-progress"><strong>${safe(currentStep(o))}</strong><span>${new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></div>${stepsView(o)}
     <div class="nv-order-actions">${transitionActions(o)}<button class="nv-button secondary nv-danger" data-delete-order="${safe(o.id)}">Excluir pedido</button></div>
     <details class="nv-order-details" data-details-id="${safe(o.id)}" ${openedOrders.has(o.id) ? 'open' : ''}><summary>Detalhes do pedido</summary>
@@ -120,7 +120,7 @@ function toolbar(scope) {
 }
 function filteredOrders(scope) {
   const state = filters[scope], term = state.search.trim().toLocaleLowerCase('pt-BR');
-  return cachedOrders.filter(o => (!state.status || o.status === state.status) && (scope !== 'orders' || !orderDate || isoLocal(new Date(o.created_at)) === orderDate) && (!term || [o.external_reference, o.customer, o.process, ...Object.values(o.details || {})].some(value => String(value || '').toLocaleLowerCase('pt-BR').includes(term)))).sort(state.sort === 'oldest' ? (a, b) => newest(b, a) : newest);
+  return cachedOrders.filter(o => (!state.status || o.status === state.status) && (scope !== 'orders' || !orderDate || isoLocal(new Date(o.created_at)) === orderDate) && (!term || [o.external_reference, o.order_number, o.customer, o.process, ...Object.values(o.details || {})].some(value => String(value || '').toLocaleLowerCase('pt-BR').includes(term)))).sort(state.sort === 'oldest' ? (a, b) => newest(b, a) : newest);
 }
 function renderLiveLists() {
   renderNow();
@@ -217,7 +217,7 @@ async function loadOrders(box, version) {
 function drawQueue() {
   const container = $('queueList'); if (!container) return;
   const orders = cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
-  const html = orders.map((o, i) => `<article class="nv-order"><div><strong>${i + 1}º · #${safe(o.external_reference || o.id.slice(0, 8))}</strong><p>${safe(o.customer || o.process)}</p></div><div class="nv-queue-actions"><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir na fila">↑</button><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="1" ${i === orders.length - 1 ? 'disabled' : ''} aria-label="Descer na fila">↓</button></div></article>`).join('') || notice('Nenhum pedido aguardando.');
+  const html = orders.map((o, i) => `<article class="nv-order"><div><strong>${i + 1}º · #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))}</strong><p>${safe(o.customer || o.process)}</p></div><div class="nv-queue-actions"><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir na fila">↑</button><button class="nv-button secondary" data-queue-id="${o.id}" data-delta="1" ${i === orders.length - 1 ? 'disabled' : ''} aria-label="Descer na fila">↓</button></div></article>`).join('') || notice('Nenhum pedido aguardando.');
   if (container.innerHTML !== html) container.innerHTML = html;
 }
 function customerFields(c = {}) { return `<div class="nv-form-grid">${field('name', 'Nome completo', c.name)}${field('phone', 'Telefone / WhatsApp', c.phone)}${field('email', 'E-mail', c.email, 'email')}${field('address', 'Endereço', c.address)}</div>`; }
@@ -410,7 +410,7 @@ async function loadEditor(view, box, version) {
  if(version!==viewVersion)return;
  box.innerHTML='<section class="nv-card"><h2>Identidade da loja</h2><p class="nv-help">Nicho: '+safe(settings.niche_label||'Serviços em geral')+' · Definido pelo administrador.</p><form id="settingsForm">'+field('name','Nome da loja',settings.name)+'<label class="nv-field">Logo da loja (PNG, JPG ou WebP, até 256 KB)<input id="logoFile" type="file" accept="image/png,image/jpeg,image/webp"></label><div id="logoDrop" class="nv-drop" tabindex="0">Arraste a imagem aqui ou selecione acima</div><img id="logoPreview" hidden alt="Prévia da imagem" style="width:90px;height:90px;object-fit:contain"><button class="nv-button" type="button" id="uploadLogo">Enviar logo</button><button class="nv-button secondary" type="submit">Salvar nome da loja</button><p id="settingsStatus" role="status"></p></form></section><section class="nv-card"><h2>Mensagem de pedido pronto</h2><p class="nv-help">Enviada pelo WhatsApp quando você usa "Finalizar e avisar". Use {cliente}, {item}, {loja}, {pedido} e {link}.</p><form id="messageForm"><label class="nv-field">Mensagem<textarea name="ready_message" rows="3" maxlength="1000" required>'+safe(settings.ready_message||'')+'</textarea></label><button class="nv-button">Salvar mensagem</button><p id="messageStatus" role="status"></p></form></section><section class="nv-card"><h2>Programa de fidelidade</h2><form id="loyaltyForm"><label><input type="checkbox" name="enabled" '+(loyalty.loyalty_enabled?'checked':'')+'> Ativar fidelidade</label>'+field('target','Check-ins necessários',loyalty.loyalty_target,'number')+'<label class="nv-field">Recompensa<textarea name="reward">'+safe(loyalty.loyalty_reward||'')+'</textarea></label><button class="nv-button">Salvar fidelidade</button><p id="loyaltyStatus" role="status"></p></form></section><section class="nv-card"><h2>Validar cupom</h2><form id="redeemForm">'+field('code','Código')+'<button class="nv-button">Validar cupom</button><p id="redeemFeedback" role="status"></p></form></section>';
  $('messageForm').onsubmit=async e=>{e.preventDefault();try{const r=await api('/store/messages','PATCH',{ready_message:e.currentTarget.elements.ready_message.value.trim()});storeSettings.ready_message=r.ready_message;$('messageStatus').textContent='Mensagem salva'}catch(err){$('messageStatus').textContent=err.message}};
- $('settingsForm').onsubmit=async e=>{e.preventDefault();const name=e.currentTarget.elements.name.value.trim();try{await api('/store/settings','PATCH',{name,logo_url:settings.logo_url||'',email_notifications:settings.email_notifications||'off'});$('storeBrandName').textContent=name;document.querySelector('.nv-profile span').textContent=name;$('settingsStatus').textContent='Nome atualizado'}catch(err){$('settingsStatus').textContent=err.message}};
+ $('settingsForm').onsubmit=async e=>{e.preventDefault();const name=e.currentTarget.elements.name.value.trim();try{const saved=await api('/store/settings','PATCH',{name,logo_url:settings.logo_url||'',email_notifications:settings.email_notifications||'off'});storeSettings.name=saved.name;storeSettings.slug=saved.slug;settings.slug=saved.slug;$('storeBrandName').textContent=name;document.querySelector('.nv-profile span').textContent=name;$('settingsStatus').textContent='Nome atualizado. Links dos pedidos: '+(storeSettings.short_link_base||location.origin).replace(/^https?:\/\//,'')+'/'+saved.slug+'/…'}catch(err){$('settingsStatus').textContent=err.message}};
  const fileInput=$('logoFile'),drop=$('logoDrop');let selected=null;const preview=file=>{if(!file)return;selected=file;drop.textContent=file.name;const im=$('logoPreview');im.hidden=false;im.src=URL.createObjectURL(file)};
  fileInput.onchange=()=>preview(fileInput.files[0]);drop.ondragover=e=>{e.preventDefault();drop.classList.add('drag')};drop.ondragleave=()=>drop.classList.remove('drag');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('drag');preview(e.dataTransfer.files[0])};drop.onclick=()=>fileInput.click();
  $('uploadLogo').onclick=async()=>{if(!selected){$('settingsStatus').textContent='Selecione uma imagem';return}if(selected.size>262144){$('settingsStatus').textContent='Imagem maior que 256 KB. Reduza o tamanho.';return}try{const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(selected)});const r=await api('/store/logo','PUT',{mime_type:selected.type,base64});settings.logo_url=r.logo_url;$('storeBrandIcon').innerHTML='<img src="'+safe(r.logo_url)+'?v='+Date.now()+'" alt="Logo" style="width:100%;height:100%;object-fit:contain">';$('settingsStatus').textContent='Logo atualizado'}catch(err){$('settingsStatus').textContent=err.message}};

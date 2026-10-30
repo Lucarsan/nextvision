@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';
+const slugFromName=name=>String(name).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
 const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
@@ -126,7 +127,7 @@ app.post('/api/master/tenants',auth,roles('master'),route(async(req,res)=>{
  const v=valid(z.object({name:z.string().trim().min(2).max(120),slug:z.string().regex(/^[a-z0-9-]{3,60}$/),retention_days:z.number().int().min(1).max(365).default(15),niche:nicheSchema.default('general'),camera_limit:z.number().int().min(1).max(128).default(1)}),req,res);if(!v)return;
  const c=await db.connect();try{
   await c.query('BEGIN');
-  const r=await c.query('INSERT INTO tenants(name,slug,retention_days,niche,camera_limit) VALUES($1,$2,$3,$4,$5) RETURNING *',[v.name,v.slug,v.retention_days,v.niche,v.camera_limit]);
+  const r=await c.query('INSERT INTO tenants(name,slug,retention_days,niche,camera_limit) VALUES($1,$2,$3,$4,$5) RETURNING *',[v.name,v.slug,v.retention_days,v.niche,v.camera_limit]);await c.query('INSERT INTO tenant_slugs(slug,tenant_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[v.slug,r.rows[0].id]);
   const store=r.rows[0],profile=storeProfiles[v.niche];
   await c.query('INSERT INTO processes(tenant_id,name,steps) VALUES($1,$2,$3)',[store.id,profile.label,JSON.stringify(profile.steps)]);
   await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[store.id,req.user.id,'create','tenant',store.id]);
@@ -200,9 +201,26 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
  const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
- const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType});
+ const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
 }));
-app.patch('/api/store/settings',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),logo_url:z.union([z.string().url().startsWith('https://').max(1000),z.literal('')]),email_notifications:z.enum(['off','steps','completed','all'])}).strict(),req,res);if(!v)return;const r=await q('UPDATE tenants SET name=$1,logo_url=$2,email_notifications=$3 WHERE id=$4 RETURNING name,slug,logo_url,email_notifications',[v.name,v.logo_url||null,v.email_notifications,tid(req)]);await audit(req,'update','tenant_settings',tid(req));res.json(r.rows[0]);}));
+app.patch('/api/store/settings',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),logo_url:z.union([z.string().url().startsWith('https://').max(1000),z.literal('')]),email_notifications:z.enum(['off','steps','completed','all'])}).strict(),req,res);if(!v)return;
+ const c=await db.connect();
+ try{
+  await c.query('BEGIN');
+  const current=(await c.query('SELECT name,slug FROM tenants WHERE id=$1 FOR UPDATE',[tid(req)])).rows[0];
+  let slug=current.slug;
+  if(current.name!==v.name){
+   const base=slugFromName(v.name);
+   if(base.length>=3){
+    for(let n=1;n<100;n++){const candidate=n===1?base:base.slice(0,58)+n;const owner=await c.query('SELECT tenant_id FROM tenant_slugs WHERE slug=$1',[candidate]);const other=await c.query('SELECT 1 FROM tenants WHERE slug=$1 AND id<>$2',[candidate,tid(req)]);if((!owner.rowCount||owner.rows[0].tenant_id===tid(req))&&!other.rowCount){slug=candidate;break;}}
+    await c.query('INSERT INTO tenant_slugs(slug,tenant_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[slug,tid(req)]);
+   }
+  }
+  const r=await c.query('UPDATE tenants SET name=$1,slug=$2,logo_url=$3,email_notifications=$4 WHERE id=$5 RETURNING name,slug,logo_url,email_notifications',[v.name,slug,v.logo_url||null,v.email_notifications,tid(req)]);
+  await c.query('COMMIT');
+  await audit(req,'update','tenant_settings',tid(req));res.json(r.rows[0]);
+ }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+}));
 app.patch('/api/store/messages',auth,roles('owner'),route(async(req,res)=>{
  const v=valid(z.object({ready_message:z.string().trim().min(10).max(1000)}).strict(),req,res);if(!v)return;
  const r=await q('UPDATE tenants SET ready_message=$1 WHERE id=$2 RETURNING ready_message',[v.ready_message,tid(req)]);
@@ -319,7 +337,7 @@ app.delete('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)
   await c.query('COMMIT');res.json({ok:true});
  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
 }));
-app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.external_reference,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
+app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.external_reference,o.order_number,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({customer_id:uuid,process_id:uuid,reference:z.string().trim().max(70).default(''),details:orderDetails.default({})}),req,res);if(!v)return;
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
@@ -549,6 +567,13 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
 }));
 // Rota explícita da prévia, independente da resolução do diretório de trabalho.
 app.get('/loja-preview.html',(_req,res)=>res.sendFile('loja-preview.html',{root:new URL('../public/',import.meta.url).pathname}));
+// Link curto: /<loja>/<numero>. Limite por IP dificulta testar numeros em sequencia.
+const shortLinkLimit=rateLimit({windowMs:10*60000,limit:40,standardHeaders:'draft-7',legacyHeaders:false});
+app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res)=>{
+ const r=await q("SELECT o.share_code FROM tenant_slugs s JOIN tenants t ON t.id=s.tenant_id JOIN orders o ON o.tenant_id=t.id WHERE s.slug=$1 AND o.order_number=$2 AND o.deleted_at IS NULL AND t.status IN ('trial','active') ORDER BY o.created_at DESC LIMIT 1",[req.params[0],Number(req.params[1])]);
+ if(!r.rowCount)return res.status(404).sendFile('tracking.html',{root:'public'});
+ res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
+}));
 app.use(express.static('public'));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
 app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

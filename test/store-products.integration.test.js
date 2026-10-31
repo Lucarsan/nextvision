@@ -125,3 +125,40 @@ test('custo, estoque, desconto e código gerado pelo sistema', { skip }, async (
     assert.equal((await request('/store/products/' + gen.id + '/stock', { method: 'POST', body: { add: 0 } })).status, 400);
   } finally { await f.cleanup(); }
 });
+
+test('vendedor da venda: lista da loja, pré-seleção da última venda e logins na central', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, foreignTenant, masterToken } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    // Central cria um vendedor (operador) e lista os logins da loja.
+    const ana = await api('/master/tenants/' + tenant + '/users', { method: 'POST', token: masterToken, body: { name: 'Ana Vendedora', email: 'ana-' + tenant + '@example.test', password: 'senha-forte-123', role: 'operator' } }, 201);
+    const logins = await api('/master/tenants/' + tenant + '/users', { token: masterToken });
+    assert.deepEqual(logins.map(u => u.role).sort(), ['operator', 'owner']);
+    const outra = await api('/master/tenants/' + foreignTenant + '/users', { method: 'POST', token: masterToken, body: { name: 'De outra loja', email: 'x-' + tenant + '@example.test', password: 'senha-forte-123', role: 'operator' } }, 201);
+
+    let s = await api('/store/sales/sellers');
+    assert.deepEqual(s.sellers.map(x => x.name), ['Ana Vendedora', 'Owner']);
+    assert.equal(s.last_seller_id, null);
+
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const v1 = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', total_cents: 1000, seller_id: ana.id } }, 201);
+    assert.equal(v1.sale.seller_id, ana.id);
+    assert.equal((await api('/store/sales/sellers')).last_seller_id, ana.id, 'última venda pré-seleciona a Ana');
+    // Sem vendedor: fica quem registrou. Vendedor de outra loja é recusado.
+    const v2 = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'cash', total_cents: 500 } }, 201);
+    assert.equal((await api('/store/sales/sellers')).last_seller_id, v2.sale.seller_id);
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', total_cents: 100, seller_id: outra.id } })).status, 400);
+
+    const cash = await api('/store/cash');
+    assert.deepEqual(cash.summary.by_seller.map(x => [x.name, x.count, x.total_cents]), [['Ana Vendedora', 1, 1000], ['Owner', 1, 500]]);
+    assert.equal((await api('/store/sales/' + v1.sale.id + '/receipt')).seller_name, 'Ana Vendedora');
+
+    // Desativar na central: some da lista e não pode mais ser escolhida.
+    await api('/master/users/' + ana.id, { method: 'PATCH', token: masterToken, body: { active: false } });
+    s = await api('/store/sales/sellers');
+    assert.deepEqual(s.sellers.map(x => x.name), ['Owner']);
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', total_cents: 100, seller_id: ana.id } })).status, 400);
+    assert.equal((await request('/master/tenants/' + tenant + '/users')).status, 403, 'lojista não lista logins da central');
+  } finally { await f.cleanup(); }
+});

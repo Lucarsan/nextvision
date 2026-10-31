@@ -136,7 +136,7 @@
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
     const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
-    quickCart = []; quickBase = 0; lastAuto = ''; drawQuick();
+    quickCart = []; lastAuto = ''; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
     $('fsExpense').onclick = $('fsExpense2').onclick = () => movement('expense', box, alive);
     $('fsPrint').onclick = () => printReport(s.id);
@@ -217,19 +217,22 @@
   // ---------------- Itens frequentes ----------------
   // Botões acima do valor: cada toque soma o preço no valor e escreve o item na descrição
   // ("2x Película, Capa"). Sem preço cadastrado, só entra na descrição.
-  // Quantidade por item: "10x Xerox" a R$ 0,20 = R$ 2,00. O valor da venda = valor que já
-  // estava digitado antes do primeiro item (quickBase) + soma dos itens.
-  let quickBase = 0, lastAuto = '';
+  // Cada item tem quantidade e preço editáveis ("10x Xerox" a R$ 0,20 = R$ 2,00). O valor da venda é a
+  // soma das linhas e vai ao servidor como itens, para o comprovante listar cada um com o valor cobrado.
+  // Um valor já digitado antes do primeiro item vira a linha "Valor avulso".
+  let lastAuto = '';
   const toInput = c => c > 0 ? (c / 100).toFixed(2).replace('.', ',') : '';
   const cartText = () => quickCart.map(x => (x.qty > 1 ? x.qty + 'x ' : '') + x.label).join(', ');
-  const cartSum = () => quickCart.reduce((t, x) => t + (x.price_cents || 0) * x.qty, 0);
+  const cartSum = () => quickCart.reduce((t, x) => t + (x.unit ?? 0) * x.qty, 0);
   function applyCart() {
     const f = $('fsSale'); if (!f) return;
     const desc = f.elements.description.value.trim(), text = cartText();
     // Descrição: reescreve enquanto for o texto automático; se o operador escreveu algo, não mexe.
     if (!desc || desc === lastAuto) f.elements.description.value = text;
     lastAuto = text;
-    if (quickCart.some(x => x.price_cents != null) || !quickCart.length) f.elements.total.value = toInput(quickBase + cartSum());
+    const input = f.elements.total;
+    if (quickCart.length) { input.value = toInput(cartSum()); input.readOnly = true; input.dataset.quick = '1'; }
+    else if (input.dataset.quick === '1') { input.value = ''; input.readOnly = false; input.dataset.quick = ''; }
     const tot = $('fsCartTotal'); if (tot) tot.textContent = brl(cartSum());
     f.dispatchEvent(new Event('input'));
   }
@@ -239,9 +242,10 @@
     return quickItems;
   }
   function cartRow(x) {
-    return `<div class="fs-cart-row" data-cart-id="${x.id}"><span class="fs-cart-name">${esc(x.label)}${x.price_cents != null ? `<small>${brl(x.price_cents)} cada</small>` : ''}</span>
-      <span class="fs-qq"><button type="button" data-q="-1" aria-label="Diminuir ${esc(x.label)}">−</button><input type="number" inputmode="numeric" min="1" max="9999" value="${x.qty}" aria-label="Quantidade de ${esc(x.label)}"><button type="button" data-q="1" aria-label="Aumentar ${esc(x.label)}">+</button></span>
-      <b class="fs-cart-sub">${x.price_cents != null ? brl(x.price_cents * x.qty) : ''}</b><button type="button" class="fs-cart-del" data-del aria-label="Tirar ${esc(x.label)}">✕</button></div>`;
+    const changed = x.price_cents != null && x.unit != null && x.unit !== x.price_cents;
+    return `<div class="fs-cart-row" data-cart-id="${x.id}"><span class="fs-cart-name">${esc(x.label)}<span class="fs-unit-wrap">R$ <input class="fs-unit${x.unit == null ? ' fs-need' : ''}" inputmode="decimal" value="${x.unit != null ? centsText(x.unit) : ''}" placeholder="preço" aria-label="Preço de cada ${esc(x.label)}"> cada${changed ? ` <s>${brl(x.price_cents)}</s>` : ''}</span></span>
+      <span class="fs-qq"><button type="button" data-q="-1" aria-label="Diminuir ${esc(x.label)}">−</button><input class="fs-qn" type="number" inputmode="numeric" min="1" max="9999" value="${x.qty}" aria-label="Quantidade de ${esc(x.label)}"><button type="button" data-q="1" aria-label="Aumentar ${esc(x.label)}">+</button></span>
+      <b class="fs-cart-sub">${x.unit != null ? brl(x.unit * x.qty) : '—'}</b><button type="button" class="fs-cart-del" data-del aria-label="Tirar ${esc(x.label)}">✕</button></div>`;
   }
   async function drawQuick() {
     const box = $('fsQuick'); if (!box) return;
@@ -253,8 +257,11 @@
     box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
     $('fsQuickManage').onclick = manageQuick;
     box.querySelectorAll('[data-cart-id]').forEach(row => {
-      const x = quickCart.find(c => c.id === row.dataset.cartId), input = row.querySelector('input');
-      const set = qty => { x.qty = Math.max(1, Math.min(9999, Math.round(qty) || 1)); input.value = x.qty; row.querySelector('.fs-cart-sub').textContent = x.price_cents != null ? brl(x.price_cents * x.qty) : ''; applyCart(); };
+      const x = quickCart.find(c => c.id === row.dataset.cartId), input = row.querySelector('.fs-qn'), unit = row.querySelector('.fs-unit');
+      const sub = () => { row.querySelector('.fs-cart-sub').textContent = x.unit != null ? brl(x.unit * x.qty) : '—'; };
+      const set = qty => { x.qty = Math.max(1, Math.min(9999, Math.round(qty) || 1)); input.value = x.qty; sub(); applyCart(); };
+      unit.oninput = () => { const v = parseMoney(unit.value); x.unit = unit.value.trim() && Number.isFinite(v) && v >= 0 ? v : null; unit.classList.toggle('fs-need', x.unit == null); sub(); applyCart(); };
+      unit.onblur = () => drawQuick();
       row.querySelectorAll('[data-q]').forEach(b => b.onclick = () => set(x.qty + Number(b.dataset.q)));
       input.oninput = () => { if (input.value !== '') set(Number(input.value)); };
       input.onblur = () => { input.value = x.qty; };
@@ -265,12 +272,12 @@
   function addQuick(item) {
     const f = $('fsSale'); if (!item || !f) return;
     if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "📦 Produtos".', true); return; }
-    if (!quickCart.length) { const cur = parseMoney(f.elements.total.value); quickBase = Number.isFinite(cur) ? cur : 0; lastAuto = ''; }
+    if (!quickCart.length) { const cur = parseMoney(f.elements.total.value); lastAuto = ''; if (Number.isFinite(cur) && cur > 0 && f.elements.total.dataset.quick !== '1') quickCart.push({ id: 'avulso', label: 'Valor avulso', price_cents: null, unit: cur, qty: 1 }); }
     const hit = quickCart.find(x => x.id === item.id);
-    if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, qty: 1 });
+    if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, unit: item.price_cents, qty: 1 });
     applyCart();
-    // Item novo: já deixa a quantidade selecionada para digitar (ex.: 10 cópias).
-    drawQuick().then(() => { if (hit) return; const i = document.querySelector(`[data-cart-id="${item.id}"] input`); if (i) { i.focus(); i.select(); } });
+    // Item novo: já deixa selecionado para digitar a quantidade (ex.: 10 cópias), ou o preço se não tem preço fixo.
+    drawQuick().then(() => { if (hit) return; const row = document.querySelector(`[data-cart-id="${item.id}"]`); const i = row && (item.price_cents == null ? row.querySelector('.fs-unit') : row.querySelector('.fs-qn')); if (i) { i.focus(); i.select(); } });
   }
   async function manageQuick() {
     const items = await loadQuick(true);
@@ -317,8 +324,12 @@
     if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     const body = cart.length
-      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity })), discount_cents: Math.min(discountCents(cart.reduce((a, i) => a + i.price_cents * i.quantity, 0)), Math.max(0, cart.reduce((a, i) => a + i.price_cents * i.quantity, 0) - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
-      : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
+      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })), discount_cents: Math.min(discountCents(cartGross()), Math.max(0, cartGross() - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
+      : quickCart.length
+        ? { items: quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
+        : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
+    const noPrice = quickCart.find(x => x.unit == null);
+    if (!cart.length && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
     const seller = f.elements.seller?.value; if (seller) body.seller_id = seller;
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
@@ -387,15 +398,18 @@
     const v = t.endsWith('%') ? Math.round(sub * (parseFloat(t.replace(',', '.')) || 0) / 100) : parseMoney(t);
     return Number.isFinite(v) && v > 0 ? v : 0;
   };
+  // Preço de cada produto na venda: o do cadastro, a não ser que o vendedor mude ali mesmo.
+  const unitOf = i => i.unit ?? i.price_cents;
+  const cartGross = () => cart.reduce((a, i) => a + unitOf(i) * i.quantity, 0);
   function drawCart(flashId) {
     const out = $('fsCart'), f = $('fsSale'); if (!out || !f) return;
-    const sub = cart.reduce((a, i) => a + i.price_cents * i.quantity, 0);
+    const sub = cartGross();
     const disc = Math.min(discountCents(sub), Math.max(0, sub - 1)), total = sub - disc;
     const knownCost = cart.every(i => i.cost_cents != null), cost = cart.reduce((a, i) => a + (i.cost_cents || 0) * i.quantity, 0);
     const below = knownCost && cost > 0 && total < cost;
-    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small>${brl(i.price_cents)} cada${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small>${showCost ? `<br><small class="fs-costline">custo ${i.cost_cents != null ? brl(i.cost_cents) + ' cada' : 'não informado'}</small>` : ''}</div>
+    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}" inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${showCost && i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small>${showCost ? `<br><small class="fs-costline">custo ${i.cost_cents != null ? brl(i.cost_cents) + ' cada' : 'não informado'}</small>` : ''}</div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
-      <b class="fs-item-total">${brl(i.price_cents * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
+      <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
       <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
       <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label>
         <button type="button" class="fs-link" id="fsCostToggle" aria-pressed="${showCost}">${showCost ? '🙈 Esconder custo' : '👁 Ver custo'}</button></div>
@@ -407,6 +421,11 @@
     if ($('fsDiscount')) $('fsDiscount').onchange = e => { cartDiscount = e.target.value.trim(); drawCart(); };
     if ($('fsDiscount')) $('fsDiscount').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
     if ($('fsCostToggle')) $('fsCostToggle').onclick = () => { showCost = !showCost; drawCart(); };
+    out.querySelectorAll('[data-fs-unit]').forEach(inp => {
+      inp.onchange = () => { const i = cart[inp.dataset.fsUnit], v = parseMoney(inp.value); if (i) i.unit = inp.value.trim() && Number.isFinite(v) && v >= 0 ? v : null; drawCart(); };
+      inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+      inp.onfocus = () => inp.select();
+    });
     if (!cart.length) cartDiscount = '';
     // Com produtos, o valor é a soma dos itens menos o desconto (não editável); sem produtos, volta a ser digitado.
     const input = f.elements.total, auto = input.dataset.auto === '1';
@@ -693,7 +712,7 @@
     const reprint = Date.now() - new Date(r.created_at).getTime() > 10 * 60 * 1000;
     const place = [r.city, r.state].filter(Boolean).join('/');
     const items = r.items.length
-      ? r.items.map(i => `<div class="it"><div>${esc(i.name)}</div><div class="row"><span>${i.quantity} x ${brl(i.unit_price_cents)}</span><span>${brl(i.total_cents)}</span></div></div>`).join('')
+      ? `<div class="row small"><span>QTD  ITEM</span><span>VALOR</span></div>` + r.items.map(i => `<div class="it"><div class="row"><span><b>${i.quantity}</b>  ${esc(i.name)}</span><span>${brl(i.total_cents)}</span></div>${i.quantity > 1 ? `<div class="small">${i.quantity} x ${brl(i.total_cents / i.quantity)}</div>` : ''}</div>`).join('')
       : `<div class="it"><div>${esc(r.description || 'Venda')}</div><div class="row"><span></span><span>${brl(r.total_cents)}</span></div></div>`;
     const l = r.loyalty;
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comprovante venda ${r.sale_number}</title><style>
@@ -713,7 +732,7 @@
       ${r.customer_name ? `<div>Cliente: ${esc(r.customer_name)}</div>` : ''}
       ${r.order_number ? `<div>Pedido nº ${esc(r.order_number)}</div>` : ''}
       <div class="hr"></div>${items}<div class="hr"></div>
-      ${r.discount_cents ? `<div class="row"><span>Subtotal</span><span>${brl(r.total_cents + r.discount_cents)}</span></div><div class="row"><span>Desconto</span><span>− ${brl(r.discount_cents)}</span></div>` : ''}
+      ${r.discount_cents ? `<div class="row small"><span>Desconto concedido (já nos valores acima)</span><span>${brl(r.discount_cents)}</span></div>` : ''}
       <div class="row tot"><span>TOTAL</span><span>${brl(r.total_cents)}</span></div>
       <div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>
       ${extra.received_cents != null ? `<div class="row"><span>Valor recebido</span><span>${brl(extra.received_cents)}</span></div><div class="row"><span>Troco</span><span>${brl(extra.change_cents)}</span></div>` : ''}
@@ -731,7 +750,8 @@
         // Altura real do conteúdo → tamanho da página (px CSS → mm), com folga para o corte.
         const mm = Math.ceil(doc.body.getBoundingClientRect().height * 25.4 / 96) + 4;
         const st = doc.createElement('style'); st.textContent = `@page{size:80mm ${Math.max(60, mm)}mm;margin:0}`; doc.head.append(st);
-        frame.contentWindow.focus(); frame.contentWindow.print();
+        // Imprimir exige foco no quadro; depois devolve o foco a quem estava digitando.
+        const prev = document.activeElement; frame.contentWindow.focus(); frame.contentWindow.print(); if (prev && prev !== document.body && prev.isConnected) prev.focus();
       } finally { setTimeout(() => frame.remove(), 60000); }
     }, 150);
   }
@@ -895,7 +915,7 @@
   .fs-private .fs-lastclose b{color:transparent!important}
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
-  .fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

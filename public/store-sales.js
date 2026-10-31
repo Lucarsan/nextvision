@@ -133,7 +133,7 @@
     setupScanInput(); drawCart(); updChange(); setupEye(box);
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
-    quickCart = []; drawQuick();
+    quickCart = []; quickBase = 0; lastAuto = ''; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
     $('fsExpense').onclick = $('fsExpense2').onclick = () => movement('expense', box, alive);
     $('fsPrint').onclick = () => printReport(s.id);
@@ -213,43 +213,60 @@
   // ---------------- Itens frequentes ----------------
   // Botões acima do valor: cada toque soma o preço no valor e escreve o item na descrição
   // ("2x Película, Capa"). Sem preço cadastrado, só entra na descrição.
+  // Quantidade por item: "10x Xerox" a R$ 0,20 = R$ 2,00. O valor da venda = valor que já
+  // estava digitado antes do primeiro item (quickBase) + soma dos itens.
+  let quickBase = 0, lastAuto = '';
+  const toInput = c => c > 0 ? (c / 100).toFixed(2).replace('.', ',') : '';
   const cartText = () => quickCart.map(x => (x.qty > 1 ? x.qty + 'x ' : '') + x.label).join(', ');
+  const cartSum = () => quickCart.reduce((t, x) => t + (x.price_cents || 0) * x.qty, 0);
+  function applyCart() {
+    const f = $('fsSale'); if (!f) return;
+    const desc = f.elements.description.value.trim(), text = cartText();
+    // Descrição: reescreve enquanto for o texto automático; se o operador escreveu algo, não mexe.
+    if (!desc || desc === lastAuto) f.elements.description.value = text;
+    lastAuto = text;
+    if (quickCart.some(x => x.price_cents != null) || !quickCart.length) f.elements.total.value = toInput(quickBase + cartSum());
+    const tot = $('fsCartTotal'); if (tot) tot.textContent = brl(cartSum());
+    f.dispatchEvent(new Event('input'));
+  }
   async function loadQuick(force) {
     if (quickItems && !force) return quickItems;
     try { quickItems = await api('/store/sales/quick-items'); } catch { quickItems = quickItems || []; }
     return quickItems;
   }
+  function cartRow(x) {
+    return `<div class="fs-cart-row" data-cart-id="${x.id}"><span class="fs-cart-name">${esc(x.label)}${x.price_cents != null ? `<small>${brl(x.price_cents)} cada</small>` : ''}</span>
+      <span class="fs-qq"><button type="button" data-q="-1" aria-label="Diminuir ${esc(x.label)}">−</button><input type="number" inputmode="numeric" min="1" max="9999" value="${x.qty}" aria-label="Quantidade de ${esc(x.label)}"><button type="button" data-q="1" aria-label="Aumentar ${esc(x.label)}">+</button></span>
+      <b class="fs-cart-sub">${x.price_cents != null ? brl(x.price_cents * x.qty) : ''}</b><button type="button" class="fs-cart-del" data-del aria-label="Tirar ${esc(x.label)}">✕</button></div>`;
+  }
   async function drawQuick() {
     const box = $('fsQuick'); if (!box) return;
     const items = await loadQuick(); if (!box.isConnected) return;
     const chips = items.map(i => `<button type="button" class="fs-chip" data-fs-quick="${i.id}"><b>${esc(i.label)}</b>${i.price_cents != null ? `<small>${brl(i.price_cents)}</small>` : ''}</button>`).join('');
-    const quickSummary = quickCart.length ? `<div class="fs-cart"><span>${esc(cartText())}</span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar</button></div>` : '';
+    const quickSummary = quickCart.length ? `<div class="fs-cart">${quickCart.map(cartRow).join('')}<div class="fs-cart-foot"><span>Itens: <b id="fsCartTotal">${brl(cartSum())}</b></span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar itens</button></div></div>` : '';
     box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? '⚙ Editar' : '+ Cadastrar item frequente'}</button></div>
-      ${cart.length ? '<p class="nv-help fs-quick-empty">Com produtos lidos pelo leitor, o valor é a soma dos produtos. Itens frequentes ficam para vendas sem leitor.</p>' : items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (película, capa, carregador…) para lançar com um toque.</p>'}${quickSummary}`;
+      ${cart.length ? '<p class="nv-help fs-quick-empty">Com produtos lidos pelo leitor, o valor é a soma dos produtos. Itens frequentes ficam para vendas sem leitor.</p>' : items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (xerox, película, capa…) para lançar com um toque.</p>'}${quickSummary}`;
     box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
     $('fsQuickManage').onclick = manageQuick;
-    if ($('fsQuickClear')) $('fsQuickClear').onclick = () => {
-      const f = $('fsSale'); const sum = quickCart.reduce((t, x) => t + (x.price_cents || 0) * x.qty, 0);
-      const cur = parseMoney(f.elements.total.value);
-      if (Number.isFinite(cur)) { const rest = cur - sum; f.elements.total.value = rest > 0 ? (rest / 100).toFixed(2).replace('.', ',') : ''; }
-      if (f.elements.description.value.trim() === cartText()) f.elements.description.value = '';
-      quickCart = []; drawQuick(); f.dispatchEvent(new Event('input'));
-    };
+    box.querySelectorAll('[data-cart-id]').forEach(row => {
+      const x = quickCart.find(c => c.id === row.dataset.cartId), input = row.querySelector('input');
+      const set = qty => { x.qty = Math.max(1, Math.min(9999, Math.round(qty) || 1)); input.value = x.qty; row.querySelector('.fs-cart-sub').textContent = x.price_cents != null ? brl(x.price_cents * x.qty) : ''; applyCart(); };
+      row.querySelectorAll('[data-q]').forEach(b => b.onclick = () => set(x.qty + Number(b.dataset.q)));
+      input.oninput = () => { if (input.value !== '') set(Number(input.value)); };
+      input.onblur = () => { input.value = x.qty; };
+      row.querySelector('[data-del]').onclick = () => { quickCart = quickCart.filter(c => c !== x); applyCart(); drawQuick(); };
+    });
+    if ($('fsQuickClear')) $('fsQuickClear').onclick = () => { quickCart = []; applyCart(); drawQuick(); };
   }
   function addQuick(item) {
     const f = $('fsSale'); if (!item || !f) return;
     if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "📦 Produtos".', true); return; }
-    const before = cartText(), desc = f.elements.description.value.trim();
+    if (!quickCart.length) { const cur = parseMoney(f.elements.total.value); quickBase = Number.isFinite(cur) ? cur : 0; lastAuto = ''; }
     const hit = quickCart.find(x => x.id === item.id);
     if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, qty: 1 });
-    // Descrição: se ainda é o texto automático (ou vazia), reescreve; se o operador escreveu algo, acrescenta.
-    if (!desc || desc === before) f.elements.description.value = cartText();
-    else f.elements.description.value = (desc + ', ' + item.label).slice(0, 300);
-    if (item.price_cents != null) {
-      const cur = parseMoney(f.elements.total.value);
-      f.elements.total.value = (((Number.isFinite(cur) ? cur : 0) + item.price_cents) / 100).toFixed(2).replace('.', ',');
-    }
-    f.dispatchEvent(new Event('input')); drawQuick();
+    applyCart();
+    // Item novo: já deixa a quantidade selecionada para digitar (ex.: 10 cópias).
+    drawQuick().then(() => { if (hit) return; const i = document.querySelector(`[data-cart-id="${item.id}"] input`); if (i) { i.focus(); i.select(); } });
   }
   async function manageQuick() {
     const items = await loadQuick(true);
@@ -270,7 +287,7 @@
     };
     document.querySelectorAll('[data-fs-quick-del]').forEach(b => b.onclick = async () => {
       const item = items.find(i => i.id === b.dataset.fsQuickDel); if (!confirm(`Excluir "${item?.label}" dos itens frequentes?`)) return;
-      try { await api('/store/sales/quick-items/' + b.dataset.fsQuickDel, 'DELETE'); quickCart = quickCart.filter(x => x.id !== b.dataset.fsQuickDel); await manageQuick(); drawQuick(); }
+      try { await api('/store/sales/quick-items/' + b.dataset.fsQuickDel, 'DELETE'); quickCart = quickCart.filter(x => x.id !== b.dataset.fsQuickDel); applyCart(); await manageQuick(); drawQuick(); }
       catch (err) { $('fsQuickStatus').textContent = err.message; }
     });
   }
@@ -662,7 +679,7 @@
   .fs-tabs{display:flex;gap:4px;border-bottom:1px solid var(--nv-border);margin-bottom:14px;overflow-x:auto}.fs-tabs button{border:0;background:none;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;color:var(--nv-muted);white-space:nowrap}.fs-tabs button[aria-selected=true]{border-bottom-color:var(--nv-blue);color:var(--nv-ink);font-weight:700}
   .fs-daybar{margin-bottom:10px}.fs-pre{white-space:pre-wrap;font:inherit;font-size:13px;background:var(--nv-bg);border-radius:10px;padding:10px;margin:6px 0}.fs-ok{color:var(--nv-green);font-weight:700;font-size:13px}.fs-warn{background:#fff6e5;border-radius:8px;padding:8px 10px;color:#7a4b00}
   .fs-neg{color:#b42318}.fs-pos{color:#027a48}.fs-check{display:flex;gap:8px;align-items:center;margin-bottom:8px}.fs-table{overflow:auto}.fs-table table{width:100%;border-collapse:collapse;font-size:14px}.fs-table th,.fs-table td{text-align:left;padding:8px;border-bottom:1px solid var(--nv-border);vertical-align:top}
-  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;font-size:13px;padding:6px 10px;border-radius:10px;background:#f6f7f9}.fs-quick-empty{margin:0}
+  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{margin-top:10px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:4px 10px;background:#fafafa}.fs-cart-row{display:grid;grid-template-columns:minmax(0,1fr) auto 76px 28px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #eee}.fs-cart-name{font-size:14px;font-weight:600;min-width:0;overflow-wrap:anywhere}.fs-cart-name small{display:block;font-weight:400;font-size:12px;opacity:.7}.fs-qq{display:inline-flex;align-items:center;border:1px solid var(--nv-border,#d0d5dd);border-radius:10px;overflow:hidden;background:#fff}.fs-qq button{border:0;background:none;width:34px;height:36px;font-size:18px;cursor:pointer}.fs-qq input{width:52px;height:36px;border:0;text-align:center;font:inherit;font-size:15px;-moz-appearance:textfield}.fs-qq input::-webkit-inner-spin-button{-webkit-appearance:none}.fs-cart-sub{text-align:right;font-size:14px}.fs-cart-del{border:0;background:none;cursor:pointer;color:#b42318;font-size:15px}.fs-cart-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 0 4px;font-size:14px}@media(max-width:420px){.fs-cart-row{grid-template-columns:minmax(0,1fr) auto 28px}.fs-cart-sub{grid-column:1/3;text-align:left;font-size:13px}}.fs-quick-empty{margin:0}
   .fs-private .fs-kpis b,.fs-private .fs-methods-sum b,.fs-private .fs-sale-end>b,.fs-private .fs-opening,.fs-private .fs-lastclose{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none;-webkit-user-select:none}
   .fs-private .fs-lastclose b{color:transparent!important}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}

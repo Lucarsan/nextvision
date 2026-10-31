@@ -151,3 +151,35 @@ test('saídas do caixa, cancelamento de lançamento e relatório do dia', { skip
     assert.equal(hist[0].expenses_total_cents, 10000);
   } finally { await f.cleanup(); }
 });
+
+test('itens frequentes do caixa', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, foreignToken, masterToken } = f;
+    // Recurso do caixa: desligado, as rotas recusam.
+    assert.equal((await request('/store/sales/quick-items')).status, 403);
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    assert.deepEqual(await api('/store/sales/quick-items'), []);
+
+    const pel = await api('/store/sales/quick-items', { method: 'POST', body: { label: 'Película 3D', price_cents: 2000 } }, 201);
+    await api('/store/sales/quick-items', { method: 'POST', body: { label: 'Conserto' } }, 201);
+    // Mesmo nome (sem diferenciar maiúsculas) atualiza o preço em vez de duplicar.
+    const again = await api('/store/sales/quick-items', { method: 'POST', body: { label: 'película 3d', price_cents: 2500 } }, 201);
+    assert.equal(again.id, pel.id);
+    const list = await api('/store/sales/quick-items');
+    assert.deepEqual(list.map(i => [i.label, i.price_cents]), [['Conserto', null], ['Película 3D', 2500]]);
+
+    assert.equal((await request('/store/sales/quick-items', { method: 'POST', body: { label: '' } })).status, 400);
+    assert.equal((await request('/store/sales/quick-items', { method: 'POST', body: { label: 'X', price_cents: -1 } })).status, 400);
+
+    // Outra loja não vê nem apaga os itens desta.
+    await api('/master/tenants/' + f.foreignTenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } }).catch(() => {});
+    const foreignList = await request('/store/sales/quick-items', { token: foreignToken });
+    assert.ok(foreignList.status === 403 || (foreignList.status === 200 && foreignList.data.length === 0));
+    assert.notEqual((await request('/store/sales/quick-items/' + pel.id, { method: 'DELETE', token: foreignToken })).status, 200);
+
+    await api('/store/sales/quick-items/' + pel.id, { method: 'DELETE' });
+    assert.deepEqual((await api('/store/sales/quick-items')).map(i => i.label), ['Conserto']);
+    assert.equal((await request('/store/sales/quick-items/' + pel.id, { method: 'DELETE' })).status, 404);
+  } finally { await f.cleanup(); }
+});

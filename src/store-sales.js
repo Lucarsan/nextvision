@@ -351,6 +351,28 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.status(201).json(r.rows[0]);
   }));
 
+  // ---------- Itens frequentes (botões de acesso rápido na venda) ----------
+  const QUICK_LIMIT = 60;
+  app.get('/api/store/sales/quick-items', ...guard, route(async (req, res) => {
+    const r = await q('SELECT id,label,price_cents FROM sale_quick_items WHERE tenant_id=$1 ORDER BY lower(label)', [tid(req)]);
+    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  }));
+  app.post('/api/store/sales/quick-items', ...guard, route(async (req, res) => {
+    const v = valid(z.object({ label: z.string().trim().min(1).max(60), price_cents: cents.nullable().optional() }).strict(), req, res); if (!v) return;
+    const count = (await q('SELECT count(*)::int n FROM sale_quick_items WHERE tenant_id=$1', [tid(req)])).rows[0].n;
+    if (count >= QUICK_LIMIT) return bad(res, 409, `Limite de ${QUICK_LIMIT} itens frequentes. Exclua algum antes de cadastrar outro.`);
+    const r = await q(`INSERT INTO sale_quick_items(tenant_id,label,price_cents,created_by) VALUES($1,$2,$3,$4)
+      ON CONFLICT (tenant_id, lower(label)) DO UPDATE SET price_cents=EXCLUDED.price_cents
+      RETURNING id,label,price_cents`, [tid(req), v.label, v.price_cents ?? null, req.user.id]);
+    await audit(req, 'create', 'sale_quick_item', r.rows[0].id); res.status(201).json(r.rows[0]);
+  }));
+  app.delete('/api/store/sales/quick-items/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const r = await q('DELETE FROM sale_quick_items WHERE id=$1 AND tenant_id=$2 RETURNING id', [req.params.id, tid(req)]);
+    if (!r.rowCount) return bad(res, 404, 'Item não encontrado');
+    await audit(req, 'delete', 'sale_quick_item', req.params.id); res.json({ ok: true });
+  }));
+
   // ---------- Importação de contatos (WhatsApp, agenda, planilha) ----------
   app.post('/api/store/customers/import-contacts', ...guard, route(async (req, res) => {
     const v = valid(z.object({

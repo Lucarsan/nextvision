@@ -896,12 +896,194 @@
     };
   }
 
+  // ---------------- Entrada rápida (cadastro e reposição em lote) ----------------
+  // Bipa uma unidade e informa quantas chegaram. Código conhecido → soma ao estoque; desconhecido → cadastra com o código.
+  // Digitar o nome sugere produtos já cadastrados (mesmo com estoque zerado ou excluídos), para não cadastrar de novo.
+  // Bipar de novo o mesmo produto enquanto o formulário está aberto soma 1 na quantidade.
+  let entryLog = []; // entradas feitas nesta tela desde que o painel abriu: { name, qty, cost_cents, isNew }
+  function entryTab(box) {
+    box.innerHTML = `<p class="nv-help">Bipe <b>uma</b> unidade e informe quantas chegaram. Produto novo é cadastrado com o código lido; produto já cadastrado só soma ao estoque. Sem código? Digite o nome: o sistema sugere os que já foram cadastrados.</p>
+      <label class="nv-field">Produto<input id="fsEnScan" placeholder="Bipe o produto ou digite o nome" aria-label="Bipe o produto ou digite o nome" autocomplete="off" enterkeyhint="go"></label><div id="fsEnSug" class="fs-results"></div>
+      <div id="fsEnForm"></div><div id="fsEnLog"></div>`;
+    const scan = $('fsEnScan'), sug = $('fsEnSug'), formBox = $('fsEnForm');
+    let timer, rows = [], current = null; // current: { product?, barcode } do formulário aberto
+    const drawLog = () => {
+      const el = $('fsEnLog'); if (!el) return;
+      if (!entryLog.length) { el.innerHTML = ''; return; }
+      const units = entryLog.reduce((s, e) => s + e.qty, 0), withCost = entryLog.filter(e => e.cost_cents != null), total = withCost.reduce((s, e) => s + e.qty * e.cost_cents, 0);
+      el.innerHTML = `<div class="fs-row" style="margin-top:14px"><b class="fs-grow">Nesta entrada: ${entryLog.length} produto(s) · ${units} unidade(s)${withCost.length ? ' · custo ' + brl(total) : ''}</b><button type="button" class="nv-button secondary fs-small" id="fsEnClear">Limpar lista</button></div>
+        <div class="nv-list">${entryLog.map(e => `<div class="fs-sale"><div><b>${esc(e.name)}</b>${e.isNew ? ' <span class="fs-tag-svc">novo</span>' : ''}<br><small>${e.cost_cents != null ? 'custo ' + brl(e.cost_cents) + ' cada' : 'sem custo'}${e.stock != null ? ' · estoque agora ' + e.stock : ''}</small></div><div class="fs-sale-end"><b>+${e.qty}</b></div></div>`).join('')}</div>`;
+      $('fsEnClear').onclick = () => { entryLog = []; drawLog(); scan.focus(); };
+    };
+    const done = (name, qty, cost, isNew, stock) => {
+      entryLog.unshift({ name, qty, cost_cents: cost, isNew, stock }); beep(true);
+      feedback(`${isNew ? 'Cadastrado' : 'Entrada'}: ${qty}× ${name}${stock != null ? ' · estoque ' + stock : ''}.`);
+      current = null; formBox.innerHTML = ''; sug.innerHTML = ''; scan.value = ''; drawLog(); scan.focus();
+    };
+    const cancel = () => { current = null; formBox.innerHTML = ''; scan.value = ''; sug.innerHTML = ''; scan.focus(); };
+    // Leitor bipado com um formulário aberto: o mesmo produto soma 1; outro produto pede para terminar antes.
+    const scannedWhileOpen = code => {
+      const qty = formBox.querySelector('[name=n]'), st = formBox.querySelector('[role=status]');
+      if (current && (current.barcode === code || current.product?.barcode === code) && qty) { qty.value = String((Number(qty.value) || 0) + 1); beep(true); if (st) st.textContent = ''; return true; }
+      if (st) st.textContent = `Termine este produto (botão verde) ou cancele antes de bipar outro. Código lido: ${code}`; beep(false); return true;
+    };
+    // Quantidade nunca tem 8+ caracteres: é o leitor bipando um produto com o cursor neste campo.
+    // O que estava digitado antes da rajada do leitor (teclas a menos de 60 ms) é a quantidade a manter.
+    const trackQty = input => {
+      let prev = input.value, stable = input.value, lastT = 0;
+      input.addEventListener('input', () => { const now = Date.now(); if (now - lastT > 60) stable = prev; prev = input.value; lastT = now; });
+      input.onkeydown = e => {
+        if (e.key !== 'Enter') return; const v = input.value.trim();
+        if (!(v.length >= 8 && /^[!-~]+$/.test(v) && /\d/.test(v))) return;
+        e.preventDefault();
+        const known = [current?.barcode, current?.product?.barcode].find(c => c && v.endsWith(c));
+        const code = known || (stable && v.startsWith(stable) ? v.slice(stable.length) : v);
+        const before = known ? v.slice(0, v.length - known.length) : stable;
+        input.value = /^-?\d{0,5}$/.test(before.trim()) ? before.trim() : ''; prev = stable = input.value;
+        scannedWhileOpen(known || code);
+      };
+    };
+    const moneyOrNull = (raw, label, st) => { const s = raw.trim(); if (!s) return null; const v = parseMoney(s); if (!Number.isFinite(v) || v < 0) { st.textContent = label + ' inválido.'; return undefined; } return v; };
+
+    // Produto já cadastrado: quantidade + custo (+ preço de venda, se mudou). Código bipado vai junto quando o produto não tinha.
+    const stockForm = (p, code = '') => {
+      current = { product: p, barcode: code || p.barcode || '' }; sug.innerHTML = '';
+      const attach = code && code !== p.barcode;
+      formBox.innerHTML = `<form id="fsEnStock" class="fs-picked" style="display:block;margin-top:10px" autocomplete="off">
+        <p><b>${esc(p.name)}</b>${p.ask_variant ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.barcode ? `<br><small>${esc(p.barcode)}</small>` : ''}</p>
+        ${attach ? `<p class="nv-help fs-warn">${p.barcode ? `Este produto tem o código <b>${esc(p.barcode)}</b>. Ao salvar, passa a usar <b>${esc(code)}</b>.` : `O código <b>${esc(code)}</b> será salvo neste produto: da próxima vez o leitor já reconhece.`}</p>` : ''}
+        ${p.ask_variant ? `<label class="nv-field">Modelo<input name="m" maxlength="80" required list="fsEnVars" placeholder="Ex.: Galaxy A12"></label><datalist id="fsEnVars"></datalist>` : ''}
+        <div class="fs-row"><label class="nv-field" style="flex:0 0 170px">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 30"></label>
+        <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label>
+        <label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" value="${centsText(p.price_cents)}"${basic() ? ' readonly' : ''}></label></div>
+        ${p.barcode || attach ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode && !p.ask_variant ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
+        <div class="fs-row"><button class="nv-button">Somar ao estoque</button><button type="button" class="nv-button secondary" id="fsEnCancel">Cancelar</button></div><p role="status" class="nv-help"></p></form>`;
+      const f = $('fsEnStock'), st = f.querySelector('[role=status]');
+      $('fsEnCancel').onclick = cancel; trackQty(f.elements.n);
+      if (p.ask_variant) { api(`/store/products/${p.id}/variants`).then(vs => { const dl = $('fsEnVars'); if (dl) dl.innerHTML = vs.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); f.elements.m.focus(); }
+      else f.elements.n.focus();
+      f.onsubmit = async e => {
+        e.preventDefault(); st.textContent = '';
+        const n = Number(f.elements.n.value.replace('−', '-').trim());
+        if (!Number.isInteger(n) || n === 0 || Math.abs(n) > 99999) { st.textContent = 'Informe a quantidade (número inteiro).'; return; }
+        const cost = moneyOrNull(f.elements.cost.value, 'Custo', st); if (cost === undefined) return;
+        const price = moneyOrNull(f.elements.price.value, 'Preço de venda', st); if (price === undefined) return;
+        const variant = p.ask_variant ? f.elements.m.value.trim() : ''; if (p.ask_variant && !variant) { st.textContent = 'Informe o modelo.'; return; }
+        const btn = f.querySelector('button'); btn.disabled = true;
+        try {
+          const patch = {}; if (attach) patch.barcode = code; if (price != null && price !== p.price_cents) patch.price_cents = price;
+          let prod = p; if (Object.keys(patch).length) prod = await api('/store/products/' + p.id, 'PATCH', patch);
+          const body = { add: n, unit_cost_cents: cost }; if (variant) body.variant_name = variant;
+          const r = await api(`/store/products/${p.id}/stock`, 'POST', body);
+          if (f.elements.print?.checked && n > 0) printLabels({ ...prod, ...r }, n);
+          done(p.name + (variant ? ' ' + variant : ''), n, cost, false, r.variant ? r.variant.stock_qty : r.stock_qty);
+        } catch (err) { st.textContent = err.message; btn.disabled = false; }
+      };
+    };
+
+    // Produto novo: o nome digitado sugere cadastros parecidos (evita duplicar); tocar num deles vira entrada nele.
+    const newForm = (init = {}) => {
+      current = { barcode: init.barcode || '' }; sug.innerHTML = '';
+      formBox.innerHTML = `<form id="fsEnNew" class="fs-picked" style="display:block;margin-top:10px" autocomplete="off">
+        <p><b>Produto novo</b>${init.barcode ? ` · código <b>${esc(init.barcode)}</b> ainda não cadastrado` : ''}</p>
+        <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(init.barcode || '')}" placeholder="Bipe a embalagem (opcional)"></label>
+        <div class="fs-sugg"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(init.name || '')}" placeholder="Ex.: Cabo USB Tipo-C 1m Kaidi"></label><div id="fsEnSame" class="fs-results"></div></div>
+        <div class="fs-row"><label class="nv-field" style="flex:0 0 170px">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 30"></label>
+        <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" placeholder="0,00"></label>
+        <label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required placeholder="0,00"></label></div>
+        <p class="nv-help" id="fsEnMargin"></p>
+        <label class="fs-check"><input type="checkbox" name="print"> Imprimir uma etiqueta para cada unidade</label>
+        <div class="fs-row"><button class="nv-button">Cadastrar e somar ao estoque</button><button type="button" class="nv-button secondary" id="fsEnCancel">Cancelar</button></div><p role="status" class="nv-help"></p></form>`;
+      const f = $('fsEnNew'), st = f.querySelector('[role=status]'), same = $('fsEnSame');
+      $('fsEnCancel').onclick = cancel; trackQty(f.elements.n);
+      f.elements.barcode.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); current.barcode = f.elements.barcode.value.trim(); f.elements.name.focus(); } };
+      f.elements.barcode.oninput = () => { current.barcode = f.elements.barcode.value.trim(); };
+      let t2;
+      f.elements.name.oninput = () => { clearTimeout(t2); t2 = setTimeout(async () => {
+        const t = f.elements.name.value.trim(); if (t.length < 3) { same.innerHTML = ''; return; }
+        let found = []; try { found = await api('/store/products?include_deleted=1&q=' + encodeURIComponent(t)); } catch { return; }
+        if (!same.isConnected || f.elements.name.value.trim() !== t) return;
+        found = found.slice(0, 6);
+        same.innerHTML = found.length ? `<small class="nv-help">Já cadastrado? Toque para dar entrada nele em vez de criar outro:</small>` + found.map((p, i) => `<button type="button" data-en-same="${i}"><b>${esc(p.name)}</b> <small>${p.active ? `estoque ${p.stock_qty ?? '—'} · ${brl(p.price_cents)}` : 'excluído · reativar'}${p.barcode ? ' · ' + esc(p.barcode) : ''}</small></button>`).join('') : '';
+        same.querySelectorAll('[data-en-same]').forEach(b => b.onclick = () => pick(found[Number(b.dataset.enSame)], f.elements.barcode.value.trim()));
+      }, 250); };
+      const showMargin = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value); const m = Number.isFinite(p) && Number.isFinite(c) ? margin(p, c) : null;
+        $('fsEnMargin').innerHTML = m == null ? '' : `Lucro por unidade: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b> (${m}% do preço)`; };
+      f.elements.price.oninput = showMargin; f.elements.cost.oninput = showMargin;
+      (init.barcode || !init.name ? (init.barcode ? f.elements.name : f.elements.barcode) : f.elements.n).focus();
+      if (init.name) f.elements.name.oninput();
+      f.onsubmit = async e => {
+        e.preventDefault(); st.textContent = '';
+        const name = f.elements.name.value.trim(), barcode = f.elements.barcode.value.trim(), n = Number(f.elements.n.value.trim());
+        if (name.length < 2) { st.textContent = 'Informe o nome do produto.'; return; }
+        if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
+        if (!Number.isInteger(n) || n < 0 || n > 99999) { st.textContent = 'Informe a quantidade que chegou (número inteiro).'; return; }
+        const price = parseMoney(f.elements.price.value); if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço de venda.'; return; }
+        const cost = moneyOrNull(f.elements.cost.value, 'Custo', st); if (cost === undefined) return;
+        const btn = f.querySelector('button'); btn.disabled = true;
+        try {
+          const p = await api('/store/products', 'POST', { name, barcode, price_cents: price, cost_cents: cost, stock_qty: n });
+          if (f.elements.print.checked && n > 0 && p.barcode) printLabels(p, n);
+          done(p.name, n, cost, true, p.stock_qty);
+        } catch (err) {
+          btn.disabled = false; st.textContent = err.message;
+          if (err.status === 409 && barcode) { try { const p = await api('/store/products/barcode/' + encodeURIComponent(barcode)); st.innerHTML = `Este código já é de <b>${esc(p.name)}</b>. <button type="button" class="nv-button secondary fs-small" id="fsEnUseIt">Dar entrada nele</button>`; $('fsEnUseIt').onclick = () => stockForm(p); } catch { /* fica a mensagem */ } }
+        }
+      };
+    };
+
+    // Escolha numa sugestão: excluído volta para a lista (com o cadastro antigo) e segue para a entrada.
+    const pick = async (p, code = '') => {
+      if (!p.active) {
+        if (!confirm(`"${p.name}" foi excluído antes. Reativar com o cadastro antigo e dar entrada?`)) return;
+        try { p = await api(`/store/products/${p.id}/restore`, 'POST', {}); } catch (err) { feedback(err.message, true); return; }
+      }
+      stockForm(p, code && code !== p.barcode ? code : '');
+    };
+    const handleCode = async code => {
+      if (current) { scannedWhileOpen(code); scan.value = ''; return; }
+      scan.value = ''; sug.innerHTML = '';
+      try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); beep(true); stockForm(p); }
+      catch (err) { if (err.status === 404) { beep(true); newForm({ barcode: code }); } else { feedback(err.message, true); beep(false); } }
+    };
+    const suggest = async () => {
+      const t = scan.value.trim(); if (t.length < 2) { sug.innerHTML = ''; return []; }
+      try { rows = (await api('/store/products?include_deleted=1&q=' + encodeURIComponent(t))).slice(0, 8); } catch (err) { sug.textContent = err.message; return []; }
+      if (scan.value.trim() !== t) return rows;
+      sug.innerHTML = rows.map((p, i) => `<button type="button" data-en-pick="${i}"><b>${esc(p.name)}</b> <small>${p.active ? `estoque ${p.ask_variant ? 'por modelo' : p.stock_qty ?? '—'} · ${brl(p.price_cents)}` : 'excluído · reativar'}${p.barcode ? ' · ' + esc(p.barcode) : ''}</small></button>`).join('')
+        + `<button type="button" id="fsEnNewName">+ Cadastrar produto novo: <b>${esc(t)}</b></button>`;
+      sug.querySelectorAll('[data-en-pick]').forEach(b => b.onclick = () => { scan.value = ''; pick(rows[Number(b.dataset.enPick)]); });
+      $('fsEnNewName').onclick = () => { scan.value = ''; newForm({ name: t }); };
+      return rows;
+    };
+    scan.oninput = () => { clearTimeout(timer); const t = scan.value.trim(); if (looksLikeCode(t) && /^\d{8,}$/.test(t)) { sug.innerHTML = ''; return; } timer = setTimeout(suggest, 220); };
+    scan.onkeydown = async e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault(); clearTimeout(timer); const t = scan.value.trim(); if (!t) return;
+      if (looksLikeCode(t)) return handleCode(t);
+      if (current) return;
+      const found = await suggest(); if (found.length === 1) { scan.value = ''; pick(found[0]); }
+    };
+    // Cursor fora dos campos (depois de clicar num botão): a próxima tecla, inclusive do leitor, volta para o campo certo.
+    const d = $('editorDialog');
+    if (!d.dataset.enKeys) {
+      d.dataset.enKeys = '1';
+      d.addEventListener('keydown', e => {
+        const s = $('fsEnScan'); if (!s || e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+        ($('fsEnForm')?.querySelector('[name=n]') || s).focus();
+      }, true);
+    }
+    drawLog(); scan.focus();
+  }
+
   async function productsDialog(term = '', tab = 'list') {
-    const tabs = [['list', 'Produtos'], ['parts', '🔧 Peças'], ['suppliers', '🏭 Fornecedores'], ['gen', '🏷 Gerar códigos'], ['restock', '🔁 Reposição']];
+    const tabs = [['list', 'Produtos'], ['entry', '📥 Entrada rápida'], ['parts', '🔧 Peças'], ['suppliers', '🏭 Fornecedores'], ['gen', '🏷 Gerar códigos'], ['restock', '🔁 Reposição']];
     openDialog(`${header('Estoque')}<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`);
     document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
     const box = $('fsPTab');
     if (tab === 'restock') return restockTab(box);
+    if (tab === 'entry') return entryTab(box);
     if (tab === 'parts') return partsTab(box, term);
     if (tab === 'suppliers') return suppliersTab(box);
     if (tab === 'gen') {
@@ -931,7 +1113,7 @@
       return;
     }
     box.innerHTML = `<div class="fs-row"><input id="fsProdSearch" class="fs-grow" type="search" placeholder="Bipe o código ou busque pelo nome" value="${esc(term)}" aria-label="Buscar produto"><button type="button" class="nv-button" id="fsProdNew">+ Novo produto</button></div>
-      <p class="nv-help">Produto com código de fábrica: "+ Novo produto" e bipe a embalagem. Produto sem código: aba "🏷 Gerar códigos".</p><div id="fsProdList" class="nv-list"></div>`;
+      <p class="nv-help">Chegou mercadoria? Use a aba <b>"📥 Entrada rápida"</b>: bipa uma unidade e informa a quantidade. Produto sem código: aba "🏷 Gerar códigos".</p><div id="fsProdList" class="nv-list"></div>`;
     const input = $('fsProdSearch'), list = $('fsProdList'); let timer, rows = [];
     const reopen = () => productsDialog(input.value.trim());
     const draw = async () => {

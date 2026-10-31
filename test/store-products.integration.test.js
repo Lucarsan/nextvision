@@ -72,3 +72,56 @@ test('produtos com código de barras e venda pelo leitor', { skip }, async () =>
     assert.equal(after.summary.by_method.cash, undefined);
   } finally { await f.cleanup(); }
 });
+
+test('custo, estoque, desconto e código gerado pelo sistema', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+
+    // Custo e estoque no cadastro e na edição; sem estoque informado = não controla.
+    const capa = await api('/store/products', { method: 'POST', body: { name: 'Capa', barcode: 'CAPA-1', price_cents: 3500, cost_cents: 1200, stock_qty: 10 } }, 201);
+    assert.deepEqual([capa.cost_cents, capa.stock_qty, capa.generated_barcode], [1200, 10, false]);
+    const livre = await api('/store/products', { method: 'POST', body: { name: 'Serviço avulso', price_cents: 1000 } }, 201);
+    assert.equal(livre.stock_qty, null);
+    const ed = await api('/store/products/' + capa.id, { method: 'PATCH', body: { cost_cents: 1300 } });
+    assert.deepEqual([ed.cost_cents, ed.stock_qty, ed.price_cents], [1300, 10, 3500], 'edição parcial não apaga o resto');
+    assert.equal((await api('/store/products/' + capa.id, { method: 'PATCH', body: { cost_cents: null } })).cost_cents, null);
+    await api('/store/products/' + capa.id, { method: 'PATCH', body: { cost_cents: 1300 } });
+
+    // Gerar código: EAN-13 interno começando com 2, estoque = quantidade de etiquetas.
+    const gen = await api('/store/products/generate', { method: 'POST', body: { name: 'Chaveiro', price_cents: 1500, cost_cents: 500, quantity: 5 } }, 201);
+    assert.match(gen.barcode, /^2\d{12}$/);
+    const d = gen.barcode.split('').map(Number); const sum = d.slice(0, 12).reduce((a, n, i) => a + n * (i % 2 ? 3 : 1), 0);
+    assert.equal(d[12], (10 - (sum % 10)) % 10, 'dígito verificador EAN-13');
+    assert.deepEqual([gen.stock_qty, gen.generated_barcode, gen.cost_cents], [5, true, 500]);
+    const gen2 = await api('/store/products/generate', { method: 'POST', body: { name: 'Chaveiro 2', price_cents: 1500, quantity: 1 } }, 201);
+    assert.notEqual(gen2.barcode, gen.barcode);
+    assert.equal((await api('/store/products/barcode/' + gen.barcode)).id, gen.id, 'o leitor reconhece o código gerado');
+    assert.equal((await request('/store/products/generate', { method: 'POST', body: { name: 'X', price_cents: 100, quantity: 1 } })).status, 400);
+
+    // Venda com desconto: baixa no estoque, guarda o custo do momento.
+    const r = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: capa.id, quantity: 2 }, { product_id: gen.id, quantity: 3 }, { product_id: livre.id, quantity: 1 }], discount_cents: 500 } }, 201);
+    assert.equal(r.sale.total_cents, 7000 + 4500 + 1000 - 500);
+    assert.equal(r.sale.discount_cents, 500);
+    const stock = async id => (await api('/store/products?q=' + encodeURIComponent((await f.db.query('SELECT name FROM products WHERE id=$1', [id])).rows[0].name))).find(p => p.id === id).stock_qty;
+    assert.equal(await stock(capa.id), 8); assert.equal(await stock(gen.id), 2); assert.equal(await stock(livre.id), null);
+    const costs = (await f.db.query('SELECT name,unit_cost_cents FROM sale_items WHERE sale_id=$1 ORDER BY position', [r.sale.id])).rows;
+    assert.deepEqual(costs.map(x => x.unit_cost_cents), [1300, 500, null]);
+    assert.equal((await api('/store/sales/' + r.sale.id + '/receipt')).discount_cents, 500);
+
+    // Desconto inválido: maior ou igual aos itens, ou sem produtos.
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: capa.id, quantity: 1 }], discount_cents: 3500 } })).status, 400);
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', total_cents: 1000, discount_cents: 100 } })).status, 400);
+
+    // Cancelar devolve ao estoque.
+    await api('/store/sales/' + r.sale.id + '/cancel', { method: 'POST', body: { reason: 'teste de estoque' } });
+    assert.equal(await stock(capa.id), 10); assert.equal(await stock(gen.id), 5);
+
+    // Entrada de estoque: soma; produto sem controle passa a controlar.
+    assert.equal((await api('/store/products/' + gen.id + '/stock', { method: 'POST', body: { add: 10 } })).stock_qty, 15);
+    assert.equal((await api('/store/products/' + livre.id + '/stock', { method: 'POST', body: { add: 3 } })).stock_qty, 3);
+    assert.equal((await request('/store/products/' + gen.id + '/stock', { method: 'POST', body: { add: 0 } })).status, 400);
+  } finally { await f.cleanup(); }
+});

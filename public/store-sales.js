@@ -303,14 +303,14 @@
     if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     const body = cart.length
-      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
+      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity })), discount_cents: Math.min(discountCents(cart.reduce((a, i) => a + i.price_cents * i.quantity, 0)), Math.max(0, cart.reduce((a, i) => a + i.price_cents * i.quantity, 0) - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
       : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cart = []; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); cart = []; cartDiscount = ''; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -360,24 +360,42 @@
   function addToCart(p, quantity = 1) {
     if (quickCart.length) { feedback('Esta venda já tem itens frequentes (valor digitado). Registre-a ou clique em "Limpar" nos itens frequentes antes de bipar produtos.', true); beep(false); return false; }
     const item = cart.find(i => i.id === p.id);
-    if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents }); }
-    else cart.push({ id: p.id, name: p.name, barcode: p.barcode, price_cents: p.price_cents, quantity });
+    if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: p.stock_qty ?? null }); }
+    else cart.push({ id: p.id, name: p.name, barcode: p.barcode, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: p.stock_qty ?? null, quantity });
     drawCart(p.id); return true;
   }
 
+  // Desconto: em R$ ("5,00") ou em % ("10%") sobre a soma dos produtos.
+  let cartDiscount = '', showCost = false;
+  const discountCents = sub => {
+    const t = String(cartDiscount || '').trim(); if (!t) return 0;
+    const v = t.endsWith('%') ? Math.round(sub * (parseFloat(t.replace(',', '.')) || 0) / 100) : parseMoney(t);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
   function drawCart(flashId) {
     const out = $('fsCart'), f = $('fsSale'); if (!out || !f) return;
-    const total = cart.reduce((a, i) => a + i.price_cents * i.quantity, 0);
-    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small>${brl(i.price_cents)} cada${i.barcode ? ' · ' + esc(i.barcode) : ''}</small></div>
+    const sub = cart.reduce((a, i) => a + i.price_cents * i.quantity, 0);
+    const disc = Math.min(discountCents(sub), Math.max(0, sub - 1)), total = sub - disc;
+    const knownCost = cart.every(i => i.cost_cents != null), cost = cart.reduce((a, i) => a + (i.cost_cents || 0) * i.quantity, 0);
+    const below = knownCost && cost > 0 && total < cost;
+    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small>${brl(i.price_cents)} cada${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small>${showCost ? `<br><small class="fs-costline">custo ${i.cost_cents != null ? brl(i.cost_cents) + ' cada' : 'não informado'}</small>` : ''}</div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
       <b class="fs-item-total">${brl(i.price_cents * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
-      <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(total)}</b></div></div>` : '';
+      <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
+      <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label>
+        <button type="button" class="fs-link" id="fsCostToggle" aria-pressed="${showCost}">${showCost ? '🙈 Esconder custo' : '👁 Ver custo'}</button></div>
+      ${showCost ? `<div class="fs-costsum ${below ? 'fs-below' : ''}">${knownCost ? `Custo ${brl(cost)} · ${below ? `<b>abaixo do custo em ${brl(cost - total)}</b>` : `lucro ${brl(total - cost)}${total ? ` (${Math.round(100 * (total - cost) / total)}%)` : ''} · desconto máximo sem prejuízo: <b>${brl(Math.max(0, sub - cost))}</b>`}` : 'Algum produto está sem preço de custo cadastrado.'}</div>` : (below ? '<div class="fs-costsum fs-below"><b>Atenção: total abaixo do custo.</b></div>' : '')}
+      ${disc ? `<div class="fs-pcart-total"><span>Total com desconto</span><b>${brl(total)}</b></div>` : ''}</div>` : '';
     out.querySelectorAll('[data-fs-inc]').forEach(b => b.onclick = () => { cart[b.dataset.fsInc].quantity++; drawCart(); });
     out.querySelectorAll('[data-fs-dec]').forEach(b => b.onclick = () => { const i = cart[b.dataset.fsDec]; if (i.quantity > 1) i.quantity--; else cart.splice(b.dataset.fsDec, 1); drawCart(); });
     out.querySelectorAll('[data-fs-del]').forEach(b => b.onclick = () => { cart.splice(b.dataset.fsDel, 1); drawCart(); });
-    // Com produtos, o valor é a soma dos itens (não editável); sem produtos, volta a ser digitado.
+    if ($('fsDiscount')) $('fsDiscount').onchange = e => { cartDiscount = e.target.value.trim(); drawCart(); };
+    if ($('fsDiscount')) $('fsDiscount').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
+    if ($('fsCostToggle')) $('fsCostToggle').onclick = () => { showCost = !showCost; drawCart(); };
+    if (!cart.length) cartDiscount = '';
+    // Com produtos, o valor é a soma dos itens menos o desconto (não editável); sem produtos, volta a ser digitado.
     const input = f.elements.total, auto = input.dataset.auto === '1';
-    if (cart.length) { input.value = centsText(total); input.readOnly = true; input.dataset.auto = '1'; $('fsTotalLabel').textContent = 'Valor (soma dos produtos)'; }
+    if (cart.length) { input.value = centsText(total); input.readOnly = true; input.dataset.auto = '1'; $('fsTotalLabel').textContent = disc ? 'Valor (produtos − desconto)' : 'Valor (soma dos produtos)'; }
     else if (auto) { input.value = ''; input.readOnly = false; input.dataset.auto = ''; $('fsTotalLabel').textContent = 'Valor'; }
     f.dispatchEvent(new Event('input')); drawQuick();
   }
@@ -418,46 +436,158 @@
     };
   }
 
+  const margin = (price, cost) => price > 0 && cost != null ? Math.round(100 * (price - cost) / price) : null;
   function productDialog(initial = {}, onSaved, forSale = false) {
     const editing = !!initial.id;
     openDialog(`${header(editing ? 'Editar produto' : 'Cadastrar produto')}<form id="fsProd" autocomplete="off">
       ${!editing && initial.barcode ? `<p class="nv-help fs-warn">O código <b>${esc(initial.barcode)}</b> ainda não está cadastrado. Informe nome e preço: o produto entra na venda e, nas próximas vezes, o leitor já reconhece.</p>` : ''}
-      <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(initial.barcode || '')}" placeholder="Bipe o produto com o leitor (opcional)"></label>
+      <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(initial.barcode || '')}" placeholder="Bipe o produto com o leitor (opcional)"${initial.generated_barcode ? ' readonly' : ''}></label>
+      ${initial.generated_barcode ? '<small class="nv-help">Código gerado pelo sistema (não muda, para as etiquetas impressas continuarem valendo).</small>' : ''}
       <label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(initial.name || '')}" placeholder="Ex.: Película 3D Galaxy A12"></label>
-      <label class="nv-field">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
+      <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
+      <label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label></div>
+      <p class="nv-help" id="fsMargin"></p>
+      <label class="nv-field">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
       <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsProd'), st = f.querySelector('[role=status]');
+    const showMargin = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value); const m = Number.isFinite(p) && Number.isFinite(c) ? margin(p, c) : null;
+      $('fsMargin').innerHTML = m == null ? 'Com o custo, o caixa mostra até quanto dá para descontar sem prejuízo.' : `Lucro por unidade: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b> (${m}% do preço)`; };
+    f.oninput = showMargin; showMargin();
     // O leitor manda Enter no fim: no campo do código, Enter só passa para o próximo campo.
     f.elements.barcode.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); f.elements.name.focus(); } };
     (initial.barcode && !initial.name ? f.elements.name : f.elements.barcode.value ? f.elements.name : f.elements.barcode).focus();
     f.onsubmit = async e => {
       e.preventDefault();
       const price = parseMoney(f.elements.price.value), name = f.elements.name.value.trim(), barcode = f.elements.barcode.value.trim();
+      const costRaw = f.elements.cost.value.trim(), cost = costRaw ? parseMoney(costRaw) : null, stockRaw = f.elements.stock.value.trim(), stock = stockRaw === '' ? null : Number(stockRaw);
       if (name.length < 2) { st.textContent = 'Informe o nome do produto.'; return; }
-      if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço.'; return; }
+      if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço de venda.'; return; }
+      if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Preço de custo inválido.'; return; }
+      if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Estoque: use um número inteiro (ou deixe vazio).'; return; }
       if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
       try {
-        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', { name, barcode, price_cents: price });
+        const body = { name, price_cents: price, cost_cents: cost, stock_qty: stock }; if (!initial.generated_barcode) body.barcode = barcode;
+        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', body);
         $('editorDialog').close(); feedback(`Produto ${editing ? 'atualizado' : 'cadastrado'}: ${p.name} · ${brl(p.price_cents)}.`);
         if (onSaved) onSaved(p);
       } catch (err) { st.textContent = err.message; }
     };
   }
 
-  async function productsDialog(term = '') {
-    openDialog(`${header('Produtos')}<div class="fs-row"><input id="fsProdSearch" class="fs-grow" type="search" placeholder="Bipe o código ou busque pelo nome" value="${esc(term)}" aria-label="Buscar produto"><button type="button" class="nv-button" id="fsProdNew">+ Novo produto</button></div>
-      <p class="nv-help">Para cadastrar rápido: clique em "+ Novo produto" e bipe a embalagem. Na venda, um código que não está cadastrado abre este cadastro automaticamente.</p><div id="fsProdList" class="nv-list"></div>`);
+  // ---------------- Código de barras e etiquetas ----------------
+  // EAN-13 para códigos de 13 dígitos válidos (os gerados pelo sistema); Code 128 para os demais.
+  const EAN_L = ['0001101', '0011001', '0010011', '0111101', '0100011', '0110001', '0101111', '0111011', '0110111', '0001011'];
+  const EAN_G = ['0100111', '0110011', '0011011', '0100001', '0011101', '0111001', '0000101', '0010001', '0001001', '0010111'];
+  const EAN_R = ['1110010', '1100110', '1101100', '1000010', '1011100', '1001110', '1010000', '1000100', '1001000', '1110100'];
+  const EAN_P = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
+  const C128 = '212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112'.split(' ');
+  const validEan13 = c => /^\d{13}$/.test(c) && Number(c[12]) === (10 - (c.slice(0, 12).split('').reduce((a, d, i) => a + Number(d) * (i % 2 ? 3 : 1), 0) % 10)) % 10;
+  function barcodeModules(code) {
+    if (validEan13(code)) {
+      const d = code.split('').map(Number), par = EAN_P[d[0]];
+      let bits = '101'; for (let i = 1; i <= 6; i++) bits += (par[i - 1] === 'L' ? EAN_L : EAN_G)[d[i]];
+      bits += '01010'; for (let i = 7; i <= 12; i++) bits += EAN_R[d[i]]; bits += '101';
+      return { bits, ean: true };
+    }
+    const vals = [104, ...[...code].map(ch => ch.charCodeAt(0) - 32)];
+    vals.push(vals.reduce((a, v, i) => a + v * (i || 1), 0) % 103, 106);
+    let bits = ''; for (const v of vals) [...C128[v]].forEach((w, i) => { bits += (i % 2 ? '0' : '1').repeat(Number(w)); });
+    return { bits, ean: false };
+  }
+  function barcodeSvg(code, height = 50) {
+    const { bits, ean } = barcodeModules(code), quiet = ean ? 9 : 10, w = bits.length + quiet * 2;
+    let rects = '', x = 0;
+    while (x < bits.length) { if (bits[x] === '1') { let e = x; while (bits[e] === '1') e++; rects += `<rect x="${x + quiet}" y="0" width="${e - x}" height="${height}"/>`; x = e; } else x++; }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${height}" preserveAspectRatio="none" shape-rendering="crispEdges" class="bc">${rects}</svg>`;
+  }
+  // Imprime etiquetas: folha A4 (3 colunas) ou impressora de etiquetas (uma por página, 50×30 mm).
+  function printLabels(p, count) {
+    if (!p.barcode) { feedback('Este produto não tem código de barras.', true); return; }
+    const n = Math.max(1, Math.min(500, count | 0));
+    const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir as etiquetas.', true); return; }
+    const label = `<div class="lb"><div class="nm">${esc(p.name)}</div><div class="pr">${brl(p.price_cents)}</div>${barcodeSvg(p.barcode)}<div class="cd">${esc(p.barcode)}</div></div>`;
+    w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Etiquetas · ${esc(p.name)}</title><style id="pg"></style><style>
+      *{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}
+      .bar{padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #ddd;font-size:14px}.bar button{font:inherit;padding:8px 14px;cursor:pointer}
+      .lb{display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;text-align:center;break-inside:avoid;page-break-inside:avoid}
+      .nm{font-size:10pt;font-weight:700;line-height:1.15;max-height:2.3em;overflow:hidden;width:100%}.pr{font-size:13pt;font-weight:700;margin:1mm 0}.bc{width:100%;height:12mm;fill:#000}.cd{font-size:8pt;letter-spacing:.5px}
+      body.a4 .sheet{display:grid;grid-template-columns:repeat(3,1fr);gap:0}body.a4 .lb{height:33.9mm;padding:2mm 4mm;border:1px dashed #ccc}
+      body.th .lb{width:50mm;height:30mm;padding:1.5mm 2mm;page-break-after:always}body.th .bc{height:10mm}
+      @media print{.bar{display:none}body.a4 .lb{border-color:transparent}}
+    </style></head><body class="a4"><div class="bar"><b>${n} etiqueta(s) · ${esc(p.name)}</b>
+      <label><input type="radio" name="fmt" value="a4" checked> Folha A4 (3 por linha)</label><label><input type="radio" name="fmt" value="th"> Impressora de etiquetas 50×30 mm</label>
+      <button onclick="print()">🖨 Imprimir</button></div><div class="sheet">${label.repeat(n)}</div>
+      <script>const pg=document.getElementById('pg');const set=v=>{document.body.className=v;pg.textContent=v==='th'?'@page{size:50mm 30mm;margin:0}':'@page{size:A4;margin:10mm 7mm}'};document.querySelectorAll('[name=fmt]').forEach(r=>r.onchange=()=>set(r.value));set('a4');<\/script></body></html>`);
+    w.document.close();
+  }
+  function labelsDialog(p, defaultQty, title) {
+    openDialog(`${header(title || 'Imprimir etiquetas')}<form id="fsLab"><p class="nv-help"><b>${esc(p.name)}</b> · ${brl(p.price_cents)} · código ${esc(p.barcode)}</p>
+      <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label><button class="nv-button">🏷 Abrir etiquetas para imprimir</button></form>`);
+    $('fsLab').onsubmit = e => { e.preventDefault(); printLabels(p, Number(e.currentTarget.elements.n.value) || 1); };
+  }
+  function stockDialog(p, onDone) {
+    openDialog(`${header('Entrada de estoque')}<form id="fsStock"><p class="nv-help"><b>${esc(p.name)}</b> · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b></p>
+      <label class="nv-field">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label><small class="nv-help">Para corrigir para menos, use número negativo (ex.: −2).</small>
+      ${p.barcode ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
+      <button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
+    const f = $('fsStock'); f.elements.n.focus();
+    f.onsubmit = async e => {
+      e.preventDefault(); const n = Number(f.elements.n.value.replace('−', '-').trim());
+      if (!Number.isInteger(n) || n === 0) { f.querySelector('[role=status]').textContent = 'Informe a quantidade (número inteiro).'; return; }
+      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', { add: n }); feedback(`Estoque de ${r.name}: ${r.stock_qty}.`); if (f.elements.print?.checked && n > 0) printLabels(r, n); $('editorDialog').close(); onDone?.(); }
+      catch (err) { f.querySelector('[role=status]').textContent = err.message; }
+    };
+  }
+
+  async function productsDialog(term = '', tab = 'list') {
+    openDialog(`${header('Produtos')}<div class="fs-tabs" role="tablist"><button type="button" role="tab" data-ptab="list" aria-selected="${tab === 'list'}">Produtos</button><button type="button" role="tab" data-ptab="gen" aria-selected="${tab === 'gen'}">🏷 Gerar códigos</button></div><div id="fsPTab"></div>`);
+    document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
+    const box = $('fsPTab');
+    if (tab === 'gen') {
+      box.innerHTML = `<p class="nv-help">Para produto <b>sem código de barras</b>: o sistema cria o código, já cadastra o produto com o estoque e abre as etiquetas para imprimir (uma por unidade). Depois é só colar no produto: o leitor reconhece na venda e o estoque baixa sozinho.</p>
+        <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="Ex.: Capinha Galaxy A12 transparente"></label>
+        <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required placeholder="0,00"></label><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" placeholder="0,00"></label><label class="nv-field" style="flex:0 0 120px">Quantidade<input name="qty" inputmode="numeric" required value="1"></label></div>
+        <p class="nv-help" id="fsGenInfo"></p><button class="nv-button">Gerar código, cadastrar e imprimir etiquetas</button><p role="status" class="nv-help"></p></form>`;
+      const f = $('fsGen'), st = f.querySelector('[role=status]');
+      f.oninput = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value), q = Number(f.elements.qty.value);
+        $('fsGenInfo').innerHTML = [Number.isInteger(q) && q > 0 ? `${q} etiqueta(s) e estoque inicial de ${q}` : '', Number.isFinite(p) && Number.isFinite(c) ? `lucro por unidade ${brl(p - c)} (${margin(p, c)}%)` : ''].filter(Boolean).join(' · '); };
+      f.oninput(); f.elements.name.focus();
+      f.onsubmit = async e => {
+        e.preventDefault();
+        const name = f.elements.name.value.trim(), price = parseMoney(f.elements.price.value), costRaw = f.elements.cost.value.trim(), cost = costRaw ? parseMoney(costRaw) : null, qty = Number(f.elements.qty.value);
+        if (name.length < 2) { st.textContent = 'Informe o nome do produto.'; return; }
+        if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço de venda.'; return; }
+        if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Preço de custo inválido.'; return; }
+        if (!Number.isInteger(qty) || qty < 1 || qty > 500) { st.textContent = 'Quantidade de 1 a 500.'; return; }
+        try {
+          const p = await api('/store/products/generate', 'POST', { name, price_cents: price, cost_cents: cost, quantity: qty });
+          printLabels(p, qty);
+          box.innerHTML = `<div class="fs-last"><div><b>${esc(p.name)}</b> cadastrado com o código <b>${esc(p.barcode)}</b> e estoque ${p.stock_qty}.<br><small>As etiquetas abriram em outra janela. Se não abriram, libere pop-ups e use o botão.</small></div>
+            <div class="fs-actions"><button type="button" class="nv-button" id="fsGenPrint">🏷 Imprimir etiquetas de novo</button><button type="button" class="nv-button secondary" id="fsGenMore">Gerar outro produto</button></div></div>`;
+          $('fsGenPrint').onclick = () => printLabels(p, qty); $('fsGenMore').onclick = () => productsDialog('', 'gen');
+        } catch (err) { st.textContent = err.message; }
+      };
+      return;
+    }
+    box.innerHTML = `<div class="fs-row"><input id="fsProdSearch" class="fs-grow" type="search" placeholder="Bipe o código ou busque pelo nome" value="${esc(term)}" aria-label="Buscar produto"><button type="button" class="nv-button" id="fsProdNew">+ Novo produto</button></div>
+      <p class="nv-help">Produto com código de fábrica: "+ Novo produto" e bipe a embalagem. Produto sem código: aba "🏷 Gerar códigos".</p><div id="fsProdList" class="nv-list"></div>`;
     const input = $('fsProdSearch'), list = $('fsProdList'); let timer, rows = [];
     const reopen = () => productsDialog(input.value.trim());
     const draw = async () => {
       const t = input.value.trim();
       try { rows = await api('/store/products' + (t ? '?q=' + encodeURIComponent(t) : '')); } catch (err) { list.textContent = err.message; return; }
       if (!list.isConnected) return;
-      list.innerHTML = rows.map(p => `<div class="fs-sale"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) : 'sem código de barras'}</small></div><div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`).join('')
+      list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
+        return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
+          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b></small></div>
+          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">🏷 Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
-      list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(rows.find(p => p.id === b.dataset.fsEdit), reopen));
+      const byId = id => rows.find(p => p.id === id);
+      list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(byId(b.dataset.fsEdit), reopen));
+      list.querySelectorAll('[data-fs-stock]').forEach(b => b.onclick = () => stockDialog(byId(b.dataset.fsStock), reopen));
+      list.querySelectorAll('[data-fs-lab]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsLab); labelsDialog(p, Math.max(1, p.stock_qty || 1)); });
       list.querySelectorAll('[data-fs-pdel]').forEach(b => b.onclick = async () => {
-        const p = rows.find(x => x.id === b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
+        const p = byId(b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
         try { await api('/store/products/' + p.id, 'DELETE'); cart = cart.filter(i => i.id !== p.id); drawCart(); draw(); } catch (err) { feedback(err.message, true); }
       });
       if ($('fsProdNewCode')) $('fsProdNewCode').onclick = () => productDialog({ barcode: t }, reopen);
@@ -568,6 +698,7 @@
       ${r.customer_name ? `<div>Cliente: ${esc(r.customer_name)}</div>` : ''}
       ${r.order_number ? `<div>Pedido nº ${esc(r.order_number)}</div>` : ''}
       <div class="hr"></div>${items}<div class="hr"></div>
+      ${r.discount_cents ? `<div class="row"><span>Subtotal</span><span>${brl(r.total_cents + r.discount_cents)}</span></div><div class="row"><span>Desconto</span><span>− ${brl(r.discount_cents)}</span></div>` : ''}
       <div class="row tot"><span>TOTAL</span><span>${brl(r.total_cents)}</span></div>
       <div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>
       ${extra.received_cents != null ? `<div class="row"><span>Valor recebido</span><span>${brl(extra.received_cents)}</span></div><div class="row"><span>Troco</span><span>${brl(extra.change_cents)}</span></div>` : ''}
@@ -748,7 +879,7 @@
   .fs-private .fs-lastclose b{color:transparent!important}
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
-  .fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

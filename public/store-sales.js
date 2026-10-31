@@ -23,13 +23,16 @@
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
   const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
   let config = null, saleCustomer = null, lastSale = null, quickItems = null, quickCart = [];
+  let cart = []; // [{ id, name, barcode, price_cents, quantity }] — produtos lidos pelo leitor na venda em montagem
 
   async function api(path, method = 'GET', body) {
     const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Error(data.error || 'Não foi possível concluir a operação');
+    if (!r.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { status: r.status });
     return data;
   }
+  const centsText = c => (Number(c || 0) / 100).toFixed(2).replace('.', ',');
+  const looksLikeCode = v => /^[!-~]{3,64}$/.test(v) && /\d/.test(v);
   // "12,50", "1.234,56" ou "12.5" → centavos
   function parseMoney(v) {
     let s = String(v || '').trim().replace(/[^\d.,]/g, '');
@@ -94,13 +97,16 @@
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
         <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
-        <div class="fs-actions"><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></section>
+        <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Produtos</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></section>
       <div class="fs-grid">
         <section class="nv-card"><h2>Nova venda</h2><form id="fsSale" autocomplete="off">
+          <div class="fs-scan"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
+            <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
+            <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
           <div class="fs-quick" id="fsQuick"></div>
-          <div class="fs-row"><label class="nv-field">Valor<input name="total" inputmode="decimal" placeholder="0,00" required></label>
+          <div class="fs-row"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00" required></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, conserto"></label></div>
           <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
           <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
@@ -108,7 +114,7 @@
           <div id="fsLast"></div></section>
         <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
           <div class="nv-list">${data.sales.map(x => `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
-          <p class="nv-help">Troco inicial: ${brl(sum.opening_cents)}</p></section>
+          <p class="nv-help fs-opening">Troco inicial: ${brl(sum.opening_cents)}</p></section>
       </div>
       <section class="nv-card fs-moves"><div class="nv-heading"><h2>Saídas, sangrias e suprimentos</h2><button class="nv-button secondary fs-small" id="fsExpense2">− Lançar saída</button></div>
         ${Object.keys(sum.expenses_by_method).length ? `<div class="fs-methods-sum">${Object.entries(sum.expenses_by_method).map(([k, v]) => `<span class="fs-pill fs-pill-out">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</div>` : ''}
@@ -123,7 +129,9 @@
       const d = got - total;
       out.innerHTML = d >= 0 ? `Troco: <b>${brl(d)}</b>` : `<span class="fs-neg">Faltam ${brl(-d)}</span>`;
     };
-    sf.addEventListener('input', updChange); sf.addEventListener('change', updChange); updChange();
+    sf.addEventListener('input', updChange); sf.addEventListener('change', updChange);
+    setupScanInput(); drawCart(); updChange(); setupEye(box);
+    $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
     quickCart = []; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
@@ -148,8 +156,9 @@
     const diff = l && l.counted_cash_cents != null ? l.counted_cash_cents - l.expected_cash_cents : null;
     box.innerHTML = `<section class="nv-card fs-open"><h2>Caixa fechado</h2><p class="nv-help">Abra o caixa para registrar as vendas do dia. Cada venda fica ligada a um cliente e soma no cartão fidelidade.</p>
       <form id="fsOpen" class="fs-row"><label class="nv-field">Troco inicial na gaveta<input name="opening" inputmode="decimal" placeholder="0,00"></label><button class="nv-button">Abrir caixa</button></form><p role="status" class="nv-help" id="fsOpenStatus"></p>
-      ${l ? `<p class="nv-help">Último fechamento: ${dmy(l.closed_at)} às ${hhmm(l.closed_at)}${l.closed_by_name ? ' por ' + esc(l.closed_by_name) : ''} · esperado ${brl(l.expected_cash_cents)} · contado ${brl(l.counted_cash_cents)}${diff ? ` · <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">diferença ${brl(diff)}</b>` : ' · sem diferença'}</p>` : ''}
-      <div class="fs-actions">${l ? '<button class="nv-button secondary" id="fsPrintLast">🖨 Relatório do último caixa</button>' : ''}<button class="nv-button secondary" id="fsHistory">Histórico de caixas</button></div></section>`;
+      ${l ? `<p class="nv-help fs-lastclose">Último fechamento: ${dmy(l.closed_at)} às ${hhmm(l.closed_at)}${l.closed_by_name ? ' por ' + esc(l.closed_by_name) : ''} · esperado ${brl(l.expected_cash_cents)} · contado ${brl(l.counted_cash_cents)}${diff ? ` · <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">diferença ${brl(diff)}</b>` : ' · sem diferença'}</p>` : ''}
+      <div class="fs-actions">${l ? '<button class="nv-button secondary" id="fsPrintLast">🖨 Relatório do último caixa</button>' : ''}<button class="nv-button secondary" id="fsHistory">Histórico de caixas</button><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Produtos</button></div></section>`;
+    $('fsProducts').onclick = () => productsDialog(); setupEye(box);
     $('fsOpen').onsubmit = async e => {
       e.preventDefault(); const raw = e.currentTarget.elements.opening.value; const v = raw.trim() ? parseMoney(raw) : 0;
       if (!Number.isFinite(v) || v < 0) { $('fsOpenStatus').textContent = 'Valor inválido.'; return; }
@@ -214,9 +223,9 @@
     const box = $('fsQuick'); if (!box) return;
     const items = await loadQuick(); if (!box.isConnected) return;
     const chips = items.map(i => `<button type="button" class="fs-chip" data-fs-quick="${i.id}"><b>${esc(i.label)}</b>${i.price_cents != null ? `<small>${brl(i.price_cents)}</small>` : ''}</button>`).join('');
-    const cart = quickCart.length ? `<div class="fs-cart"><span>${esc(cartText())}</span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar</button></div>` : '';
+    const quickSummary = quickCart.length ? `<div class="fs-cart"><span>${esc(cartText())}</span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar</button></div>` : '';
     box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? '⚙ Editar' : '+ Cadastrar item frequente'}</button></div>
-      ${items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (película, capa, carregador…) para lançar com um toque.</p>'}${cart}`;
+      ${cart.length ? '<p class="nv-help fs-quick-empty">Com produtos lidos pelo leitor, o valor é a soma dos produtos. Itens frequentes ficam para vendas sem leitor.</p>' : items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (película, capa, carregador…) para lançar com um toque.</p>'}${quickSummary}`;
     box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
     $('fsQuickManage').onclick = manageQuick;
     if ($('fsQuickClear')) $('fsQuickClear').onclick = () => {
@@ -229,6 +238,7 @@
   }
   function addQuick(item) {
     const f = $('fsSale'); if (!item || !f) return;
+    if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "📦 Produtos".', true); return; }
     const before = cartText(), desc = f.elements.description.value.trim();
     const hit = quickCart.find(x => x.id === item.id);
     if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, qty: 1 });
@@ -271,13 +281,16 @@
     if (!Number.isFinite(total) || total <= 0) { status.textContent = 'Informe o valor da venda.'; return; }
     const received = f.elements.method.value === 'cash' && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
     if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
-    const body = { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
+    // Com produtos, o servidor calcula o total pelos preços cadastrados.
+    const body = cart.length
+      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
+      : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); lastSale.change_cents = received != null ? received - total : null; feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+    try { lastSale = await api('/store/sales', 'POST', body); cart = []; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null; feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function drawLast() {
@@ -289,6 +302,175 @@
     if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
   }
+
+  // ---------------- Olho: esconder/mostrar valores do caixa ----------------
+  // Começa escondido para o cliente no balcão não ver quanto entrou. A escolha fica salva neste
+  // navegador. A venda em montagem (produtos, total, troco) continua sempre visível.
+  const EYE_KEY = 'fp_cash_values_hidden';
+  let eyeMemory = true; // usado se o navegador bloquear o armazenamento
+  const valuesHidden = () => { try { const v = localStorage.getItem(EYE_KEY); return v == null ? eyeMemory : v !== '0'; } catch { return eyeMemory; } };
+  function setupEye(box) {
+    const btn = $('fsEye'); if (!btn) return;
+    const apply = () => {
+      const hidden = valuesHidden(); box.classList.toggle('fs-private', hidden);
+      btn.innerHTML = hidden ? '👁 Mostrar valores' : '🙈 Esconder valores';
+      btn.setAttribute('aria-pressed', String(!hidden)); btn.title = hidden ? 'Mostrar os valores do caixa' : 'Esconder os valores do caixa';
+    };
+    btn.onclick = () => { eyeMemory = !valuesHidden(); try { localStorage.setItem(EYE_KEY, eyeMemory ? '1' : '0'); } catch { /* fica só na memória */ } apply(); };
+    apply();
+  }
+
+  // ---------------- Produtos e leitor de código de barras ----------------
+  // O leitor USB funciona como teclado: "digita" o código muito rápido e aperta Enter.
+  let audioCtx;
+  function beep(ok) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = ok ? 1250 : 320; g.gain.value = 0.06; o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + (ok ? 0.07 : 0.3));
+    } catch { /* sem som não impede a venda */ }
+  }
+
+  function addToCart(p, quantity = 1) {
+    if (quickCart.length) { feedback('Esta venda já tem itens frequentes (valor digitado). Registre-a ou clique em "Limpar" nos itens frequentes antes de bipar produtos.', true); beep(false); return false; }
+    const item = cart.find(i => i.id === p.id);
+    if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents }); }
+    else cart.push({ id: p.id, name: p.name, barcode: p.barcode, price_cents: p.price_cents, quantity });
+    drawCart(p.id); return true;
+  }
+
+  function drawCart(flashId) {
+    const out = $('fsCart'), f = $('fsSale'); if (!out || !f) return;
+    const total = cart.reduce((a, i) => a + i.price_cents * i.quantity, 0);
+    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small>${brl(i.price_cents)} cada${i.barcode ? ' · ' + esc(i.barcode) : ''}</small></div>
+      <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
+      <b class="fs-item-total">${brl(i.price_cents * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
+      <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(total)}</b></div></div>` : '';
+    out.querySelectorAll('[data-fs-inc]').forEach(b => b.onclick = () => { cart[b.dataset.fsInc].quantity++; drawCart(); });
+    out.querySelectorAll('[data-fs-dec]').forEach(b => b.onclick = () => { const i = cart[b.dataset.fsDec]; if (i.quantity > 1) i.quantity--; else cart.splice(b.dataset.fsDec, 1); drawCart(); });
+    out.querySelectorAll('[data-fs-del]').forEach(b => b.onclick = () => { cart.splice(b.dataset.fsDel, 1); drawCart(); });
+    // Com produtos, o valor é a soma dos itens (não editável); sem produtos, volta a ser digitado.
+    const input = f.elements.total, auto = input.dataset.auto === '1';
+    if (cart.length) { input.value = centsText(total); input.readOnly = true; input.dataset.auto = '1'; $('fsTotalLabel').textContent = 'Valor (soma dos produtos)'; }
+    else if (auto) { input.value = ''; input.readOnly = false; input.dataset.auto = ''; $('fsTotalLabel').textContent = 'Valor'; }
+    f.dispatchEvent(new Event('input')); drawQuick();
+  }
+
+  // Código lido (pelo leitor ou digitado): acha o produto e põe na venda; se não existe, oferece cadastrar.
+  let lookingUp = Promise.resolve();
+  function handleCode(code) {
+    lookingUp = lookingUp.then(async () => {
+      try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); if (addToCart(p)) beep(true); }
+      catch (err) {
+        if (err.status !== 404) { feedback(err.message, true); beep(false); return; }
+        beep(false); if (quickCart.length) { addToCart({}); return; }
+        productDialog({ barcode: code }, p => { if (addToCart(p)) beep(true); }, true);
+      }
+    });
+    return lookingUp;
+  }
+
+  function setupScanInput() {
+    const input = $('fsScan'), out = $('fsScanResults'); if (!input) return;
+    let timer;
+    const showResults = rows => {
+      out.innerHTML = rows.map(p => `<button type="button" data-fs-prod="${p.id}"><b>${esc(p.name)}</b> <small>${brl(p.price_cents)}${p.barcode ? ' · ' + esc(p.barcode) : ''}</small></button>`).join('')
+        || `<p class="nv-help">Nenhum produto encontrado. <button type="button" class="nv-button secondary fs-small" id="fsQuickNew">+ Cadastrar produto</button></p>`;
+      out.querySelectorAll('[data-fs-prod]').forEach(b => b.onclick = () => { addToCart(rows.find(p => p.id === b.dataset.fsProd)); input.value = ''; out.innerHTML = ''; input.focus(); });
+      if ($('fsQuickNew')) $('fsQuickNew').onclick = () => { const t = input.value.trim(); productDialog(looksLikeCode(t) && !/\s/.test(t) ? { barcode: t } : { name: t }, p => { addToCart(p); input.value = ''; out.innerHTML = ''; }, true); };
+      return rows;
+    };
+    const search = async () => { const t = input.value.trim(); if (t.length < 2) { out.innerHTML = ''; return []; } try { return showResults(await api('/store/products?q=' + encodeURIComponent(t))); } catch (err) { out.textContent = err.message; return []; } };
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 220); };
+    // Enter digitado à mão: código → procura pelo código; nome → se só um produto bate, adiciona.
+    input.onkeydown = async e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault(); const t = input.value.trim(); if (!t) return;
+      clearTimeout(timer);
+      if (looksLikeCode(t)) { input.value = ''; out.innerHTML = ''; return handleCode(t); }
+      const rows = await search(); if (rows.length === 1) { addToCart(rows[0]); input.value = ''; out.innerHTML = ''; }
+    };
+  }
+
+  function productDialog(initial = {}, onSaved, forSale = false) {
+    const editing = !!initial.id;
+    openDialog(`${header(editing ? 'Editar produto' : 'Cadastrar produto')}<form id="fsProd" autocomplete="off">
+      ${!editing && initial.barcode ? `<p class="nv-help fs-warn">O código <b>${esc(initial.barcode)}</b> ainda não está cadastrado. Informe nome e preço: o produto entra na venda e, nas próximas vezes, o leitor já reconhece.</p>` : ''}
+      <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(initial.barcode || '')}" placeholder="Bipe o produto com o leitor (opcional)"></label>
+      <label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(initial.name || '')}" placeholder="Ex.: Película 3D Galaxy A12"></label>
+      <label class="nv-field">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
+      <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
+    const f = $('fsProd'), st = f.querySelector('[role=status]');
+    // O leitor manda Enter no fim: no campo do código, Enter só passa para o próximo campo.
+    f.elements.barcode.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); f.elements.name.focus(); } };
+    (initial.barcode && !initial.name ? f.elements.name : f.elements.barcode.value ? f.elements.name : f.elements.barcode).focus();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const price = parseMoney(f.elements.price.value), name = f.elements.name.value.trim(), barcode = f.elements.barcode.value.trim();
+      if (name.length < 2) { st.textContent = 'Informe o nome do produto.'; return; }
+      if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço.'; return; }
+      if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
+      try {
+        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', { name, barcode, price_cents: price });
+        $('editorDialog').close(); feedback(`Produto ${editing ? 'atualizado' : 'cadastrado'}: ${p.name} · ${brl(p.price_cents)}.`);
+        if (onSaved) onSaved(p);
+      } catch (err) { st.textContent = err.message; }
+    };
+  }
+
+  async function productsDialog(term = '') {
+    openDialog(`${header('Produtos')}<div class="fs-row"><input id="fsProdSearch" class="fs-grow" type="search" placeholder="Bipe o código ou busque pelo nome" value="${esc(term)}" aria-label="Buscar produto"><button type="button" class="nv-button" id="fsProdNew">+ Novo produto</button></div>
+      <p class="nv-help">Para cadastrar rápido: clique em "+ Novo produto" e bipe a embalagem. Na venda, um código que não está cadastrado abre este cadastro automaticamente.</p><div id="fsProdList" class="nv-list"></div>`);
+    const input = $('fsProdSearch'), list = $('fsProdList'); let timer, rows = [];
+    const reopen = () => productsDialog(input.value.trim());
+    const draw = async () => {
+      const t = input.value.trim();
+      try { rows = await api('/store/products' + (t ? '?q=' + encodeURIComponent(t) : '')); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected) return;
+      list.innerHTML = rows.map(p => `<div class="fs-sale"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) : 'sem código de barras'}</small></div><div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`).join('')
+        || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
+      list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(rows.find(p => p.id === b.dataset.fsEdit), reopen));
+      list.querySelectorAll('[data-fs-pdel]').forEach(b => b.onclick = async () => {
+        const p = rows.find(x => x.id === b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
+        try { await api('/store/products/' + p.id, 'DELETE'); cart = cart.filter(i => i.id !== p.id); drawCart(); draw(); } catch (err) { feedback(err.message, true); }
+      });
+      if ($('fsProdNewCode')) $('fsProdNewCode').onclick = () => productDialog({ barcode: t }, reopen);
+    };
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 220); };
+    input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); draw(); } };
+    $('fsProdNew').onclick = () => productDialog({}, reopen);
+    input.focus(); draw();
+  }
+
+  // Captura global: com o Caixa na tela, uma sequência rápida de teclas terminada em Enter é o leitor,
+  // mesmo que o cursor esteja em outro campo (ou em nenhum). Digitação humana é bem mais lenta.
+  (() => {
+    let buf = '', first = 0, last = 0;
+    const GAP = 50, AVG = 30, MIN = 4;
+    document.addEventListener('keydown', e => {
+      const sale = $('fsSale'), closed = $('fsOpen');
+      if ((!sale && !closed) || $('editorDialog')?.open || e.isComposing) { buf = ''; return; }
+      const now = performance.now();
+      if (e.key === 'Enter') {
+        const isScan = buf.length >= MIN && now - last < GAP * 2 && (last - first) / (buf.length - 1) < AVG;
+        const code = buf; buf = '';
+        if (!isScan || !/^[!-~]{3,64}$/.test(code)) return;
+        e.preventDefault(); e.stopPropagation();
+        // Tira do campo o que o leitor "digitou" nele.
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !t.readOnly && t.value.endsWith(code)) { t.value = t.value.slice(0, -code.length); t.dispatchEvent(new Event('input', { bubbles: true })); }
+        if (!sale) { feedback('Abra o caixa para registrar a venda deste produto.', true); beep(false); return; }
+        if ($('fsScanResults')) $('fsScanResults').innerHTML = '';
+        handleCode(code);
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (now - last > GAP || !buf) { buf = ''; first = now; }
+        buf += e.key; last = now;
+      } else if (e.key !== 'Shift') buf = '';
+    }, true);
+  })();
 
   function movement(kind, box, alive) {
     const title = kind === 'expense' ? 'Lançar saída (despesa)' : kind === 'withdrawal' ? 'Sangria (tirar dinheiro da gaveta)' : 'Suprimento (colocar dinheiro na gaveta)';
@@ -480,7 +662,14 @@
   .fs-tabs{display:flex;gap:4px;border-bottom:1px solid var(--nv-border);margin-bottom:14px;overflow-x:auto}.fs-tabs button{border:0;background:none;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;color:var(--nv-muted);white-space:nowrap}.fs-tabs button[aria-selected=true]{border-bottom-color:var(--nv-blue);color:var(--nv-ink);font-weight:700}
   .fs-daybar{margin-bottom:10px}.fs-pre{white-space:pre-wrap;font:inherit;font-size:13px;background:var(--nv-bg);border-radius:10px;padding:10px;margin:6px 0}.fs-ok{color:var(--nv-green);font-weight:700;font-size:13px}.fs-warn{background:#fff6e5;border-radius:8px;padding:8px 10px;color:#7a4b00}
   .fs-neg{color:#b42318}.fs-pos{color:#027a48}.fs-check{display:flex;gap:8px;align-items:center;margin-bottom:8px}.fs-table{overflow:auto}.fs-table table{width:100%;border-collapse:collapse;font-size:14px}.fs-table th,.fs-table td{text-align:left;padding:8px;border-bottom:1px solid var(--nv-border);vertical-align:top}
-  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;font-size:13px;padding:6px 10px;border-radius:10px;background:#f6f7f9}.fs-quick-empty{margin:0}`;
+  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;font-size:13px;padding:6px 10px;border-radius:10px;background:#f6f7f9}.fs-quick-empty{margin:0}
+  .fs-private .fs-kpis b,.fs-private .fs-methods-sum b,.fs-private .fs-sale-end>b,.fs-private .fs-opening,.fs-private .fs-lastclose{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none;-webkit-user-select:none}
+  .fs-private .fs-lastclose b{color:transparent!important}
+  .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
+  .fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
+  .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
+  @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
 
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
@@ -495,6 +684,7 @@
     titles: { cash: 'Caixa', messages: 'Mensagens' },
     moreItems: () => config?.enabled ? [['messages', 'Mensagens'], ['cameras', 'Câmeras']] : [],
     async load(view, box, alive) {
+      box.classList.remove('fs-private');
       if (!config?.enabled) { box.innerHTML = '<section class="nv-card">Recurso não habilitado para esta loja.</section>'; return; }
       if (view === 'cash') return loadCash(box, alive);
       return loadMessages(box, alive);

@@ -175,3 +175,30 @@ a.nv-button{text-decoration:none}
 .fp-addr{max-width:none}.fp-addr input{width:100%}.fp-addr-hint{margin:-6px 0 10px}
 @media(max-width:820px){.fp-support-grid{grid-template-columns:1fr}}
 .fp-support-grid+.nv-card{margin-top:16px}
+
+/* Página inicial: números no topo, coluna principal contínua, lateral fixa, conteúdo junto ao menu. */
+.nv-main{margin:0;max-width:2000px}
+#dashboardContent .nv-home-action{display:flex;align-items:stretch;gap:14px;justify-content:space-between;margin:0 0 18px}
+#dashboardContent .nv-home-action>.nv-button,#dashboardContent .nv-home-action>button{align-self:center;white-space:nowrap}
+#dashboardContent .fp-kpis{flex:1 1 auto;margin:0;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-width:880px}
+#dashboardContent .fp-kpis .nv-card{margin:0;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-radius:16px}
+#dashboardContent .fp-kpis .nv-number{margin:0;font-size:26px;line-height:1}
+#dashboardContent .fp-kpis .nv-card-label{font-size:12px}
+#dashboardContent .fp-now[hidden]{display:none}
+#dashboardContent .fp-work{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,400px);gap:18px;align-items:start;flex-wrap:nowrap}
+#dashboardContent .fp-main-col{display:flex;flex-direction:column;gap:18px;min-width:0}
+#dashboardContent .fp-main-col>.fp-live,#dashboardContent .fp-main-col .nv-card{margin:0}
+#dashboardContent .fp-all{margin:0}
+#dashboardContent .fp-side{position:sticky;top:16px;max-width:none;max-height:calc(100vh - 32px);overflow:auto}
+#dashboardContent .fp-side .nv-card{margin:0}
+@media(max-width:1100px){#dashboardContent .fp-work{grid-template-columns:minmax(0,1fr) 320px}}
+@media(max-width:900px){
+ #dashboardContent .nv-home-action{flex-direction:column-reverse}
+ #dashboardContent .fp-kpis{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none}
+ #dashboardContent .fp-work{display:flex;flex-direction:column}
+ #dashboardContent .fp-main-col{display:contents}
+ #dashboardContent .fp-live{order:1}#dashboardContent .fp-side{order:2;position:static;max-height:none;overflow:visible}#dashboardContent .fp-all{order:3}
+ #dashboardContent .fp-work>*{width:100%}
+}
+#dashboardContent .fp-live-list{min-height:0}
+#dashboardContent .fp-main-col>.fp-live,#dashboardContent .fp-main-col>.fp-all{flex:none}

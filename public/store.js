@@ -153,10 +153,9 @@ function renderNow() {
   const actions = [];
   const ready = live.find(o => o.status === 'live' && isLastStep(o));
   if (ready) actions.push(`<div class="fp-action ready"><span class="fp-kind"><span class="fp-dot"></span>Pronto para avisar</span><strong>${safe(orderRef(ready))} · ${safe(itemLabel(ready))}</strong><p>Chegou em ${safe(cap(currentStep(ready)))}. Finalize e avise o cliente.</p><div class="fp-buttons">${finishButtons(ready)}</div></div>`);
-  const paused = live.find(o => o.status === 'paused');
-  if (paused) actions.push(`<div class="fp-action paused"><span class="fp-kind"><span class="fp-dot"></span>Pausado</span><strong>${safe(orderRef(paused))} · ${safe(itemLabel(paused))}</strong><p>Parado em ${safe(cap(currentStep(paused)))}.</p><button type="button" class="nv-button secondary" data-transition-id="${safe(paused.id)}" data-action="resume">Retomar</button></div>`);
-  if (queue[0]) actions.push(`<div class="fp-action next"><span class="fp-kind"><span class="fp-dot"></span>Próximo da fila</span><strong>${safe(orderRef(queue[0]))} · ${safe(cap(firstName(queue[0].customer) || 'Cliente'))}</strong><p>${safe(itemLabel(queue[0]))} · esperando há ${minutesSince(queue[0].created_at)}.</p><button type="button" class="nv-button" data-transition-id="${safe(queue[0].id)}" data-action="start">Iniciar atendimento</button></div>`);
-  setHtml($('nowActions'), actions.length ? actions.join('') : '<div class="fp-action"><span class="fp-kind"><span class="fp-dot"></span>Tudo em dia</span><strong>Nada pendente agora</strong><p>Crie um pedido quando o próximo cliente chegar.</p></div>');
+  // Pausados já aparecem com "Retomar" no card Em atendimento; não repetir aqui.
+  // O próximo da fila já aparece com "Iniciar" no card Fila ao lado; não repetir aqui.
+  setHtml($('nowActions'), actions.join('')); const nowBox = document.querySelector('.fp-now'); if (nowBox) nowBox.hidden = !actions.length;
 }
 function orderCard(o) {
   const d = o.details || {};

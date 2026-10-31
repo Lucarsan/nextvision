@@ -90,8 +90,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!open.rowCount) return res.json({ session: null, last_closed: last.rows[0] || null });
     const s = open.rows[0];
     const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
-        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name
-      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by
+        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name
+      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by
       WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [s.id, tid(req)]);
     const moves = await q(`SELECT m.id,m.kind,m.amount_cents,m.note,m.created_at,u.name created_by_name FROM cash_movements m JOIN users u ON u.id=m.created_by
       WHERE m.session_id=$1 AND m.tenant_id=$2 ORDER BY m.created_at DESC`, [s.id, tid(req)]);

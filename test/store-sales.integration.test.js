@@ -88,6 +88,8 @@ test('caixa, vendas, fidelidade e mensagens do dia', { skip }, async () => {
 
     // Fechamento: esperado = 100 (troco) + 50 + 15 (dinheiro) - 30 (sangria) = 135,00
     const cash = await api('/store/cash');
+    const canceledRow = cash.sales.find(x => x.id === again.sale.id);
+    assert.equal(canceledRow.canceled_by_name, 'Owner'); assert.equal(canceledRow.cancel_reason, 'Lançada em dobro');
     assert.equal(cash.summary.expected_cash_cents, 13500);
     assert.equal(cash.summary.sales_count, 6);
     const closed = await api('/store/cash/close', { method: 'POST', body: { counted_cash_cents: 13000, note: 'Faltou troco' } });

@@ -65,15 +65,20 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   async function sessionDetail(tenant, sessionId) {
     const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
-        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,
+        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,COALESCE(sl.name,u.name) seller_name,
         COALESCE((SELECT json_agg(json_build_object('name',i.name,'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
-      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by
+      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [sessionId, tenant]);
     const moves = await q(`SELECT m.id,m.kind,m.method,m.category,m.amount_cents,m.note,m.created_at,m.canceled_at,m.cancel_reason,u.name created_by_name,uc.name canceled_by_name
       FROM cash_movements m JOIN users u ON u.id=m.created_by LEFT JOIN users uc ON uc.id=m.canceled_by
       WHERE m.session_id=$1 AND m.tenant_id=$2 ORDER BY m.created_at DESC`, [sessionId, tenant]);
-    return { sales: sales.rows, movements: moves.rows, summary: await cashSummary(tenant, sessionId) };
+    // Vendas por vendedor (sem as canceladas).
+    const bySeller = new Map();
+    for (const x of sales.rows) if (!x.canceled_at) { const k = x.seller_name || '—'; const v = bySeller.get(k) || { name: k, count: 0, total_cents: 0 }; v.count++; v.total_cents += x.total_cents; bySeller.set(k, v); }
+    const summary = await cashSummary(tenant, sessionId);
+    summary.by_seller = [...bySeller.values()].sort((a, b) => b.total_cents - a.total_cents);
+    return { sales: sales.rows, movements: moves.rows, summary };
   }
 
   // ---------- Configuração ----------
@@ -322,6 +327,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     await audit(req, 'delete', 'product', req.params.id); res.json({ deleted: true });
   }));
 
+  // ---------- Vendedores ----------
+  // Logins ativos da loja (dono e operadores, cadastrados na central). Pré-seleciona quem fez a última venda.
+  app.get('/api/store/sales/sellers', ...guard, route(async (req, res) => {
+    const u = await q("SELECT id,name,role FROM users WHERE tenant_id=$1 AND active AND role IN ('owner','operator') ORDER BY lower(name)", [tid(req)]);
+    const last = await q('SELECT seller_id FROM sales WHERE tenant_id=$1 AND seller_id IS NOT NULL ORDER BY created_at DESC LIMIT 1', [tid(req)]);
+    const lastId = last.rows[0]?.seller_id;
+    res.set('Cache-Control', 'no-store');
+    res.json({ sellers: u.rows, last_seller_id: u.rows.some(x => x.id === lastId) ? lastId : null, me: req.user.id });
+  }));
+
   // ---------- Vendas ----------
   app.post('/api/store/sales', ...guard, route(async (req, res) => {
     const v = valid(z.object({
@@ -331,6 +346,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       total_cents: cents.min(1).optional(),
       items: z.array(z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999) }).strict()).min(1).max(200).optional(),
       discount_cents: cents.optional(),
+      seller_id: uuid.optional(),
       payment_method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']),
       description: z.string().trim().max(300).default(''),
       order_id: uuid.optional()
@@ -346,6 +362,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]);
       const s = await c.query(`SELECT id FROM cash_sessions WHERE tenant_id=$1 AND status='open'`, [tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Abra o caixa antes de registrar vendas'); }
+      const sellerId = v.seller_id || req.user.id;
+      if (!(await c.query("SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2 AND active AND role IN ('owner','operator')", [sellerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Vendedor inválido. Atualize a página.'); }
       let customerId = v.customer_id || null, created = false;
       if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
       if (v.new_customer) {
@@ -368,8 +386,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (!description) description = items.map(x => (x.quantity > 1 ? x.quantity + 'x ' : '') + x.name).join(', ').slice(0, 300);
       }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
-      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id])).rows[0];
+      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id, sellerId])).rows[0];
       for (const x of items) {
         await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.price_cents, x.total_cents, x.position, x.cost_cents]);
@@ -396,11 +414,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.get('/api/store/sales/:id/receipt', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
-        c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,
+        c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,COALESCE(sl.name,u.name) seller_name,
         t.name store_name,t.city,t.state,t.whatsapp,
         COALESCE((SELECT json_agg(json_build_object('name',i.name,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
-      FROM sales x JOIN tenants t ON t.id=x.tenant_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by
+      FROM sales x JOIN tenants t ON t.id=x.tenant_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.id=$1 AND x.tenant_id=$2`, [req.params.id, tid(req)]);
     if (!r.rowCount) return bad(res, 404, 'Venda não encontrada');
     const sale = r.rows[0];

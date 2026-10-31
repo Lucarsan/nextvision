@@ -186,7 +186,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const term = String(req.query.q || '').trim().slice(0, 80);
     if (term.length < 2) return res.json([]);
     const digits = phoneDigits(term);
-    const r = await q(`SELECT id,name,phone,offers_opt_out FROM customers WHERE tenant_id=$1 AND
+    const r = await q(`SELECT id,name,phone,offers_opt_out FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND
         (fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR ($3<>'' AND length($3)>=4 AND regexp_replace(coalesce(phone,''),'\\D','','g') LIKE '%'||$3||'%'))
       ORDER BY (fp_fold(name) LIKE fp_fold($2)||'%') DESC,name LIMIT 12`, [tid(req), term, digits]);
     const progress = await progressFor(tid(req), r.rows.map(x => x.id));
@@ -195,7 +195,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   app.get('/api/store/sales/customers/:id', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Cliente inválido');
-    const c = await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+    const c = await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [req.params.id, tid(req)]);
     if (!c.rowCount) return bad(res, 404, 'Cliente não encontrado');
     const orders = await q(`SELECT o.id,o.order_number,o.status,o.created_at,o.process_snapshot->>'name' process,o.details
       FROM orders o WHERE o.tenant_id=$1 AND o.customer_id=$2 AND o.deleted_at IS NULL AND o.created_at>now()-interval '60 days'
@@ -221,7 +221,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       await c.query('BEGIN');
       const t = await c.query('SELECT loyalty_enabled,loyalty_target,loyalty_reward FROM tenants WHERE id=$1', [tid(req)]);
       if (!t.rows[0]?.loyalty_enabled) { await c.query('ROLLBACK'); return bad(res, 409, 'A fidelidade está desligada nas Configurações'); }
-      const cust = await c.query('SELECT id FROM customers WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [req.params.id, tid(req)]);
+      const cust = await c.query('SELECT id FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE', [req.params.id, tid(req)]);
       if (!cust.rowCount) { await c.query('ROLLBACK'); return bad(res, 404, 'Cliente não encontrado'); }
       const { loyalty_target: target, loyalty_reward: reward } = t.rows[0];
       const eligible = await c.query('SELECT id FROM loyalty_checkins WHERE tenant_id=$1 AND customer_id=$2 AND redemption_id IS NULL ORDER BY created_at,id LIMIT $3', [tid(req), req.params.id, target]);
@@ -257,10 +257,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const s = await c.query(`SELECT id FROM cash_sessions WHERE tenant_id=$1 AND status='open'`, [tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Abra o caixa antes de registrar vendas'); }
       let customerId = v.customer_id || null, created = false;
-      if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
+      if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
       if (v.new_customer) {
         const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
-        const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
+        const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
         if (same.rowCount) customerId = same.rows[0].id;
         else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; }
       }
@@ -335,7 +335,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         (SELECT max(at) FROM (SELECT max(created_at) at FROM sales x WHERE x.customer_id=c.id AND x.tenant_id=c.tenant_id AND x.canceled_at IS NULL
            UNION ALL SELECT max(created_at) FROM orders o WHERE o.customer_id=c.id AND o.tenant_id=c.tenant_id AND o.deleted_at IS NULL) z) last_buy,
         EXISTS(SELECT 1 FROM customer_messages m WHERE m.tenant_id=c.tenant_id AND m.customer_id=c.id AND m.kind='offer' AND m.campaign=$2 AND $2<>'') sent
-      FROM customers c WHERE c.tenant_id=$1 AND NOT c.offers_opt_out AND c.phone_key IS NOT NULL
+      FROM customers c WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND NOT c.offers_opt_out AND c.phone_key IS NOT NULL
       ORDER BY c.name`, [tid(req), campaign]);
     let rows = r.rows;
     if (Number.isInteger(days) && days > 0) { const since = Date.now() - days * 86400000; rows = rows.filter(x => x.last_buy && new Date(x.last_buy).getTime() >= since); }
@@ -361,7 +361,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     try {
       await c.query('BEGIN');
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-import:'||$1))", [tid(req)]);
-      const existing = new Set((await c.query('SELECT phone_key FROM customers WHERE tenant_id=$1 AND phone_key IS NOT NULL', [tid(req)])).rows.map(r => r.phone_key));
+      const existing = new Set((await c.query('SELECT phone_key FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key IS NOT NULL', [tid(req)])).rows.map(r => r.phone_key));
       const keys = (await c.query('SELECT fp_phone_key(p) k FROM unnest($1::text[]) WITH ORDINALITY AS t(p,i) ORDER BY i', [v.contacts.map(x => x.phone)])).rows.map(r => r.k);
       let created = 0, skippedExisting = 0, invalid = 0, repeated = 0; const seen = new Set();
       for (let i = 0; i < v.contacts.length; i++) {

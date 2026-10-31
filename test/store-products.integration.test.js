@@ -188,3 +188,35 @@ test('preço editado por item, linhas avulsas e desconto distribuído nos itens'
     assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ name: 'Sem preço', quantity: 1 }] } })).status, 400);
   } finally { await f.cleanup(); }
 });
+
+test('operador novato: vende e cadastra produto, mas não dá desconto, não muda preço, não cancela nem fecha o caixa', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    const nov = await f.addOperator(tenant, 'basic', 'Novato');
+    const as = (path, opt = {}) => request(path, { ...opt, token: nov.token });
+    assert.equal((await api('/store/sales/config', { token: nov.token })).access_level, 'basic');
+    assert.equal((await api('/store/sales/config')).access_level, 'full', 'dono é livre');
+
+    assert.equal((await as('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } })).status, 201, 'novato abre o caixa');
+    const p = (await as('/store/products', { method: 'POST', body: { name: 'Capa', price_cents: 3000, cost_cents: 1000 } })).data;
+    assert.ok(p.id, 'novato cadastra produto');
+    const ok = await as('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: p.id, quantity: 1 }] } });
+    assert.equal(ok.status, 201, 'novato vende pelo preço de cadastro');
+    assert.equal((await as('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: p.id, quantity: 1, unit_price_cents: 2500 }] } })).status, 403);
+    assert.equal((await as('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: p.id, quantity: 1 }], discount_cents: 100 } })).status, 403);
+    assert.equal((await as('/store/sales/' + ok.data.sale.id + '/cancel', { method: 'POST', body: { reason: 'teste novato' } })).status, 403);
+    assert.equal((await as('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 100, method: 'cash', category: 'Outros', note: 'x' } })).status, 403);
+    assert.equal((await as('/store/cash/close', { method: 'POST', body: { counted_cash_cents: 0 } })).status, 403);
+
+    // Central muda para livre: vale na hora, sem novo login.
+    const users = await api('/master/tenants/' + tenant + '/users', { token: masterToken });
+    assert.equal(users.find(u => u.id === nov.id).access_level, 'basic');
+    await api('/master/users/' + nov.id, { method: 'PATCH', token: masterToken, body: { access_level: 'full' } });
+    assert.equal((await as('/store/sales/' + ok.data.sale.id + '/cancel', { method: 'POST', body: { reason: 'agora livre' } })).status, 200);
+    // Criar já como novato pela central.
+    const n2 = await api('/master/tenants/' + tenant + '/users', { method: 'POST', token: masterToken, body: { name: 'Outro Novato', email: 'n2-' + tenant + '@example.test', password: 'senha-forte-123', role: 'operator', access_level: 'basic' } }, 201);
+    assert.equal(n2.access_level, 'basic');
+  } finally { await f.cleanup(); }
+});

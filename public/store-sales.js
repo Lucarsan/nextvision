@@ -7,13 +7,22 @@
   const brl = c => (Number(c || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const hhmm = d => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const dmy = d => new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-  const first = name => String(name || '').trim().split(/\s+/)[0] || '';
-  const cap = t => t ? t[0].toLocaleUpperCase('pt-BR') + t.slice(1).toLocaleLowerCase('pt-BR') : '';
+  // Primeiro nome para mensagens: "lucas cardeal" → "Lucas", "*Elias*" → "Elias", ".IRMA ADRIANA" → "Irma".
+  // Nome que é só telefone ou "Contato 1234" (importados sem nome) não vira saudação.
+  const greetName = name => {
+    const raw = String(name || '').trim();
+    if (!raw || /^contato\s+\d+$/i.test(raw)) return '';
+    for (const word of raw.split(/\s+/)) {
+      const m = word.match(/\p{L}[\p{L}\p{M}'’-]*/u);
+      if (m) { if (m[0].length <= 3 && m[0] === m[0].toLocaleUpperCase('pt-BR')) return m[0]; const t = m[0].toLocaleLowerCase('pt-BR'); return t.charAt(0).toLocaleUpperCase('pt-BR') + t.slice(1); }
+    }
+    return '';
+  };
   const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
   const MOVE_LABEL = { expense: 'Saída', withdrawal: 'Sangria', deposit: 'Suprimento' };
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
   const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}. 🙏\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
-  let config = null, saleCustomer = null, lastSale = null;
+  let config = null, saleCustomer = null, lastSale = null, quickItems = null, quickCart = [];
 
   async function api(path, method = 'GET', body) {
     const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
@@ -48,10 +57,10 @@
     return lines.join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
   }
   const statusMessage = c => render(config.status_message || DEFAULT_STATUS, {
-    cliente: cap(first(c.name)) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty), avaliacao: config.google_review_url || '',
+    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty), avaliacao: config.google_review_url || '',
     compras: c.loyalty?.checkins ?? '', meta: c.loyalty?.target ?? '', faltam: c.loyalty?.remaining ?? '', premio: c.loyalty?.reward ?? '', regras: config.loyalty_rules || ''
   });
-  const offerMessage = (c, text) => `Olá, ${cap(first(c.name)) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;
+  const offerMessage = (c, text) => `Olá, ${greetName(c.name) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;
 
   function progressBar(l) {
     if (!l || !l.enabled) return '';
@@ -90,6 +99,7 @@
         <section class="nv-card"><h2>Nova venda</h2><form id="fsSale" autocomplete="off">
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
+          <div class="fs-quick" id="fsQuick"></div>
           <div class="fs-row"><label class="nv-field">Valor<input name="total" inputmode="decimal" placeholder="0,00" required></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, conserto"></label></div>
           <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
@@ -115,6 +125,7 @@
     };
     sf.addEventListener('input', updChange); sf.addEventListener('change', updChange); updChange();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
+    quickCart = []; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
     $('fsExpense').onclick = $('fsExpense2').onclick = () => movement('expense', box, alive);
     $('fsPrint').onclick = () => printReport(s.id);
@@ -188,6 +199,70 @@
     const c = await api('/store/sales/customers/' + id); saleCustomer = c; drawCustomerPicker();
     const box = $('fsOrderBox');
     box.innerHTML = c.orders.length ? `<label class="nv-field">É pagamento de um pedido de serviço? (opcional)<select id="fsOrder"><option value="">Não, venda avulsa</option>${c.orders.map(o => `<option value="${o.id}">Pedido ${esc(o.order_number || '')} · ${esc(o.details?.model || o.details?.brand || o.process || '')} · ${o.status === 'completed' ? 'finalizado' : 'em andamento'} · ${dmy(o.created_at)}</option>`).join('')}</select><small>Pedido de serviço já conta no cartão quando é finalizado; a venda dele não conta de novo.</small></label>` : '';
+  }
+
+  // ---------------- Itens frequentes ----------------
+  // Botões acima do valor: cada toque soma o preço no valor e escreve o item na descrição
+  // ("2x Película, Capa"). Sem preço cadastrado, só entra na descrição.
+  const cartText = () => quickCart.map(x => (x.qty > 1 ? x.qty + 'x ' : '') + x.label).join(', ');
+  async function loadQuick(force) {
+    if (quickItems && !force) return quickItems;
+    try { quickItems = await api('/store/sales/quick-items'); } catch { quickItems = quickItems || []; }
+    return quickItems;
+  }
+  async function drawQuick() {
+    const box = $('fsQuick'); if (!box) return;
+    const items = await loadQuick(); if (!box.isConnected) return;
+    const chips = items.map(i => `<button type="button" class="fs-chip" data-fs-quick="${i.id}"><b>${esc(i.label)}</b>${i.price_cents != null ? `<small>${brl(i.price_cents)}</small>` : ''}</button>`).join('');
+    const cart = quickCart.length ? `<div class="fs-cart"><span>${esc(cartText())}</span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar</button></div>` : '';
+    box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? '⚙ Editar' : '+ Cadastrar item frequente'}</button></div>
+      ${items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (película, capa, carregador…) para lançar com um toque.</p>'}${cart}`;
+    box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
+    $('fsQuickManage').onclick = manageQuick;
+    if ($('fsQuickClear')) $('fsQuickClear').onclick = () => {
+      const f = $('fsSale'); const sum = quickCart.reduce((t, x) => t + (x.price_cents || 0) * x.qty, 0);
+      const cur = parseMoney(f.elements.total.value);
+      if (Number.isFinite(cur)) { const rest = cur - sum; f.elements.total.value = rest > 0 ? (rest / 100).toFixed(2).replace('.', ',') : ''; }
+      if (f.elements.description.value.trim() === cartText()) f.elements.description.value = '';
+      quickCart = []; drawQuick(); f.dispatchEvent(new Event('input'));
+    };
+  }
+  function addQuick(item) {
+    const f = $('fsSale'); if (!item || !f) return;
+    const before = cartText(), desc = f.elements.description.value.trim();
+    const hit = quickCart.find(x => x.id === item.id);
+    if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, qty: 1 });
+    // Descrição: se ainda é o texto automático (ou vazia), reescreve; se o operador escreveu algo, acrescenta.
+    if (!desc || desc === before) f.elements.description.value = cartText();
+    else f.elements.description.value = (desc + ', ' + item.label).slice(0, 300);
+    if (item.price_cents != null) {
+      const cur = parseMoney(f.elements.total.value);
+      f.elements.total.value = (((Number.isFinite(cur) ? cur : 0) + item.price_cents) / 100).toFixed(2).replace('.', ',');
+    }
+    f.dispatchEvent(new Event('input')); drawQuick();
+  }
+  async function manageQuick() {
+    const items = await loadQuick(true);
+    const f = $('fsSale'), suggestLabel = f && !quickCart.length ? f.elements.description.value.trim().slice(0, 60) : '';
+    const suggestPrice = f && suggestLabel ? f.elements.total.value.trim() : '';
+    openDialog(`${header('Itens frequentes')}<p class="nv-help">Aparecem como botões em "Nova venda". Toque no item para somar o preço e preencher a descrição.</p>
+      <form id="fsQuickForm" class="fs-row" autocomplete="off"><label class="nv-field fs-grow">Item<input name="label" maxlength="60" required placeholder="Ex.: Película 3D" value="${esc(suggestLabel)}"></label>
+      <label class="nv-field">Preço (opcional)<input name="price" inputmode="decimal" placeholder="0,00" value="${esc(suggestPrice)}"></label><button class="nv-button">Cadastrar</button></form><p role="status" class="nv-help" id="fsQuickStatus"></p>
+      <div class="nv-list">${items.map(i => `<div class="fs-sale"><div><b>${esc(i.label)}</b><br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-fs-quick-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum item cadastrado ainda.</p>'}</div>`);
+    $('fsQuickForm').onsubmit = async e => {
+      e.preventDefault(); const form = e.currentTarget, st = $('fsQuickStatus');
+      const label = form.elements.label.value.trim(), raw = form.elements.price.value.trim();
+      const price = raw ? parseMoney(raw) : null;
+      if (!label) { st.textContent = 'Informe o nome do item.'; return; }
+      if (raw && (!Number.isFinite(price) || price < 0)) { st.textContent = 'Preço inválido.'; return; }
+      try { await api('/store/sales/quick-items', 'POST', { label, price_cents: price }); await manageQuick(); drawQuick(); $('fsQuickStatus').textContent = `"${label}" cadastrado.`; }
+      catch (err) { st.textContent = err.message; }
+    };
+    document.querySelectorAll('[data-fs-quick-del]').forEach(b => b.onclick = async () => {
+      const item = items.find(i => i.id === b.dataset.fsQuickDel); if (!confirm(`Excluir "${item?.label}" dos itens frequentes?`)) return;
+      try { await api('/store/sales/quick-items/' + b.dataset.fsQuickDel, 'DELETE'); quickCart = quickCart.filter(x => x.id !== b.dataset.fsQuickDel); await manageQuick(); drawQuick(); }
+      catch (err) { $('fsQuickStatus').textContent = err.message; }
+    });
   }
 
   async function submitSale(e, box, alive) {
@@ -405,7 +480,7 @@
   .fs-tabs{display:flex;gap:4px;border-bottom:1px solid var(--nv-border);margin-bottom:14px;overflow-x:auto}.fs-tabs button{border:0;background:none;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;color:var(--nv-muted);white-space:nowrap}.fs-tabs button[aria-selected=true]{border-bottom-color:var(--nv-blue);color:var(--nv-ink);font-weight:700}
   .fs-daybar{margin-bottom:10px}.fs-pre{white-space:pre-wrap;font:inherit;font-size:13px;background:var(--nv-bg);border-radius:10px;padding:10px;margin:6px 0}.fs-ok{color:var(--nv-green);font-weight:700;font-size:13px}.fs-warn{background:#fff6e5;border-radius:8px;padding:8px 10px;color:#7a4b00}
   .fs-neg{color:#b42318}.fs-pos{color:#027a48}.fs-check{display:flex;gap:8px;align-items:center;margin-bottom:8px}.fs-table{overflow:auto}.fs-table table{width:100%;border-collapse:collapse;font-size:14px}.fs-table th,.fs-table td{text-align:left;padding:8px;border-bottom:1px solid var(--nv-border);vertical-align:top}
-  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}`;
+  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;font-size:13px;padding:6px 10px;border-radius:10px;background:#f6f7f9}.fs-quick-empty{margin:0}`;
 
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);

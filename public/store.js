@@ -53,12 +53,12 @@ const DEFAULT_TEMPLATES = {
 const TEMPLATE_LABELS = { created: 'Ao criar o pedido', started: 'Ao iniciar o atendimento', advanced: 'Ao avançar de etapa', paused: 'Ao pausar' };
 function messageFor(o, key) {
   const template = key === 'ready' ? (storeSettings.ready_message || 'Olá, {cliente}! Seu {item} está pronto para retirada na {loja}. Acompanhe: {link}') : ((storeSettings.message_templates || {})[key] || DEFAULT_TEMPLATES[key]);
-  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '', etapa: cap(currentStep(o)) };
+  const values = { cliente: greetName(o.customer) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '', etapa: cap(currentStep(o)) };
   return template.replace(/\{(cliente|item|loja|pedido|link|etapa)\}/g, (_, k) => values[k]).replace(/\s+/g, ' ').trim();
 }
 const whatsFor = (o, key) => { const phone = whatsPhone(o); return 'https://wa.me/' + (phone || '') + '?text=' + encodeURIComponent(messageFor(o, key)); };
 function startMessage(o) {
-  const nome = cap(firstName(o.customer));
+  const nome = greetName(o.customer);
   return (nome ? 'Olá, ' + nome + '! ' : 'Olá! ') + 'Recebemos seu ' + itemLabel(o) + ' na ' + (storeSettings.name || 'loja') + ' (pedido ' + (o.external_reference || o.order_number || '') + '). Acompanhe por aqui, inclusive ao vivo: ' + trackingUrl(o);
 }
 const whatsUrl = o => whatsFor(o, o.status === 'queued' ? 'created' : o.status === 'paused' ? 'paused' : o.status === 'completed' ? 'ready' : 'started');
@@ -104,7 +104,17 @@ function transitionActions(o) {
 const nicheNoun = () => ({ electronics: 'aparelho', automotive: 'veículo', carwash: 'veículo', pet: 'pet', food: 'pedido' }[storeSettings.niche] || 'pedido');
 const itemLabel = o => FP.itemLabel(storeSettings.niche, o.details || {});
 const orderRef = o => 'Pedido ' + (o.external_reference || o.order_number || o.id.slice(0, 8));
-const firstName = name => String(name || '').trim().split(/\s+/)[0] || '';
+// Primeiro nome para mensagens: "lucas cardeal" → "Lucas", "*Elias*" → "Elias", ".IRMA ADRIANA" → "Irma".
+// Nome que é só telefone ou "Contato 1234" (importados sem nome) não vira saudação.
+const greetName = name => {
+  const raw = String(name || '').trim();
+  if (!raw || /^contato\s+\d+$/i.test(raw)) return '';
+  for (const word of raw.split(/\s+/)) {
+    const m = word.match(/\p{L}[\p{L}\p{M}'’-]*/u);
+    if (m) { if (m[0].length <= 3 && m[0] === m[0].toLocaleUpperCase('pt-BR')) return m[0]; const t = m[0].toLocaleLowerCase('pt-BR'); return t.charAt(0).toLocaleUpperCase('pt-BR') + t.slice(1); }
+  }
+  return '';
+};
 function whatsPhone(o) {
   let digits = String(o.customer_phone || '').replace(/\D/g, '');
   if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
@@ -112,7 +122,7 @@ function whatsPhone(o) {
 }
 function readyMessage(o) {
   const template = storeSettings.ready_message || 'Olá, {cliente}! Seu {item} está pronto para retirada na {loja}. Acompanhe: {link}';
-  const values = { cliente: cap(firstName(o.customer)) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '' };
+  const values = { cliente: greetName(o.customer) || 'tudo bem', item: itemLabel(o), loja: storeSettings.name || 'loja', pedido: o.external_reference || o.order_number || '', link: o.share_code ? trackingUrl(o) : '' };
   return template.replace(/\{(cliente|item|loja|pedido|link)\}/g, (_, key) => values[key]).replace(/\s*Acompanhe:\s*$/, '').trim();
 }
 const minutesSince = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'min'; };
@@ -147,7 +157,7 @@ function renderNow() {
   const queue = queuedOrders();
   setHtml($('liveOrders'), live.length ? live.map(liveCard).join('') : '<p class="fp-empty">Nenhum pedido em atendimento. Inicie o próximo da fila.</p>');
   if ($('liveCount')) $('liveCount').textContent = live.length + (live.length === 1 ? ' pedido' : ' pedidos');
-  if (!$('homeQueue')?.dataset.dragging) setHtml($('homeQueue'), queue.length ? queue.map((o, i) => `<div class="fp-queue-item" data-id="${safe(o.id)}"><button type="button" class="fp-drag fp-drag-sm" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · esperando há ${minutesSince(o.created_at)}</p></div><button type="button" class="nv-button" data-transition-id="${safe(o.id)}" data-action="start">Iniciar</button></div>`).join('') : '<p class="fp-empty">Ninguém esperando.</p>');
+  if (!$('homeQueue')?.dataset.dragging) setHtml($('homeQueue'), queue.length ? queue.map((o, i) => `<div class="fp-queue-item" data-id="${safe(o.id)}"><button type="button" class="fp-drag fp-drag-sm" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div><strong>${safe(orderRef(o))} · ${safe((greetName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · esperando há ${minutesSince(o.created_at)}</p></div><button type="button" class="nv-button" data-transition-id="${safe(o.id)}" data-action="start">Iniciar</button></div>`).join('') : '<p class="fp-empty">Ninguém esperando.</p>');
   enableQueueDrag($('homeQueue'), '.fp-queue-item');
   if ($('queueCount')) $('queueCount').textContent = queue.length + ' esperando';
   const actions = [];
@@ -304,7 +314,7 @@ function enableQueueDrag(container, itemSelector) {
 function drawQueue() {
   const container = $('queueList'); if (!container || container.dataset.dragging) return;
   const orders = cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
-  const html = orders.map((o, i) => `<article class="nv-order fp-queue-row" data-id="${safe(o.id)}"><button type="button" class="fp-drag" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div class="fp-queue-info"><strong>${safe(orderRef(o))} · ${safe(cap(firstName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · ${safe(o.process)} · esperando há ${minutesSince(o.created_at)}</p></div></article>`).join('') || notice('Nenhum pedido aguardando.');
+  const html = orders.map((o, i) => `<article class="nv-order fp-queue-row" data-id="${safe(o.id)}"><button type="button" class="fp-drag" data-drag-handle aria-label="Arrastar para mudar a posição"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg></button><span class="fp-pos">${i + 1}</span><div class="fp-queue-info"><strong>${safe(orderRef(o))} · ${safe((greetName(o.customer) || 'Cliente'))}</strong><p>${safe(itemLabel(o))} · ${safe(o.process)} · esperando há ${minutesSince(o.created_at)}</p></div></article>`).join('') || notice('Nenhum pedido aguardando.');
   if (container.innerHTML !== html) container.innerHTML = html;
   enableQueueDrag(container, '.fp-queue-row');
 }

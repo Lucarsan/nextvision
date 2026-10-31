@@ -41,10 +41,10 @@ export function edgeEnabledFor(tenant) {
   return list.includes(String(tenant.id).toLowerCase()) || (tenant.slug && list.includes(String(tenant.slug).toLowerCase()));
 }
 
-export function sealEdgeToken(payload, now = Date.now()) {
+export function sealEdgeToken(payload, now = Date.now(), seconds = EDGE_TOKEN_SECONDS) {
   const key = keyBytes();
   if (!key) throw new Error('EDGE_VIDEO_KEY ausente');
-  const body = { v: 1, ...payload, e: Math.floor(now / 1000) + EDGE_TOKEN_SECONDS };
+  const body = { v: 1, ...payload, e: Math.floor(now / 1000) + seconds };
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   cipher.setAAD(AAD);
@@ -73,6 +73,14 @@ export function openEdgeToken(token, now = Date.now()) {
 export function edgeSourceFor({ origin, streamPath, username, password, orderToken }) {
   const { token, expiresAt } = sealEdgeToken({ o: String(origin), s: streamPath, u: username, w: password, t: orderToken });
   return { url: 'https://' + edgeHost() + '/v/' + token + '/index.m3u8', expiresAt };
+}
+
+// Download de uma gravação: link curto (15 min para começar a baixar), só para aquele trecho.
+// `start`/`seconds` já vêm no relógio do PC da loja (a central corrige a diferença).
+export const DOWNLOAD_TOKEN_SECONDS = 15 * 60;
+export function edgeDownloadFor({ origin, streamPath, username, password, start, seconds, filename }) {
+  const { token, expiresAt } = sealEdgeToken({ k: 'd', o: String(origin), s: streamPath, u: username, w: password, st: start.toISOString(), du: seconds }, Date.now(), DOWNLOAD_TOKEN_SECONDS);
+  return { url: 'https://' + edgeHost() + '/d/' + token + '/' + filename, expiresAt };
 }
 
 // ---------- Publicação do Worker ----------

@@ -35,7 +35,12 @@ const account = () => '/accounts/' + process.env.CLOUDFLARE_ACCOUNT_ID;
 const zone = () => '/zones/' + process.env.CLOUDFLARE_ZONE_ID;
 
 // Rotas publicadas pelo túnel da loja. O HLS do MediaMTX fica em 127.0.0.1:8888.
-export const ingressFor = hostname => ({ config: { ingress: [{ hostname, service: 'http://127.0.0.1:8888' }, { service: 'http_status:404' }] } });
+// /get vai para o servidor de gravações do MediaMTX (127.0.0.1:9996), também com senha.
+export const ingressFor = hostname => ({ config: { ingress: [
+  { hostname, path: '^/get$', service: 'http://127.0.0.1:9996' },
+  { hostname, service: 'http://127.0.0.1:8888' },
+  { service: 'http_status:404' }
+] } });
 
 export const createTunnel = name => call('criar túnel', 'POST', account() + '/cfd_tunnel', { name, config_src: 'cloudflare' });
 export const getTunnel = id => call('consultar túnel', 'GET', account() + '/cfd_tunnel/' + id);

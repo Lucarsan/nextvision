@@ -1,0 +1,7 @@
+Programas de terceiros incluidos no Ficou Pronto (sem modificacoes):
+
+- FFmpeg 9.0 (build win64-gpl de BtbN/FFmpeg-Builds), licenca GPL v3 (FFmpeg-GPL-LICENSE.txt).
+  Codigo-fonte: https://github.com/BtbN/FFmpeg-Builds e https://ffmpeg.org/download.html
+- MediaMTX 1.21.3 (bluenviron), licenca MIT (MediaMTX-LICENSE.txt). https://github.com/bluenviron/mediamtx
+- cloudflared 2026.10.7 (Cloudflare), licenca Apache 2.0. https://github.com/cloudflare/cloudflared
+- WinSW 2.12.0, licenca MIT. https://github.com/winsw/winsw

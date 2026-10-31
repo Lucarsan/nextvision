@@ -119,12 +119,14 @@ export async function handle(request, env, fetchImpl = fetch) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return reply(405, 'Método não permitido', corsHeaders);
 
   const url = new URL(request.url);
+  const download = /^\/d\/([A-Za-z0-9_-]{40,1500})\/([A-Za-z0-9_.-]{1,120}\.mp4)$/.exec(url.pathname);
+  if (download) return handleDownload(request, env, fetchImpl, download[1], download[2]);
   const match = /^\/v\/([A-Za-z0-9_-]{40,1500})\/([^/]+)$/.exec(url.pathname);
   if (!match || !ASSET.test(match[2])) return reply(404, 'Não encontrado', corsHeaders);
   const [, token, asset] = match;
 
   const payload = await openEdgeToken(token, env.EDGE_VIDEO_KEY);
-  if (!payload) return reply(403, 'Link de vídeo expirado ou inválido', corsHeaders);
+  if (!payload || payload.k === 'd') return reply(403, 'Link de vídeo expirado ou inválido', corsHeaders);
   const origin = originAllowed(payload.o, env.ORIGIN_SUFFIX);
   if (!origin || !STREAM_PATH.test(payload.s)) return reply(403, 'Link de vídeo inválido', corsHeaders);
 
@@ -163,6 +165,43 @@ export async function handle(request, env, fetchImpl = fetch) {
   if (length > 8 * 1024 * 1024) return reply(502, 'Segmento excede o limite', corsHeaders);
   // Segmentos passam em fluxo, sem guardar tudo na memória: menos atraso.
   return new Response(request.method === 'HEAD' ? null : r.body, { status: 200, headers: { ...headers, 'Content-Type': asset.endsWith('.ts') ? 'video/mp2t' : 'video/mp4' } });
+}
+
+// ---------- Download de gravações ----------
+// /d/<token>/<arquivo>.mp4 → MediaMTX da loja: /get?path=&start=&duration=&format=mp4 (servidor de
+// gravações, porta 9996, publicado no mesmo túnel e com a mesma senha de leitura).
+// O link é aberto direto pelo navegador, então os erros voltam como uma página simples.
+const page = (status, title, message) => new Response('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + title + '</title><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#222"><h1 style="font-size:1.3rem">' + title + '</h1><p>' + message + '</p></body></html>',
+  { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+
+async function handleDownload(request, env, fetchImpl, token, filename) {
+  const payload = await openEdgeToken(token, env.EDGE_VIDEO_KEY);
+  if (!payload || payload.k !== 'd') return page(403, 'Link vencido', 'Este link de download venceu. Volte à página do pedido e toque em "Baixar vídeo" de novo.');
+  const origin = originAllowed(payload.o, env.ORIGIN_SUFFIX);
+  const start = Date.parse(payload.st);
+  if (!origin || !STREAM_PATH.test(payload.s) || !Number.isFinite(start) || !(payload.du > 0 && payload.du <= 6 * 3600)) return page(403, 'Link inválido', 'Este link de download não é válido.');
+  const upstream = new URL('/get', origin);
+  upstream.searchParams.set('path', payload.s);
+  upstream.searchParams.set('start', new Date(start).toISOString());
+  upstream.searchParams.set('duration', String(payload.du));
+  upstream.searchParams.set('format', 'mp4');
+  let r;
+  try {
+    r = await fetchImpl(upstream.toString(), {
+      method: request.method === 'HEAD' ? 'HEAD' : 'GET',
+      headers: { Authorization: 'Basic ' + btoa(payload.u + ':' + payload.w), Accept: '*/*', 'User-Agent': 'FicouPronto-Edge/1' },
+      redirect: 'manual', signal: AbortSignal.timeout(60000)
+    });
+  } catch {
+    return page(503, 'Loja offline', 'O vídeo fica guardado no computador da loja, que não respondeu agora. Tente novamente mais tarde.');
+  }
+  if (r.status === 404) return page(404, 'Vídeo não encontrado', 'Não há gravação deste trecho no computador da loja. Ela pode ter passado do prazo de guarda ou não ter sido gravada.');
+  if (!r.ok) return page(503, 'Loja offline', 'O vídeo fica guardado no computador da loja, que não respondeu agora. Tente novamente mais tarde.');
+  const headers = { 'Content-Type': 'video/mp4', 'Content-Disposition': 'attachment; filename="' + filename + '"', 'Cache-Control': 'no-store, private', 'X-Content-Type-Options': 'nosniff' };
+  const length = r.headers.get('Content-Length');
+  if (length && /^\d+$/.test(length)) headers['Content-Length'] = length;
+  // Em fluxo: o arquivo não passa inteiro pela memória do Worker.
+  return new Response(request.method === 'HEAD' ? null : r.body, { status: 200, headers });
 }
 
 export default { fetch: (request, env) => handle(request, env) };

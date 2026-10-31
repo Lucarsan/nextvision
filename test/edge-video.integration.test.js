@@ -188,3 +188,35 @@ test('edge video: publica o Worker, entrega link assinado, Worker busca na loja 
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved);
   }
 });
+
+test('edge worker: download — só link de download, página amigável quando a loja não responde', async () => {
+  await withEnv({ EDGE_VIDEO_KEY: KEY, EDGE_VIDEO_HOST: 'live.ficoupronto.com' }, async () => {
+    const edge = await import('../src/edge-video.js?download=' + Date.now());
+    const env = { EDGE_VIDEO_KEY: KEY, CHECK_URL: 'https://app.ficoupronto.com/api/edge/live-check', ALLOWED_ORIGINS: '', ORIGIN_SUFFIX: '.ficoupronto.com' };
+    const link = edge.edgeDownloadFor({ origin: 'https://video-x.ficoupronto.com/', streamPath: 'cam_1', username: 'ficoupronto', password: 'senha-secreta-123', start: new Date('2026-10-31T12:00:00Z'), seconds: 90, filename: 'pedido-7-etapa-2.mp4' });
+    assert.match(link.url, /^https:\/\/live\.ficoupronto\.com\/d\/[A-Za-z0-9_-]+\/pedido-7-etapa-2\.mp4$/);
+    let mode = 'ok'; const calls = [];
+    const fake = async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (mode === 'down') throw new Error('down');
+      if (mode === '404') return new Response('', { status: 404 });
+      return new Response(new Uint8Array([0, 0, 0, 24]), { status: 200, headers: { 'Content-Length': '4' } });
+    };
+    let r = await worker.handle(new Request(link.url), env, fake);
+    assert.equal(r.status, 200); assert.equal(r.headers.get('Content-Disposition'), 'attachment; filename="pedido-7-etapa-2.mp4"'); assert.equal(r.headers.get('Content-Length'), '4');
+    const up = new URL(calls[0].url);
+    assert.equal(up.origin + up.pathname, 'https://video-x.ficoupronto.com/get');
+    assert.deepEqual(Object.fromEntries(up.searchParams), { path: 'cam_1', start: '2026-10-31T12:00:00.000Z', duration: '90', format: 'mp4' });
+    assert.equal(calls[0].init.headers.Authorization, 'Basic ' + Buffer.from('ficoupronto:senha-secreta-123').toString('base64'));
+    mode = 'down'; r = await worker.handle(new Request(link.url), env, fake);
+    assert.equal(r.status, 503); assert.match(r.headers.get('Content-Type'), /text\/html/); assert.match(await r.text(), /Loja offline/);
+    mode = '404'; r = await worker.handle(new Request(link.url), env, fake);
+    assert.equal(r.status, 404); assert.match(await r.text(), /não encontrado/i);
+    // Link do ao vivo não baixa arquivo.
+    const live = edge.edgeSourceFor({ origin: 'https://video-x.ficoupronto.com/', streamPath: 'cam_1', username: 'u_ok', password: 'senha-secreta-123', orderToken: 'pedido-abcdefghijklmnop' }).url;
+    assert.equal((await worker.handle(new Request(live.replace('/v/', '/d/').replace('index.m3u8', 'x.mp4')), env, fake)).status, 403);
+    // Vencido em 15 minutos.
+    const t = link.url.split('/d/')[1].split('/')[0];
+    assert.equal(await worker.openEdgeToken(t, KEY, Date.now() + 16 * 60000), null);
+  });
+});

@@ -68,7 +68,7 @@
   }
   // Modelo acompanha a marca escolhida.
   document.addEventListener('input', e => {
-    const input = e.target; if (!input.name || !input.name.startsWith('detail_')) return;
+    const input = e.target; if (typeof input.name !== 'string' || !input.name.startsWith('detail_')) return;
     const form = input.form; if (!form) return;
     const key = input.name.slice(7);
     form.querySelectorAll(`[data-depends="${key}"]`).forEach(dep => {

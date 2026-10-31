@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
-import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
+import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -631,6 +631,36 @@ app.get('/api/public/orders/:token/live-source',rateLimit({windowMs:60000,limit:
  }
  res.json({mode:'proxy',url:'/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8'});
 }));
+// Download de uma gravação (uma etapa/visita). O arquivo fica no PC da loja; o Render só
+// confere o pedido e devolve um link curto do Worker, que busca o trecho no MediaMTX da loja.
+app.get('/api/public/orders/:token/recordings/:id/download',rateLimit({windowMs:60000,limit:30}),route(async(req,res)=>{
+ const {token,id}=req.params;
+ if(!/^[\w-]{16,100}$/.test(token)||!uuid.safeParse(id).success)return bad(res,404,'Não encontrado');
+ const legacy=legacyMediaConfig();
+ const r=await q(`SELECT rec.id,rec.started_at,rec.ended_at,rec.step_index,rec.visit_index,rec.camera_id,c.stream_path,o.order_number,o.tenant_id,t.slug tenant_slug,
+ rec.ended_at > now() - make_interval(days => t.retention_days) within_retention,
+ sm.origin media_origin,sm.media_username,sm.media_password_enc,d.last_seen_at > now() - interval '90 seconds' device_online,(d.health->>'clock_skew_ms')::bigint clock_skew_ms
+ FROM recordings rec JOIN orders o ON o.id=rec.order_id AND o.tenant_id=rec.tenant_id JOIN tenants t ON t.id=o.tenant_id
+ JOIN cameras c ON c.id=rec.camera_id AND c.tenant_id=rec.tenant_id
+ LEFT JOIN shop_devices d ON d.id=COALESCE(rec.device_id,c.device_id) AND d.tenant_id=rec.tenant_id
+ LEFT JOIN store_media sm ON sm.tenant_id=o.tenant_id
+ WHERE rec.id=$3 AND (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.status IN ('trial','active')
+ AND rec.status IN ('upload_pending','ready') AND rec.started_at IS NOT NULL AND rec.ended_at > rec.started_at + interval '2 seconds'`,[digestToken(token),token,id]);
+ if(!r.rowCount)return bad(res,404,'Gravação não encontrada');
+ const rec=r.rows[0];
+ res.set('Cache-Control','no-store');
+ if(!rec.within_retention)return bad(res,410,'Esta gravação passou do prazo de guarda da loja e foi apagada.');
+ const config=mediaConfigFor(rec,legacy);
+ if(!config?.perStore||!edgeReady()||!edgeEnabledFor({id:rec.tenant_id,slug:rec.tenant_slug}))return bad(res,503,'Download de vídeo ainda não disponível para esta loja.');
+ if(!rec.device_online)return bad(res,409,'A loja está offline no momento. O vídeo fica guardado no computador da loja; tente novamente mais tarde.');
+ const streamPath=streamPathFor({id:rec.camera_id,stream_path:rec.stream_path},legacy);
+ if(!/^[A-Za-z0-9_-]{1,100}$/.test(streamPath||''))return bad(res,503,'Câmera sem caminho de gravação');
+ const skew=Number.isFinite(Number(rec.clock_skew_ms))?Number(rec.clock_skew_ms):0;
+ const seconds=Math.min(6*3600,Math.max(1,Math.round((new Date(rec.ended_at)-new Date(rec.started_at))/1000)));
+ const filename='pedido-'+(rec.order_number||'video')+'-etapa-'+(Number(rec.step_index)+1)+(Number(rec.visit_index)?'-parte-'+(Number(rec.visit_index)+1):'')+'.mp4';
+ const link=edgeDownloadFor({origin:config.origin,streamPath,username:config.username,password:config.password,start:new Date(new Date(rec.started_at).getTime()+skew),seconds,filename});
+ res.json({url:link.url,filename,expires_at:link.expiresAt,seconds});
+}));
 // Chamada pelo Worker a cada ~15 s por link: o pedido ainda pode ver esta câmera?
 app.post('/api/edge/live-check',rateLimit({windowMs:60000,limit:3000}),route(async(req,res)=>{
  const p=openEdgeToken(req.body?.token);
@@ -665,7 +695,13 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  (SELECT coalesce(json_agg(json_build_object('step_name',a.process_snapshot->'steps'->>a.step_index,'step_index',a.step_index,
  'total_steps',jsonb_array_length(a.process_snapshot->'steps'),'status',a.status) ORDER BY a.started_at,a.id),'[]'::json)
  FROM orders a WHERE a.tenant_id=o.tenant_id AND a.id<>o.id AND a.deleted_at IS NULL
- AND (a.status='live' OR (a.status='paused' AND a.started_at IS NOT NULL))) ELSE '[]'::json END active_services
+ AND (a.status='live' OR (a.status='paused' AND a.started_at IS NOT NULL))) ELSE '[]'::json END active_services,
+ (SELECT coalesce(json_agg(json_build_object('id',rec.id,'step_index',rec.step_index,'visit_index',rec.visit_index,
+ 'started_at',rec.started_at,'ended_at',rec.ended_at,'seconds',round(extract(epoch FROM rec.ended_at-rec.started_at))::int,
+ 'expires_at',rec.ended_at+make_interval(days => t.retention_days)) ORDER BY rec.step_index,rec.visit_index),'[]'::json)
+ FROM recordings rec WHERE rec.order_id=o.id AND rec.tenant_id=o.tenant_id AND rec.status IN ('upload_pending','ready')
+ AND rec.started_at IS NOT NULL AND rec.ended_at > rec.started_at + interval '2 seconds'
+ AND rec.ended_at > now() - make_interval(days => t.retention_days)) recordings
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.status IN ('trial','active')`,[digestToken(req.params.token),req.params.token]);
  if(!r.rowCount)return bad(res,404,'Pedido não encontrado');

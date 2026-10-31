@@ -89,7 +89,10 @@ const componentState = z.enum(['ok', 'starting', 'degraded', 'down', 'unknown'])
 const heartbeatSchema = z.object({
   agent_version: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/),
   components: z.record(z.enum(['service', 'tunnel', 'relay', 'publisher', 'network', 'disk']), z.object({ state: componentState, detail: z.string().max(200).optional() })).default({}),
-  cameras: z.array(z.object({ id: z.string().uuid(), state: componentState, detail: z.string().max(200).optional() })).max(64).default([])
+  cameras: z.array(z.object({ id: z.string().uuid(), state: componentState, detail: z.string().max(200).optional() })).max(64).default([]),
+  // Relógio do PC: as gravações são achadas pelo horário, então a central corrige a diferença.
+  clock: z.string().datetime({ offset: true }).optional(),
+  recording: z.object({ state: componentState, detail: z.string().max(200).optional() }).optional()
 });
 
 export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route, bad, valid, audit, rateLimit, uuid }) {
@@ -154,7 +157,9 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
       if (active.rows[0].n === 1) await q('UPDATE cameras SET device_id=$2 WHERE tenant_id=$1 AND device_id IS NULL AND deleted_at IS NULL', [req.device.tenant_id, req.device.id]);
       const cameras = await q(`SELECT id,name,station,enabled,stream_path,config_version,device_id FROM cameras
         WHERE tenant_id=$1 AND deleted_at IS NULL AND (device_id=$2 OR device_id IS NULL) ORDER BY created_at,id`, [req.device.tenant_id, req.device.id]);
-      const store = await q('SELECT id,name,slug,camera_limit FROM tenants WHERE id=$1', [req.device.tenant_id]);
+      const store = await q('SELECT id,name,slug,camera_limit,retention_days FROM tenants WHERE id=$1', [req.device.tenant_id]);
+      // Mantém a rota de gravações (/get) no túnel também das lojas criadas antes dela.
+      if (media.tunnel_id) await cf.configureTunnel(media.tunnel_id, new URL(media.origin).hostname).catch(e => console.error('Túnel não reconfigurado', { step: e.step, status: e.status }));
       await q('UPDATE shop_devices SET provisioned_at=now(),last_seen_at=now() WHERE id=$1', [req.device.id]);
       await q("INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,NULL,'device_provisioned','shop_device',$2)", [req.device.tenant_id, req.device.id]);
       res.set('Cache-Control', 'no-store').json({
@@ -163,6 +168,7 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
         media: { origin: media.origin, hostname: new URL(media.origin).hostname, username: media.media_username, password: open(media.media_password_enc), rtsp_port: 8554, hls_port: 8888 },
         tunnel: { id: media.tunnel_id, name: media.tunnel_name, token },
         cameras: cameras.rows.map(({ device_id, ...c }) => ({ ...c, stream_path: streamPathFor(c, legacy), bound: device_id === req.device.id })),
+        recording: { retention_days: store.rows[0].retention_days, playback_port: 9996 },
         heartbeat_seconds: 30
       });
     } catch (error) { sendError(res, error); }
@@ -173,6 +179,8 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
     const known = await q('SELECT id FROM cameras WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])', [req.device.tenant_id, v.cameras.map(c => c.id)]);
     const allowed = new Set(known.rows.map(r => r.id));
     const health = { components: v.components, cameras: v.cameras.filter(c => allowed.has(c.id)) };
+    if (v.recording) health.recording = v.recording;
+    if (v.clock) { const skew = Date.parse(v.clock) - Date.now(); if (Math.abs(skew) < 86400000) health.clock_skew_ms = Math.round(skew); }
     await q('UPDATE shop_devices SET agent_version=$2,health=$3,health_at=now(),last_seen_at=now() WHERE id=$1', [req.device.id, v.agent_version, health]);
     res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30 });
   }));

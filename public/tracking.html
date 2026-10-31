@@ -45,6 +45,9 @@ li.done .step{color:#374151}li.current .step{color:#111827;font-weight:700}
 h2{margin:0 0 10px;font-size:15px;font-weight:600}
 .rec a{display:inline-flex;margin-top:8px;font-size:13px;font-weight:600;color:#C2410C}
 .rec video{width:100%;border-radius:12px;margin-top:8px;background:#000}
+.rec-item{padding:10px 0;border-top:1px solid #F1F1F1}.rec-item:first-of-type{border-top:0}.rec-item small{font-size:12px}
+button.secondary{min-height:42px;margin-top:8px;padding:0 16px;border:1px solid #F25C1F;border-radius:12px;background:#fff;color:#C2410C;font:inherit;font-weight:600;cursor:pointer}button.secondary:disabled{opacity:.6}
+.rec .small{font-size:12px;margin:4px 0 8px}.rec .muted{color:#6B7280}.rec-msg:empty{display:none}.rec-msg{margin:6px 0 0;color:#6B7280}
 .loyalty .bar{height:8px;background:#F2F3F5;border-radius:999px;overflow:hidden;margin:10px 0}.loyalty .bar div{height:100%;background:#F25C1F;border-radius:999px}
 .loyalty p{margin:6px 0;font-size:13px;color:#374151}
 button.primary{height:46px;padding:0 18px;border:0;border-radius:12px;background:#F25C1F;color:#fff;font:inherit;font-weight:600;cursor:pointer}
@@ -95,16 +98,29 @@ function liveView(p){
  if(p.camera_available===false)return '<section class="live"><div class="no-video">A câmera desta etapa está temporariamente indisponível.</div></section>';
  return '<section class="live"><div class="live-box"><video class="nv-live-player" data-live="1" muted autoplay playsinline controls preload="none"></video><span class="badge"><i></i>Ao vivo</span></div><div class="live-foot"><span>'+safe(nicheOf(p).live)+'</span><span class="nv-live-message" role="status">Carregando vídeo autorizado…</span></div></section>';
 }
+function duration(sec){sec=Math.max(0,Number(sec)||0);const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),x=sec%60;return h?h+' h '+m+' min':m?m+' min'+(x?' '+x+' s':''):x+' s'}
+// Download: a central confere o pedido e devolve um link curto que baixa direto do computador da loja.
+document.addEventListener('click',async e=>{
+ const b=e.target.closest?.('.rec-download');if(!b)return;
+ const msg=b.parentElement.querySelector('.rec-msg');b.disabled=true;if(msg)msg.textContent='Preparando o download…';
+ try{
+  const r=await fetch('/api/public/orders/'+encodeURIComponent(token)+'/recordings/'+encodeURIComponent(b.dataset.rec)+'/download',{cache:'no-store'});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||typeof d.url!=='string'||!d.url.startsWith('https://'))throw Error(d.error||'Não foi possível preparar o download.');
+  if(msg)msg.textContent='O download vai começar. Vídeos longos podem demorar alguns minutos.';
+  window.location.href=d.url;
+ }catch(err){if(msg)msg.textContent=err.message}finally{setTimeout(()=>{b.disabled=false},3000)}
+});
 function render(p){
  const steps=Array.isArray(p.steps)?p.steps:[],idx=Number(p.step_index)||0,head=headline(p,steps);
  const loyalty=!!p.loyalty_enabled&&p.loyalty_checkins!==null&&p.loyalty_checkins!==undefined;
  const history=Array.isArray(p.loyalty_history)?p.loyalty_history:[];
  const claimable=loyalty&&Number(p.loyalty_checkins)>=Number(p.loyalty_target)&&!history.some(h=>h.status==='issued');
- const recs=(p.recordings||[]).filter(r=>r.status==='ready'&&r.download_url);
+ const recs=Array.isArray(p.recordings)?p.recordings:[];
  const timeline='<ol class="timeline">'+steps.map((step,i)=>{const done=p.status==='completed'||(p.status!=='queued'&&i<idx),cur=!done&&p.status!=='queued'&&i===idx;return '<li class="'+(done?'done':cur?'current':'')+'"><span class="rail"><span class="dot"></span><span class="line"></span></span><span class="step">'+safe(cap(step))+(cur?'<small>'+(p.status==='paused'?'pausado':'agora')+'</small>':'')+'</span></li>'}).join('')+'</ol>';
  return '<section class="card"><div class="status-head"><div><div class="ref">'+(p.external_reference?'Pedido '+safe(p.external_reference):'Seu pedido')+(p.process?' · '+safe(cap(p.process)):'')+'</div><h1>'+safe(head.h)+'</h1><p class="sub">'+safe(head.sub)+'</p></div><span class="chip '+head.cls+'">'+safe(head.chip)+'</span></div>'+timeline+'</section>'+
  liveView(p)+queueView(p)+
- (recs.length?'<section class="card rec"><h2>Vídeos das etapas</h2>'+recs.map(r=>'<div><strong>'+safe(cap(steps[Number(r.step_index)]||'Etapa'))+'</strong><video controls preload="metadata" src="'+safe(r.download_url)+'"></video><a href="'+safe(r.download_url)+'" download>Baixar vídeo</a></div>').join('')+'</section>':'')+
+ (recs.length?'<section class="card rec"><h2>Vídeos das etapas</h2><p class="small muted">O vídeo fica guardado no computador da loja até '+safe(new Date(recs[0].expires_at).toLocaleDateString('pt-BR'))+'.</p>'+recs.map(r=>{const multi=recs.filter(x=>x.step_index===r.step_index).length>1;return '<div class="rec-item"><div><strong>'+safe(cap(steps[Number(r.step_index)]||'Etapa'))+(multi?' · parte '+(Number(r.visit_index)+1):'')+'</strong><small class="muted"> · '+safe(duration(r.seconds))+'</small></div><button class="secondary rec-download" type="button" data-rec="'+safe(r.id)+'">Baixar vídeo</button><p class="small rec-msg" role="status"></p></div>'}).join('')+'</section>':'')+
  (loyalty?'<section class="card loyalty"><h2>Sua fidelidade</h2><p>Você tem <strong>'+Number(p.loyalty_checkins)+'</strong> de <strong>'+Number(p.loyalty_target)+'</strong> check-ins.</p><div class="bar"><div style="width:'+Math.min(100,Math.round(Number(p.loyalty_checkins)/Math.max(1,Number(p.loyalty_target))*100))+'%"></div></div><p>Recompensa: '+safe(p.loyalty_reward||'Benefício da loja')+'</p>'+(claimable?'<button class="primary" id="claim">Solicitar recompensa</button>':'')+'<div id="couponArea"></div><details><summary>Histórico de recompensas</summary>'+(history.length?history.map(h=>'<p>'+safe(h.reward)+' · '+(h.status==='redeemed'?'Resgatada':'Cupom emitido')+' · '+new Date(h.issued_at).toLocaleDateString('pt-BR')+'</p>').join(''):'<p>Nenhuma recompensa solicitada até agora.</p>')+'</details></section>':'');
 }
 let hlsPlayer=null,liveVideo=null,liveRetryTimer=null,liveGeneration=0,liveRetryDelay=2000,liveFailed=false,hlsLibraryPromise=null;

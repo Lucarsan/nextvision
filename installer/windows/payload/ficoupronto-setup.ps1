@@ -276,7 +276,7 @@ function Show-Install {
       Save-FpConfig ([ordered]@{ api_base = $ApiBase; device = @{ id = $P.device.id; name = $P.device.name }; store = @{ id = $P.store.id; name = $P.store.name }
           media = @{ hostname = $P.media.hostname; username = $P.media.username }; tunnel = @{ id = $P.tunnel.id; name = $P.tunnel.name }
           cameras = $camList; installed_at = [datetime]::UtcNow.ToString('o'); version = $paths.Version })
-      Write-FpMediaMtxConfig $P.media.username $P.media.password
+      Write-FpMediaMtxConfig $P.media.username $P.media.password (Get-FpRetentionDays $P)
       Write-FpTunnelToken $P.tunnel.token
       [string]$camList.Count + ' camera(s)'
     }) -and $ok
@@ -357,6 +357,7 @@ function Show-Maintenance {
       $st = Get-Content -LiteralPath $paths.Status -Raw | ConvertFrom-Json
       $age = [int]([datetime]::UtcNow - [datetime]::Parse($st.observed_at).ToUniversalTime()).TotalSeconds
       $it = New-Object Windows.Forms.ListViewItem('Central'); [void]$it.SubItems.Add([string]$st.central + ' (atualizado ha ' + $age + ' s)'); [void]$script:grid.Items.Add($it)
+      if ($st.PSObject.Properties['recording']) { $it = New-Object Windows.Forms.ListViewItem('Gravacao'); [void]$it.SubItems.Add([string]$st.recording + ' | ' + [string]$st.recordings_free); [void]$script:grid.Items.Add($it) }
       foreach ($c in @($st.cameras)) { $it = New-Object Windows.Forms.ListViewItem('Camera ' + $c.name); [void]$it.SubItems.Add([string]$c.detail + ' - ' + [string]$c.host); [void]$script:grid.Items.Add($it) }
     } catch { $it = New-Object Windows.Forms.ListViewItem('Agente'); [void]$it.SubItems.Add('sem status recente'); [void]$script:grid.Items.Add($it) }
   }
@@ -380,7 +381,7 @@ function Show-Maintenance {
     $form.Cursor = 'WaitCursor'
     try {
       $S.Token = [string]$existingSecrets.device_token; Invoke-Provision
-      Write-FpMediaMtxConfig $S.Provision.media.username $S.Provision.media.password
+      Write-FpMediaMtxConfig $S.Provision.media.username $S.Provision.media.password (Get-FpRetentionDays $S.Provision)
       Write-FpTunnelToken $S.Provision.tunnel.token
       Set-FpFirewall; Install-FpServices; Start-FpServices; Msg 'Servicos reinstalados e iniciados.'
     } catch { Msg $_.Exception.Message 'Warning' } finally { $form.Cursor = 'Default'; & $script:refresh }

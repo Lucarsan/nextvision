@@ -42,6 +42,9 @@ $nextHeartbeat = [datetime]::UtcNow
 $heartbeatEvery = 30
 $nextStatus = [datetime]::UtcNow
 $central = 'aguardando'
+$recording = @{}
+$recordingStatus = @{ state = 'unknown'; detail = 'aguardando' }
+$nextRecordingSync = [datetime]::UtcNow
 Log ('Agente ' + $paths.Version + ' iniciado com ' + @($config.cameras).Count + ' camera(s).')
 
 try {
@@ -102,12 +105,19 @@ try {
       }
     }
 
+    # Gravacao: a cada 5 s confere com a central quais cameras gravam agora.
+    if (-not $blocked -and $now -ge $nextRecordingSync) {
+      $nextRecordingSync = $now.AddSeconds(5)
+      try { $recordingStatus = Sync-FpRecordings $config $secrets.device_token $recording }
+      catch { $recordingStatus = @{ state = 'degraded'; detail = 'erro na gravacao' }; Log ('Gravacao: ' + $_.Exception.Message) }
+    }
+
     if ($now -ge $nextHeartbeat) {
       $camStates = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; state = $s.State; detail = [string]$s.Status } })
       $okCount = @($camStates | Where-Object { $_.state -eq 'ok' }).Count
       $tunnel = Get-Service -Name 'FicouPronto.Tunel' -ErrorAction SilentlyContinue
       $free = [math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1)
-      $body = @{ agent_version = $paths.Version; cameras = $camStates; components = @{
+      $body = @{ agent_version = $paths.Version; clock = [datetime]::UtcNow.ToString('o'); recording = $recordingStatus; cameras = $camStates; components = @{
           service = @{ state = 'ok' }
           relay = @{ state = $(if (Test-FpTcpPort '127.0.0.1' 8554 500) { 'ok' } else { 'down' }) }
           tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
@@ -122,7 +132,8 @@ try {
     # Estado local para a tela de manutencao (sem segredos).
     if ($now -ge $nextStatus) {
       $nextStatus = $now.AddSeconds(2)
-      Write-NvJson $paths.Status @{ observed_at = $now.ToString('o'); version = $paths.Version; central = $central
+      Write-NvJson $paths.Status @{ observed_at = $now.ToString('o'); version = $paths.Version; central = $central; recording = [string]$recordingStatus.detail
+        recordings_free = $(try { [string][math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1) + ' GB livres no disco' } catch { '' })
         cameras = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; name = $_.name; host = $_.host; state = $s.State; detail = [string]$s.Status } }) }
     }
     Start-Sleep -Milliseconds 1000

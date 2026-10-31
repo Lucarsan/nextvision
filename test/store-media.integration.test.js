@@ -90,8 +90,10 @@ test('store media: provisioning, adoption, heartbeat and per-store video origin'
     assert.match(p1.tunnel.token, /^eyJ/);
     assert.equal(p1.tunnel.name, 'loja-' + label);
     assert.deepEqual(p1.cameras.map(c => [c.id, c.bound]), [[camera.id, true]]);
-    assert.equal(cf.tunnels.get(p1.tunnel.id).config.ingress[0].hostname, p1.media.hostname);
-    assert.equal(cf.tunnels.get(p1.tunnel.id).config.ingress[0].service, 'http://127.0.0.1:8888');
+    // /get → servidor de gravações (download); o resto → HLS ao vivo.
+    assert.deepEqual(cf.tunnels.get(p1.tunnel.id).config.ingress.map(r => [r.hostname, r.path, r.service]), [
+      [p1.media.hostname, '^/get$', 'http://127.0.0.1:9996'], [p1.media.hostname, undefined, 'http://127.0.0.1:8888'], [undefined, undefined, 'http_status:404']]);
+    assert.equal(p1.recording.retention_days, 15);
     assert.equal(cf.dns[0].content, p1.tunnel.id + '.cfargotunnel.com'); assert.equal(cf.dns[0].proxied, true);
     // A senha fica criptografada no banco.
     const stored = (await db.query('SELECT media_password_enc FROM store_media WHERE tenant_id=$1', [f.tenant])).rows[0].media_password_enc;

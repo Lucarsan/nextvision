@@ -16,8 +16,10 @@ $script:MediaMtxConfig = Join-Path $script:SecretDir 'mediamtx.yml'
 $script:StatusFile = Join-Path $script:DataDir 'status.json'
 $script:PilotStateFile = Join-Path $script:DataDir 'piloto-desativado.json'
 $script:ReportFile = Join-Path $script:DataDir 'relatorio-instalacao.txt'
+$script:RecordingsDir = Join-Path $script:DataDir 'gravacoes'
+$script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
-$script:AgentVersion = '0.3.0'
+$script:AgentVersion = '0.4.0'
 $script:DefaultApi = 'https://app.ficoupronto.com'
 $script:Services = @(
   @{ Id = 'FicouPronto.MediaMTX'; Name = 'Ficou Pronto - Video local (MediaMTX)' },
@@ -28,7 +30,7 @@ $script:Services = @(
 function Get-FpPaths {
   return [pscustomobject]@{ Install = $script:InstallDir; Bin = $script:BinDir; Data = $script:DataDir; Secrets = $script:SecretDir
     Services = $script:ServiceDir; Logs = $script:LogDir; Config = $script:ConfigFile; Status = $script:StatusFile; Report = $script:ReportFile
-    PilotState = $script:PilotStateFile; Ffmpeg = (Join-Path $script:BinDir 'ffmpeg.exe'); MediaMtx = (Join-Path $script:BinDir 'mediamtx.exe')
+    PilotState = $script:PilotStateFile; Recordings = $script:RecordingsDir; Ffmpeg = (Join-Path $script:BinDir 'ffmpeg.exe'); MediaMtx = (Join-Path $script:BinDir 'mediamtx.exe')
     Cloudflared = (Join-Path $script:BinDir 'cloudflared.exe'); WinSW = (Join-Path $script:BinDir 'WinSW-x64.exe'); Version = $script:AgentVersion }
 }
 
@@ -51,8 +53,10 @@ function Set-FpPrivateAcl([string]$Path) {
 }
 
 function Initialize-FpDirectories {
-  foreach ($d in @($script:DataDir, $script:SecretDir, $script:ServiceDir, $script:LogDir)) { [IO.Directory]::CreateDirectory($d) | Out-Null }
+  foreach ($d in @($script:DataDir, $script:SecretDir, $script:ServiceDir, $script:LogDir, $script:RecordingsDir)) { [IO.Directory]::CreateDirectory($d) | Out-Null }
   Set-FpPrivateAcl $script:SecretDir
+  # Videos dos clientes: so SYSTEM (MediaMTX) e Administradores.
+  Set-FpPrivateAcl $script:RecordingsDir
 }
 
 function Protect-FpBytes([byte[]]$Bytes) {
@@ -192,30 +196,111 @@ function Set-FpFirewall {
 function Remove-FpFirewall { Get-NetFirewallRule -DisplayName 'Ficou Pronto FFmpeg (camera UDP)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
 
 # ---------- MediaMTX e tunel ----------
-function Write-FpMediaMtxConfig([string]$User, [string]$Password) {
+# Gravacao: o MediaMTX grava so as cameras que o agente ligar (API local, 127.0.0.1:9997) e
+# entrega trechos gravados como MP4 pelo servidor de gravacoes (127.0.0.1:9996, mesma senha
+# de leitura), publicado no tunel da loja. Arquivos vencidos sao apagados pelo proprio MediaMTX.
+function Write-FpMediaMtxConfig([string]$User, [string]$Password, [int]$RetentionDays = 15) {
   if ($User -notmatch '^[a-z0-9_-]{3,40}$' -or $Password -match '[\r\n''"]' -or $Password.Length -lt 12) { throw 'Credencial de video invalida recebida da central.' }
+  if ($RetentionDays -lt 1 -or $RetentionDays -gt 365) { $RetentionDays = 15 }
+  [IO.Directory]::CreateDirectory($script:RecordingsDir) | Out-Null
+  $recordPath = (Join-Path $script:RecordingsDir '%path') + [IO.Path]::DirectorySeparatorChar + '%Y-%m-%d_%H-%M-%S-%f'
   $yml = @"
 logLevel: warn
 rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
 rtmp: no
 webrtc: no
 srt: no
+moq: no
 hlsAddress: 127.0.0.1:8888
+api: yes
+apiAddress: 127.0.0.1:9997
+playback: yes
+playbackAddress: 127.0.0.1:9996
 authInternalUsers:
 - user: any
   ips: ['127.0.0.1', '::1']
   permissions:
   - action: publish
+  - action: api
 - user: $User
   pass: '$Password'
   permissions:
   - action: read
+  - action: playback
+pathDefaults:
+  record: no
+  recordPath: '$recordPath'
+  recordFormat: fmp4
+  recordSegmentDuration: 10m
+  recordDeleteAfter: $($RetentionDays * 24)h
 paths:
   all_others:
     source: publisher
 "@
   Write-FpFileAtomic $script:MediaMtxConfig ([Text.UTF8Encoding]::new($false).GetBytes($yml))
 }
+
+# Prazo de guarda vindo da central (versoes antigas da central nao mandam: 15 dias).
+function Get-FpRetentionDays($Provision) {
+  try { $d = [int]$Provision.recording.retention_days; if ($d -ge 1 -and $d -le 365) { return $d } } catch { }
+  return 15
+}
+
+# ---------- Gravacao (API local do MediaMTX) ----------
+function Invoke-FpMediaApi([string]$Method, [string]$Path, $Body) {
+  $params = @{ Uri = ($script:MediaApi + $Path); Method = $Method; TimeoutSec = 5; UseBasicParsing = $true }
+  if ($null -ne $Body) { $params['Body'] = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress)); $params['ContentType'] = 'application/json' }
+  try {
+    $r = Invoke-WebRequest @params
+    $text = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+    return [pscustomobject]@{ Ok = $true; Status = [int]$r.StatusCode; Data = $(if ($text) { $text | ConvertFrom-Json } else { $null }) }
+  } catch {
+    $status = 0; if ($null -ne $_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+    return [pscustomobject]@{ Ok = $false; Status = $status; Data = $null }
+  }
+}
+
+# Liga/desliga a gravacao de um caminho sem derrubar o video ao vivo (testado no MediaMTX 1.21.3).
+function Set-FpRecording([string]$StreamPath, [bool]$On) {
+  if ($StreamPath -notmatch '^[A-Za-z0-9_-]{1,100}$') { throw 'Caminho de camera invalido.' }
+  $current = Invoke-FpMediaApi 'GET' ('/v3/config/paths/get/' + $StreamPath) $null
+  if (-not $current.Ok) {
+    if ($current.Status -ne 404) { return $false }
+    if (-not $On) { return $true }
+    return (Invoke-FpMediaApi 'POST' ('/v3/config/paths/add/' + $StreamPath) @{ source = 'publisher'; record = $true }).Ok
+  }
+  if ([bool]$current.Data.record -eq $On) { return $true }
+  return (Invoke-FpMediaApi 'PATCH' ('/v3/config/paths/patch/' + $StreamPath) @{ record = $On }).Ok
+}
+
+# Uma rodada: pergunta a central o que gravar, ajusta o MediaMTX e confirma as etapas.
+# Devolve o resumo para o sinal de vida. Sem central, mantem o estado atual (nao perde gravacao).
+function Sync-FpRecordings($Config, [string]$Token, [hashtable]$Recording) {
+  $r = Invoke-FpApi -Base $Config.api_base -Method GET -Path '/api/connect/recording-jobs' -Token $Token -TimeoutSec 10
+  if (-not $r.Ok) { return @{ state = $(if ($Recording.Count) { 'degraded' } else { 'unknown' }); detail = 'central indisponivel: ' + $r.Error } }
+  $jobs = @($r.Data.jobs)
+  $wanted = @{}
+  foreach ($j in $jobs) {
+    if ($j.order_status -eq 'live' -and [int]$j.current_step -eq [int]$j.step_index -and $j.status -in @('pending', 'recording')) { $wanted[[string]$j.camera_id] = $true }
+  }
+  $failed = @()
+  foreach ($cam in @($Config.cameras)) {
+    $on = $wanted.ContainsKey([string]$cam.id)
+    if (Set-FpRecording $cam.stream_path $on) { $Recording[[string]$cam.id] = $on } else { $failed += $cam.name }
+  }
+  foreach ($j in $jobs) {
+    $cid = [string]$j.camera_id
+    $event = $null
+    if ($j.status -eq 'pending' -and $wanted.ContainsKey($cid) -and $Recording[$cid]) { $event = 'started' }
+    elseif ($j.status -eq 'finalizing') { $event = 'stopped' }
+    if ($event) { [void](Invoke-FpApi -Base $Config.api_base -Method POST -Path ('/api/connect/recording-jobs/' + $j.recording_id + '/event') -Body @{ event = $event } -Token $Token -TimeoutSec 10) }
+  }
+  $active = @($Recording.Keys | Where-Object { $Recording[$_] }).Count
+  if ($failed.Count) { return @{ state = 'degraded'; detail = 'falha ao gravar: ' + ($failed -join ', ') } }
+  return @{ state = 'ok'; detail = $(if ($active) { 'gravando ' + $active + ' camera(s)' } else { 'sem atendimento em andamento' }) }
+}
+
 function Write-FpTunnelToken([string]$Token) {
   if ($Token -notmatch '^[A-Za-z0-9_\-+/=]{40,4000}$') { throw 'Token do tunel invalido recebido da central.' }
   Write-FpFileAtomic $script:TunnelTokenFile ([Text.Encoding]::ASCII.GetBytes($Token))

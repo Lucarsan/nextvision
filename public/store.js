@@ -314,7 +314,7 @@ function drawCustomers() {
   const search = ($('customerSearch')?.value || '').trim().toLocaleLowerCase('pt-BR');
   const customers = cachedCustomers.filter(c => [c.name, c.phone, c.email, c.address].some(v => String(v || '').toLocaleLowerCase('pt-BR').includes(search)));
   $('customerCount').textContent = `${customers.length} de ${cachedCustomers.length} clientes`;
-  container.innerHTML = customers.map(c => `<article class="nv-customer-row"><div class="nv-customer-avatar" aria-hidden="true">${safe((c.name || '?').slice(0, 1).toLocaleUpperCase('pt-BR'))}</div><div class="nv-customer-info"><h3>${safe(cap(c.name))}</h3><p>${safe(c.phone || 'Telefone não informado')}${c.email ? ' · ' + safe(c.email) : ''}</p>${c.address ? `<p>${safe(c.address)}</p>` : ''}</div><div class="nv-customer-actions">${c.phone ? `<a class="nv-phone-link" href="https://wa.me/${String(c.phone).replace(/\D/g, '').startsWith('55') ? '' : '55'}${String(c.phone).replace(/\D/g, '')}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button class="nv-button secondary" data-edit-customer="${safe(c.id)}">Editar</button></div></article>`).join('') || notice('Nenhum cliente encontrado.');
+  container.innerHTML = customers.map(c => `<article class="nv-customer-row"><div class="nv-customer-avatar" aria-hidden="true">${safe((c.name || '?').slice(0, 1).toLocaleUpperCase('pt-BR'))}</div><div class="nv-customer-info"><h3>${safe(cap(c.name))}</h3><p>${safe(c.phone || 'Telefone não informado')}${c.email ? ' · ' + safe(c.email) : ''}</p>${c.address ? `<p>${safe(c.address)}</p>` : ''}</div><div class="nv-customer-actions">${c.phone ? `<a class="nv-phone-link" href="https://wa.me/${String(c.phone).replace(/\D/g, '').startsWith('55') ? '' : '55'}${String(c.phone).replace(/\D/g, '')}" target="_blank" rel="noopener">WhatsApp</a>` : ''}<button class="nv-button secondary" data-edit-customer="${safe(c.id)}">Editar</button><button class="fp-icon-btn" data-delete-customer="${safe(c.id)}" aria-label="Excluir cliente" title="Excluir cliente"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div></article>`).join('') || notice('Nenhum cliente encontrado.');
 }
 function editCustomer(id) {
   const c = cachedCustomers.find(c => c.id === id); if (!c) return;
@@ -409,6 +409,12 @@ document.addEventListener('click', async e => {
     if (button.dataset.expandLive) { const id = button.dataset.expandLive; expandedLive.has(id) ? expandedLive.delete(id) : expandedLive.add(id); renderNow(); return; }
     if (button.dataset.editOrder) { await editOrder(button.dataset.editOrder); return; }
     if (button.dataset.editCustomer) { editCustomer(button.dataset.editCustomer); return; }
+    if (button.dataset.deleteCustomer) {
+      const c = cachedCustomers.find(x => x.id === button.dataset.deleteCustomer); if (!c) return;
+      if (!confirm(`Excluir o cliente "${c.name}"? Ele sai da lista, das buscas e das mensagens. Pedidos e vendas já feitos continuam no histórico.`)) return;
+      button.disabled = true; await api('/customers/' + c.id, 'DELETE');
+      cachedCustomers = await api('/customers'); drawCustomers(); await reload(true); feedback('Cliente excluído.'); return;
+    }
     if (button.dataset.transitionId) {
       const o = cachedOrders.find(o => o.id === button.dataset.transitionId); if (!o) return;
       button.disabled = true;

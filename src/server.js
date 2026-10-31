@@ -277,7 +277,7 @@ app.patch('/api/store/loyalty',auth,roles('owner'),route(async(req,res)=>{
  await audit(req,'update','loyalty_settings',tid(req));res.json(r.rows[0]);
 }));
 app.get('/api/store/loyalty/customers',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT c.id,c.name,count(l.id)::int checkins FROM customers c LEFT JOIN loyalty_checkins l ON l.customer_id=c.id AND l.tenant_id=c.tenant_id WHERE c.tenant_id=$1 GROUP BY c.id,c.name ORDER BY c.name',[tid(req)]);res.json(r.rows);
+ const r=await q('SELECT c.id,c.name,count(l.id)::int checkins FROM customers c LEFT JOIN loyalty_checkins l ON l.customer_id=c.id AND l.tenant_id=c.tenant_id WHERE c.tenant_id=$1 AND c.deleted_at IS NULL GROUP BY c.id,c.name ORDER BY c.name',[tid(req)]);res.json(r.rows);
 }));
 
 const baseUrl=()=>process.env.PUBLIC_BASE_URL||'http://localhost:3000';
@@ -327,7 +327,7 @@ async function editCamera(req,res,cameraId,tenantId=null,remove=false){
 }
 app.patch('/api/cameras/:id',auth,roles('master'),route((req,res)=>editCamera(req,res,req.params.id)));
 app.delete('/api/cameras/:id',auth,roles('master'),route((req,res)=>editCamera(req,res,req.params.id,null,true)));
-app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM customers WHERE tenant_id=$1 ORDER BY created_at DESC',[tid(req)])).rows)));
+app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC',[tid(req)])).rows)));
 app.post('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),email:z.string().email().optional().or(z.literal('')),phone:z.string().max(30).optional(),address:z.string().max(500).optional(),cpf:cpfField,birth_date:birthField,postal_code:cepField}),req,res);if(!v)return;const r=await q('INSERT INTO customers(tenant_id,name,email,phone,address,cpf,birth_date,postal_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[tid(req),v.name,v.email||null,v.phone||null,v.address||null,v.cpf||null,v.birth_date||null,v.postal_code||null]);res.status(201).json(r.rows[0]);}));
 app.post('/api/customers/import',auth,roles('owner','operator'),route(async(req,res)=>{
  const row=z.object({name:z.string().trim().min(2).max(120),email:z.union([z.string().email(),z.literal('')]).default(''),phone:z.string().max(30).default(''),address:z.string().max(500).default('')});
@@ -336,7 +336,15 @@ app.post('/api/customers/import',auth,roles('owner','operator'),route(async(req,
  try{await conn.query('BEGIN');for(const x of v.customers)await conn.query('INSERT INTO customers(tenant_id,name,email,phone,address) VALUES($1,$2,$3,$4,$5)',[tid(req),x.name,x.email||null,x.phone,x.address]);await conn.query('COMMIT');res.status(201).json({imported:v.customers.length})}
  catch(e){await conn.query('ROLLBACK');throw e}finally{conn.release()}
 }));
-app.patch('/api/customers/:id',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({name:z.string().min(2).max(120),email:z.union([z.string().email(),z.literal('')]),phone:z.string().max(30),address:z.string().max(500),cpf:cpfField,birth_date:birthField,postal_code:cepField}),req,res);if(!v)return;const r=await q('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4,cpf=$7,birth_date=$8,postal_code=$9 WHERE id=$5 AND tenant_id=$6 RETURNING id,name,email,phone,address,cpf,birth_date,postal_code',[v.name,v.email||null,v.phone,v.address,req.params.id,tid(req),v.cpf||null,v.birth_date||null,v.postal_code||null]);if(!r.rowCount)return bad(res,404,'Cliente não encontrado');await audit(req,'update','customer',req.params.id);res.json(r.rows[0]);}));
+app.patch('/api/customers/:id',auth,roles('owner','operator'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({name:z.string().min(2).max(120),email:z.union([z.string().email(),z.literal('')]),phone:z.string().max(30),address:z.string().max(500),cpf:cpfField,birth_date:birthField,postal_code:cepField}),req,res);if(!v)return;const r=await q('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4,cpf=$7,birth_date=$8,postal_code=$9 WHERE id=$5 AND tenant_id=$6 AND deleted_at IS NULL RETURNING id,name,email,phone,address,cpf,birth_date,postal_code',[v.name,v.email||null,v.phone,v.address,req.params.id,tid(req),v.cpf||null,v.birth_date||null,v.postal_code||null]);if(!r.rowCount)return bad(res,404,'Cliente não encontrado');await audit(req,'update','customer',req.params.id);res.json(r.rows[0]);}));
+app.delete('/api/customers/:id',auth,roles('owner','operator'),route(async(req,res)=>{
+ if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
+ const open=await q("SELECT count(*)::int n FROM orders WHERE tenant_id=$1 AND customer_id=$2 AND deleted_at IS NULL AND status<>'completed'",[tid(req),req.params.id]);
+ if(open.rows[0].n)return bad(res,409,open.rows[0].n===1?'Este cliente tem 1 pedido em andamento ou na fila. Conclua ou exclua o pedido antes.':`Este cliente tem ${open.rows[0].n} pedidos em andamento ou na fila. Conclua ou exclua os pedidos antes.`);
+ const r=await q('UPDATE customers SET deleted_at=now(),deleted_by=$3 WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL RETURNING id',[req.params.id,tid(req),req.user.id]);
+ if(!r.rowCount)return bad(res,404,'Cliente não encontrado');
+ await audit(req,'delete','customer',req.params.id);res.json({deleted:true});
+}));
 async function checkCameraMapping(tenant,cameraId,mapping){
  const ids=[cameraId,...Object.values(mapping||{})].filter(Boolean);
  if(ids.some(id=>!uuid.safeParse(id).success))return false;
@@ -383,14 +391,14 @@ app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.j
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({customer_id:uuid,process_id:uuid,reference:z.string().trim().max(70).default(''),details:orderDetails.default({})}),req,res);if(!v)return;
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
- const r=await q("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tid(req),v.customer_id,v.process_id,hash,v.reference||null,JSON.stringify(v.details)]);
+ const r=await q("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM customers WHERE deleted_at IS NULL AND id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tid(req),v.customer_id,v.process_id,hash,v.reference||null,JSON.stringify(v.details)]);
  if(!r.rowCount)return bad(res,400,'Cliente ou processo inválido');await audit(req,'create','order',r.rows[0].id);
  res.status(201).json({...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token});
 }));
 app.patch('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Pedido inválido');
  const v=valid(z.object({details:orderDetails.optional(),reference:z.string().trim().max(70).optional(),customer_id:uuid.optional()}).strict().refine(v=>Object.keys(v).length>0),req,res);if(!v)return;
- if(v.customer_id&&!(await q('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2',[v.customer_id,tid(req)])).rowCount)return bad(res,400,'Cliente inválido');
+ if(v.customer_id&&!(await q('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',[v.customer_id,tid(req)])).rowCount)return bad(res,400,'Cliente inválido');
  const r=await q('UPDATE orders SET details=COALESCE($1::jsonb,details),external_reference=CASE WHEN $2 THEN $3 ELSE external_reference END,customer_id=COALESCE($4,customer_id) WHERE id=$5 AND tenant_id=$6 AND deleted_at IS NULL RETURNING id,status',[v.details?JSON.stringify(v.details):null,v.reference!==undefined,v.reference||null,v.customer_id||null,req.params.id,tid(req)]);
  if(!r.rowCount)return bad(res,404,'Pedido não encontrado');await audit(req,'update_details','order',req.params.id);res.json(r.rows[0]);
 }));

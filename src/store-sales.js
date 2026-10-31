@@ -22,6 +22,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   });
   const guard = [...staff, enabled];
   const owner = [auth, roles('owner'), enabled];
+  // Operador novato (access_level 'basic') não cancela venda, não lança saídas/sangria/suprimento,
+  // não fecha o caixa e não dá desconto nem muda preço.
+  const fullOnly = (req, res, next) => req.user.access_level === 'basic' ? bad(res, 403, 'Seu acesso (operador novato) não permite esta ação. Peça a um operador livre ou ao dono.') : next();
+  const full = [...guard, fullOnly];
 
   // Progresso do cartão: compras ainda não usadas em prêmio, meta e prêmio atuais.
   const progressSql = `SELECT c.id customer_id,
@@ -88,7 +92,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
-    res.json({ enabled: true, timezone: TZ, role: req.user.role, ...rest });
+    res.json({ enabled: true, timezone: TZ, role: req.user.role, access_level: req.user.access_level, ...rest });
   }));
   app.patch('/api/store/sales/config', ...owner, route(async (req, res) => {
     const v = valid(z.object({
@@ -125,7 +129,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     } catch (e) { if (e.code === '23505') return bad(res, 409, 'O caixa já está aberto'); throw e; }
   }));
 
-  app.post('/api/store/cash/movements', ...guard, route(async (req, res) => {
+  app.post('/api/store/cash/movements', ...full, route(async (req, res) => {
     const v = valid(z.object({
       kind: z.enum(['withdrawal', 'deposit', 'expense']), amount_cents: cents.min(1),
       method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']).default('cash'),
@@ -140,7 +144,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     await audit(req, v.kind, 'cash_movement', r.rows[0].id); res.status(201).json(r.rows[0]);
   }));
 
-  app.post('/api/store/cash/movements/:id/cancel', ...guard, route(async (req, res) => {
+  app.post('/api/store/cash/movements/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Lançamento inválido');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;
     const r = await q(`UPDATE cash_movements m SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 FROM cash_sessions s
@@ -160,7 +164,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.json({ session: s.rows[0], ...(await sessionDetail(tid(req), req.params.id)), generated_at: new Date().toISOString(), timezone: TZ });
   }));
 
-  app.post('/api/store/cash/close', ...guard, route(async (req, res) => {
+  app.post('/api/store/cash/close', ...full, route(async (req, res) => {
     const v = valid(z.object({ counted_cash_cents: cents, note: z.string().trim().max(400).default('') }).strict(), req, res); if (!v) return;
     const c = await db.connect();
     try {
@@ -360,6 +364,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
     if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os produtos');
     if (v.discount_cents && !v.items) return bad(res, 400, 'Desconto é só para venda com produtos; sem produtos, digite o valor final');
+    if (req.user.access_level === 'basic' && v.discount_cents) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
     const c = await db.connect();
     try {
       await c.query('BEGIN');
@@ -389,6 +394,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         for (const it of v.items) {
           const prod = it.product_id ? byId.get(it.product_id) : null;
           const unit = it.unit_price_cents ?? prod.price_cents;
+          if (prod && unit !== prod.price_cents && req.user.access_level === 'basic') { await c.query('ROLLBACK'); return bad(res, 403, 'Operador novato não pode mudar o preço do produto. Peça a um operador livre ou ao dono.'); }
           const key = prod ? prod.id + ':' + unit : 'l:' + it.name.toLowerCase() + ':' + unit;
           const cur = merged.get(key);
           if (cur) cur.quantity += it.quantity;
@@ -443,7 +449,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.set('Cache-Control', 'no-store'); res.json({ ...sale, timezone: TZ, generated_at: new Date().toISOString(), loyalty: loyalty?.enabled ? loyalty : null });
   }));
 
-  app.post('/api/store/sales/:id/cancel', ...guard, route(async (req, res) => {
+  app.post('/api/store/sales/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;
     const c = await db.connect();

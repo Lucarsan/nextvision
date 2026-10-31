@@ -33,6 +33,10 @@ export async function createStoreFixture() {
       return jwt.sign({ id, tenant_id: tenantId, role: 'owner' }, secret, { algorithm: 'HS256' });
     };
     const ownerToken = await addOwner(tenant), foreignToken = await addOwner(foreignTenant);
+    const addOperator = async (tenantId, accessLevel = 'full', name = 'Operador') => {
+      const id = crypto.randomUUID(); await db.query("INSERT INTO users(id,tenant_id,name,email,password_hash,role,access_level) VALUES($1,$2,$3,$4,'unused','operator',$5)", [id, tenantId, name, id + '@example.test', accessLevel]);
+      return { id, token: jwt.sign({ id, tenant_id: tenantId, role: 'operator' }, secret, { algorithm: 'HS256' }) };
+    };
     const addTechnician = async () => {
       const id=crypto.randomUUID();await db.query("INSERT INTO users(id,name,email,password_hash,role) VALUES($1,'Technician',$2,'unused','technician')",[id,id+'@example.test']);
       return {id,token:jwt.sign({id,tenant_id:null,role:'technician'},secret,{algorithm:'HS256'})};
@@ -47,6 +51,6 @@ export async function createStoreFixture() {
     };
     const api = async (path, options, status = 200) => { const result = await request(path, options); assert.equal(result.status, status, result.data.error); return result.data; };
     for (let i = 0; ; i++) { try { const response=await fetch(base+'/health');assert.equal(response.status,200);break; } catch { assert.ok(i < 40, 'API must start'); await new Promise(resolve => setTimeout(resolve, 100)); } }
-    return { db, tenant, foreignTenant, masterToken, ownerToken, foreignToken, base, request, api, addOwner, addTechnician, migrate, cleanup };
+    return { db, tenant, foreignTenant, masterToken, ownerToken, foreignToken, base, request, api, addOwner, addOperator, addTechnician, migrate, cleanup };
   } catch (error) { await cleanup(); throw error; }
 }

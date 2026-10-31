@@ -4,6 +4,7 @@
 // (POST /api/internal/reports/run com x-cron-key), que acorda o Render no horário.
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const SCHEDULE = { daily: { hour: 18 }, weekly: { hour: 15, weekday: 6 }, monthly: { hour: 18 } };
@@ -237,9 +238,11 @@ export function registerReports(app, { q, auth, roles, route, bad, valid, audit 
     await audit(req, 'send', 'report', v.kind); res.json({ sent: true, to: t.report_email });
   }));
   // Ping externo do agendador (GitHub Actions no horário) — acorda o servidor e envia o que estiver pendente.
-  app.post('/api/internal/reports/run', route(async (req, res) => {
+  // Sem chave configurada, o ping é aberto: só envia o que já está no horário e nunca duplica (report_runs).
+  const pingLimit = rateLimit({ windowMs: 60000, limit: 6, standardHeaders: 'draft-7', legacyHeaders: false });
+  app.post('/api/internal/reports/run', pingLimit, route(async (req, res) => {
     const key = process.env.REPORTS_CRON_KEY || '', got = String(req.get('x-cron-key') || '');
-    if (!key || got.length !== key.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key))) return bad(res, 401, 'Não autorizado');
+    if (key && (got.length !== key.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key)))) return bad(res, 401, 'Não autorizado');
     res.json({ ran: await runDueReports(q) });
   }));
   app.get('/api/master/reports/status', auth, roles('master'), route(async (_req, res) => {

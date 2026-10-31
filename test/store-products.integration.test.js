@@ -220,3 +220,44 @@ test('operador novato: vende e cadastra produto, mas não dá desconto, não mud
     assert.equal(n2.access_level, 'basic');
   } finally { await f.cleanup(); }
 });
+
+test('produto com modelos (película/capinha): pergunta o modelo, estoque por modelo, reposição e compras', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, db } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const pel = await api('/store/products', { method: 'POST', body: { name: 'Película 3D', barcode: 'PEL-3D', price_cents: 2000, cost_cents: 300, ask_variant: true, stock_qty: 50 } }, 201);
+    assert.deepEqual([pel.ask_variant, pel.stock_qty], [true, null], 'estoque fica por modelo');
+    // Entrada por modelo (com custo) e exigência do modelo.
+    assert.equal((await request('/store/products/' + pel.id + '/stock', { method: 'POST', body: { add: 10 } })).status, 400);
+    const e1 = await api('/store/products/' + pel.id + '/stock', { method: 'POST', body: { add: 10, variant_name: 'Galaxy A12', unit_cost_cents: 250 } });
+    assert.deepEqual([e1.variant.name, e1.variant.stock_qty], ['Galaxy A12', 10]);
+    await api('/store/products/' + pel.id + '/stock', { method: 'POST', body: { add: 5, variant_name: 'galaxy  a12' } });
+    // Venda sem modelo é recusada; com modelo existente baixa dele; modelo novo é criado.
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: pel.id, quantity: 1 }] } })).status, 400);
+    const s1 = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: pel.id, quantity: 2, variant_name: 'GALAXY A12' }, { product_id: pel.id, quantity: 1, variant_name: 'iPhone 13' }] } }, 201);
+    assert.deepEqual(s1.sale.items.map(i => [i.variant_name, i.quantity]), [['Galaxy A12', 2], ['iPhone 13', 1]]);
+    assert.equal(s1.sale.description, '2x Película 3D Galaxy A12, Película 3D iPhone 13');
+    let vars = await api('/store/products/' + pel.id + '/variants');
+    assert.deepEqual(vars.map(v => [v.name, v.stock_qty, v.sold_count, v.restock_pending]), [['Galaxy A12', 13, 2, 2], ['iPhone 13', null, 1, 1]], 'mais vendido primeiro');
+    assert.deepEqual((await api('/store/products/' + pel.id + '/variants?q=ipho')).map(v => v.name), ['iPhone 13'], 'sugere ao digitar');
+    // Produto comum também entra na reposição.
+    const cabo = await api('/store/products', { method: 'POST', body: { name: 'Cabo', barcode: 'CAB', price_cents: 2500, cost_cents: 1000, stock_qty: 3 } }, 201);
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'cash', items: [{ product_id: cabo.id, quantity: 1 }] } }, 201);
+    let rs = await api('/store/stock/restock');
+    assert.deepEqual(rs.map(r => [r.name, r.variant, r.pending]), [['Cabo', null, 1], ['Película 3D', 'Galaxy A12', 2], ['Película 3D', 'iPhone 13', 1]]);
+    // Entrada abate a reposição; cancelamento devolve estoque e tira da reposição.
+    await api('/store/products/' + pel.id + '/stock', { method: 'POST', body: { add: 1, variant_name: 'iPhone 13' } });
+    await api('/store/sales/' + s1.sale.id + '/cancel', { method: 'POST', body: { reason: 'teste modelos' } });
+    vars = await api('/store/products/' + pel.id + '/variants');
+    assert.deepEqual(vars.find(v => v.name === 'Galaxy A12').stock_qty, 15);
+    rs = await api('/store/stock/restock');
+    assert.deepEqual(rs.map(r => [r.name, r.variant, r.pending]), [['Cabo', null, 1]]);
+    // Livro de estoque: compras com custo (entradas) para o relatório.
+    const buys = (await db.query("SELECT sum(quantity*coalesce(unit_cost_cents,0))::int t FROM stock_movements WHERE tenant_id=$1 AND kind='entry'", [tenant])).rows[0].t;
+    assert.equal(buys, 10 * 250 + 5 * 300 + 1 * 300 + 3 * 1000);
+    // Comprovante mostra o modelo no nome do item.
+    assert.equal((await api('/store/sales/' + s1.sale.id + '/receipt')).items[0].name, 'Película 3D Galaxy A12');
+  } finally { await f.cleanup(); }
+});

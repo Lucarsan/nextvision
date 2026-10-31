@@ -15,7 +15,7 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     const context = await browser.newContext(); await context.addInitScript(value => sessionStorage.setItem('nv_token', value), f.ownerToken);
     const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
     await f.api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { sales_enabled: true } });
-    await f.api('/store/products', { method: 'POST', body: { name: 'Película 3D', barcode: '7891234567895', price_cents: 1500 } }, 201);
+    await f.api('/store/products', { method: 'POST', body: { name: 'Película 3D', barcode: '7891234567895', price_cents: 1500, cost_cents: 150 } }, 201);
     const scan = async code => { await page.keyboard.type(code, { delay: 4 }); await page.keyboard.press('Enter'); };
 
     await page.goto(f.base + '/loja.html');
@@ -41,6 +41,10 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     await scan('7891234567895');
     await page.waitForSelector('.fs-item');
     assert.match(await page.locator('#fsCart').innerText(), /Película 3D/);
+    // Custo camuflado ao lado do código de barras, em azul: 1,50 → 000X1.5. Sem botão de ver custo.
+    assert.equal(await page.locator('.fs-costcode').first().innerText(), '000X1.5');
+    assert.equal(await page.locator('.fs-costcode').first().evaluate(el => getComputedStyle(el).color), 'rgb(29, 78, 216)');
+    assert.equal(await page.getByRole('button', { name: /Ver custo/ }).count(), 0);
     await scan('7891234567895');
     await page.waitForFunction(() => document.querySelector('.fs-qty b')?.textContent === '2');
     assert.equal(await page.locator('#fsSale [name="total"]').inputValue(), '30,00');
@@ -85,6 +89,7 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     await page.getByRole('button', { name: 'Imprimir comprovante da venda 1' }).click();
     await page.waitForFunction(() => /Venda nº 1/.test(window.FPSales.lastReceiptHtml || ''));
     const receipt = await page.evaluate(() => window.FPSales.lastReceiptHtml);
+    assert.doesNotMatch(receipt, /000X/, 'código de custo não vai no comprovante');
     assert.match(receipt, /Película 3D/); assert.match(receipt, /3 x R\$\s?15,00/); assert.match(receipt, /Troco/); assert.match(receipt, /Não é documento fiscal/);
     if (process.env.FP_SHOT) { const p2 = await context.newPage(); await p2.setViewportSize({ width: 302, height: 700 }); await p2.setContent(receipt); await p2.screenshot({ path: process.env.FP_SHOT, fullPage: true }); await p2.close(); }
     assert.deepEqual(cash.sales[0].items.map(i => [i.name, i.quantity]), [['Película 3D', 3], ['Cabo USB-C', 2]]);

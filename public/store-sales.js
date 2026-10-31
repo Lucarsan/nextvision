@@ -393,7 +393,10 @@
   }
 
   // Desconto: em R$ ("5,00") ou em % ("10%") sobre a soma dos produtos.
-  let cartDiscount = '', showCost = false;
+  let cartDiscount = '';
+  // Custo camuflado para o balcão: 15,00 → 000X15 · 130,00 → 000X130 · 1,50 → 000X1.5.
+  // Só aparece no carrinho do caixa; nunca vai para o comprovante.
+  const costCode = c => c == null ? '' : '000X' + String(Math.round(c) / 100);
   const discountCents = sub => {
     const t = String(cartDiscount || '').trim(); if (!t) return 0;
     const v = t.endsWith('%') ? Math.round(sub * (parseFloat(t.replace(',', '.')) || 0) / 100) : parseMoney(t);
@@ -408,20 +411,18 @@
     const disc = Math.min(discountCents(sub), Math.max(0, sub - 1)), total = sub - disc;
     const knownCost = cart.every(i => i.cost_cents != null), cost = cart.reduce((a, i) => a + (i.cost_cents || 0) * i.quantity, 0);
     const below = knownCost && cost > 0 && total < cost;
-    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${showCost && i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small>${showCost ? `<br><small class="fs-costline">custo ${i.cost_cents != null ? brl(i.cost_cents) + ' cada' : 'não informado'}</small>` : ''}</div>
+    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.cost_cents != null ? ` <span class="fs-costcode" title="Código interno da loja">${costCode(i.cost_cents)}</span>` : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small></div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
       <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
       <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
-      <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label>
-        <button type="button" class="fs-link" id="fsCostToggle" aria-pressed="${showCost}">${showCost ? '🙈 Esconder custo' : '👁 Ver custo'}</button></div>
-      ${showCost ? `<div class="fs-costsum ${below ? 'fs-below' : ''}">${knownCost ? `Custo ${brl(cost)} · ${below ? `<b>abaixo do custo em ${brl(cost - total)}</b>` : `lucro ${brl(total - cost)}${total ? ` (${Math.round(100 * (total - cost) / total)}%)` : ''} · desconto máximo sem prejuízo: <b>${brl(Math.max(0, sub - cost))}</b>`}` : 'Algum produto está sem preço de custo cadastrado.'}</div>` : (below ? '<div class="fs-costsum fs-below"><b>Atenção: total abaixo do custo.</b></div>' : '')}
+      <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label></div>
+      ${below ? '<div class="fs-costsum fs-below"><b>Atenção: total abaixo do custo.</b></div>' : ''}
       ${disc ? `<div class="fs-pcart-total"><span>Total com desconto</span><b>${brl(total)}</b></div>` : ''}</div>` : '';
     out.querySelectorAll('[data-fs-inc]').forEach(b => b.onclick = () => { cart[b.dataset.fsInc].quantity++; drawCart(); });
     out.querySelectorAll('[data-fs-dec]').forEach(b => b.onclick = () => { const i = cart[b.dataset.fsDec]; if (i.quantity > 1) i.quantity--; else cart.splice(b.dataset.fsDec, 1); drawCart(); });
     out.querySelectorAll('[data-fs-del]').forEach(b => b.onclick = () => { cart.splice(b.dataset.fsDel, 1); drawCart(); });
     if ($('fsDiscount')) $('fsDiscount').onchange = e => { cartDiscount = e.target.value.trim(); drawCart(); };
     if ($('fsDiscount')) $('fsDiscount').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
-    if ($('fsCostToggle')) $('fsCostToggle').onclick = () => { showCost = !showCost; drawCart(); };
     out.querySelectorAll('[data-fs-unit]').forEach(inp => {
       inp.onchange = () => { const i = cart[inp.dataset.fsUnit], v = parseMoney(inp.value); if (i) i.unit = inp.value.trim() && Number.isFinite(v) && v >= 0 ? v : null; drawCart(); };
       inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
@@ -915,6 +916,7 @@
   .fs-private .fs-kpis b,.fs-private .fs-methods-sum b,.fs-private .fs-sale-end>b,.fs-private .fs-opening,.fs-private .fs-lastclose{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none;-webkit-user-select:none}
   .fs-private .fs-lastclose b{color:transparent!important}
   .fs-autoprint{margin:10px 0 0;font-size:14px}
+  .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
   .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}

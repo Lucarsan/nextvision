@@ -97,45 +97,53 @@
     if (!data.session) return drawClosed(box, data, alive);
     const s = data.session, sum = data.summary;
     const methods = Object.entries(sum.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('') || '<span class="nv-help">Nenhuma venda ainda.</span>';
+    const saleRow = x => { const svc = (x.items || []).find(i => i.service);
+      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">🔧 Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
-      <section class="nv-card fs-cashbar"><div><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
+      <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
         <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
-        <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Produtos</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></section>
+        <div class="fs-cashbar-side"><label class="fs-seller" hidden>Vendedor<select id="fsSeller" aria-label="Vendedor da venda"><option value="">…</option></select></label>
+        <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
       <div class="fs-grid">
-        <section class="nv-card"><h2>Nova venda</h2><form id="fsSale" autocomplete="off">
-          <label class="nv-field fs-seller">Vendedor<select name="seller" id="fsSeller" aria-label="Vendedor da venda"><option value="">Carregando…</option></select></label>
-          <div class="fs-scan"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
+        <div class="fs-col-report">
+          <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
+            <div class="nv-list">${data.sales.map(saleRow).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
+            <p class="nv-help fs-opening">Troco inicial: ${brl(sum.opening_cents)}</p></section>
+          <section class="nv-card fs-moves"><div class="nv-heading"><h2>Saídas, sangrias e suprimentos</h2><button class="nv-button secondary fs-small" id="fsExpense2">− Lançar saída</button></div>
+            ${Object.keys(sum.expenses_by_method).length ? `<div class="fs-methods-sum">${Object.entries(sum.expenses_by_method).map(([k, v]) => `<span class="fs-pill fs-pill-out">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</div>` : ''}
+            <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras saídas do dia aparecem aqui.</p>'}</div></section>
+        </div>
+        <section class="nv-card fs-newsale"><h2>Nova venda</h2>
+          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">🛒 Produto</button><button type="button" data-fs-mode="service">🔧 Serviço</button></div>
+          <form id="fsSale" autocomplete="off">
+          <div class="fs-scan" data-only="product"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
             <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
             <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
+          <div id="fsSvc" data-only="service"></div>
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
-          <div class="fs-quick" id="fsQuick"></div>
-          <div class="fs-row"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00" required></label>
-          <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, conserto"></label></div>
+          <div class="fs-quick" id="fsQuick" data-only="product"></div>
+          <div class="fs-row" data-only="product"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00"></label>
+          <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
           <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
           <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
           <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> 🧾 Imprimir comprovante ao registrar</label>
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
-        <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
-          <div class="nv-list">${data.sales.map(x => `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
-          <p class="nv-help fs-opening">Troco inicial: ${brl(sum.opening_cents)}</p></section>
-      </div>
-      <section class="nv-card fs-moves"><div class="nv-heading"><h2>Saídas, sangrias e suprimentos</h2><button class="nv-button secondary fs-small" id="fsExpense2">− Lançar saída</button></div>
-        ${Object.keys(sum.expenses_by_method).length ? `<div class="fs-methods-sum">${Object.entries(sum.expenses_by_method).map(([k, v]) => `<span class="fs-pill fs-pill-out">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</div>` : ''}
-        <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras saídas do dia aparecem aqui.</p>'}</div></section>`;
+      </div>`;
     saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
     const sf = $('fsSale');
     const updChange = () => {
       const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
-      const out = $('fsChangeOut'), total = parseMoney(sf.elements.total.value), got = parseMoney(sf.elements.received.value);
+      const out = $('fsChangeOut'), total = currentTotal(), got = parseMoney(sf.elements.received.value);
       if (!cash || !Number.isFinite(got)) { out.textContent = ''; return; }
       if (!Number.isFinite(total) || total <= 0) { out.textContent = 'Informe o valor da venda.'; return; }
       const d = got - total;
       out.innerHTML = d >= 0 ? `Troco: <b>${brl(d)}</b>` : `<span class="fs-neg">Faltam ${brl(-d)}</span>`;
     };
     sf.addEventListener('input', updChange); sf.addEventListener('change', updChange);
-    setupScanInput(); drawCart(); updChange(); setupEye(box);
+    setupScanInput(); drawCart(); drawService(); setMode(saleMode); updChange(); setupEye(box);
+    box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => setMode(b.dataset.fsMode, true));
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
     const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
@@ -315,33 +323,36 @@
     if (!sel.isConnected) return;
     const pick = [lastSellerId, d.last_seller_id, d.me].find(id => id && d.sellers.some(x => x.id === id)) || '';
     sel.innerHTML = d.sellers.map(x => `<option value="${x.id}"${x.id === pick ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
-    sel.closest('.fs-seller').hidden = d.sellers.length < 2; // loja com um login só: não precisa escolher
+    sel.closest('.fs-seller').hidden = d.sellers.length < 2; // loja com um login só: não precisa escolher (fica no canto do topo do caixa)
     sel.onchange = () => { lastSellerId = sel.value; };
   }
 
   async function submitSale(e, box, alive) {
     e.preventDefault(); const f = e.currentTarget, status = $('fsSaleStatus'), btn = $('fsSaleBtn');
-    const total = parseMoney(f.elements.total.value);
-    if (!Number.isFinite(total) || total <= 0) { status.textContent = 'Informe o valor da venda.'; return; }
+    const service = saleMode === 'service';
+    const total = currentTotal();
+    if (service) { const err = serviceError(); if (err) { status.textContent = err; return; } }
+    if (!Number.isFinite(total) || total <= 0) { status.textContent = service ? 'Informe o preço de venda do serviço.' : 'Informe o valor da venda.'; return; }
     const received = f.elements.method.value === 'cash' && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
     if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
-    const body = cart.length
+    const body = service ? serviceBody(f.elements.method.value)
+      : cart.length
       ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })), discount_cents: Math.min(discountCents(cartGross()), Math.max(0, cartGross() - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
       : quickCart.length
         ? { items: quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
         : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
     const noPrice = quickCart.find(x => x.unit == null);
-    if (!cart.length && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
-    const seller = f.elements.seller?.value; if (seller) body.seller_id = seller;
+    if (!service && !cart.length && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
+    const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cart = []; cartDiscount = ''; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
-      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${service ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrado${service ? '' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function drawLast() {
@@ -355,6 +366,246 @@
     wireReceipt();
     if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
+  }
+
+  // ---------------- Serviço (troca de tela, bateria, conserto…) ----------------
+  // "Produto" é a venda de balcão (leitor, itens frequentes, valor). "Serviço" registra o que foi feito no
+  // aparelho: preço cobrado, custo, fornecedor, aparelho e garantia. Peça do estoque é opcional: preenche
+  // aparelho, fornecedor e custo, e a venda baixa uma unidade dela.
+  let saleMode = 'product', svc = {}, servicesCache = null, serviceItems = null;
+  const WARRANTY = [['', 'Sem garantia'], ['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias'], ['180', '6 meses'], ['365', '1 ano']];
+  const PART_NAMES = ['Tela', 'Bateria', 'Conector de carga', 'Tampa traseira', 'Vidro da câmera', 'Câmera', 'Alto-falante', 'Microfone', 'Flex', 'Botão'];
+  function currentTotal() {
+    const f = $('fsSale'); if (!f) return NaN;
+    return saleMode === 'service' ? parseMoney(svc.price) : parseMoney(f.elements.total.value);
+  }
+  function setMode(mode, focus) {
+    saleMode = mode === 'service' ? 'service' : 'product';
+    document.querySelectorAll('[data-fs-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fsMode === saleMode)));
+    document.querySelectorAll('#fsSale [data-only]').forEach(n => { n.hidden = n.dataset.only !== saleMode; });
+    const btn = $('fsSaleBtn'); if (btn) btn.textContent = saleMode === 'service' ? 'Registrar serviço' : 'Registrar venda';
+    if ($('fsSaleStatus')) $('fsSaleStatus').textContent = '';
+    $('fsSale')?.dispatchEvent(new Event('input'));
+    if (focus) (saleMode === 'service' ? $('fsSvcName') : $('fsScan'))?.focus();
+  }
+  // Campo com sugestões dos nomes já usados (os mais usados primeiro). O que não existe fica salvo ao registrar.
+  function suggestField(input, path, onPick) {
+    const list = document.createElement('div'); list.className = 'fs-results fs-drop'; input.after(list);
+    let timer, rows = [];
+    const close = () => { list.innerHTML = ''; };
+    const load = async () => {
+      const t = input.value.trim();
+      try { rows = await api(path + '?q=' + encodeURIComponent(t)); } catch { return; }
+      if (!list.isConnected || document.activeElement !== input) return;
+      const exact = rows.some(r => r.name.toLowerCase() === t.toLowerCase());
+      list.innerHTML = rows.slice(0, 8).map((r, n) => `<button type="button" data-n="${n}">${esc(r.name)}${r.uses ? ` <small>${r.uses}×</small>` : ''}</button>`).join('')
+        + (t && !exact ? `<p class="nv-help">Novo: "${esc(t)}" fica salvo para as próximas vezes.</p>` : '');
+      list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); input.value = rows[b.dataset.n].name; close(); onPick?.(rows[b.dataset.n]); });
+    };
+    input.addEventListener('focus', load);
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 150); });
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') close(); if (e.key === 'Enter' && list.innerHTML) { e.preventDefault(); close(); } });
+  }
+  // Serviços pré-cadastrados: um toque preenche o serviço, o preço (do cadastro ou o último cobrado) e o custo.
+  async function loadServiceItems(force) {
+    if (serviceItems && !force) return serviceItems;
+    try { serviceItems = await api('/store/sales/service-items'); } catch { serviceItems = serviceItems || []; }
+    return serviceItems;
+  }
+  async function drawServiceChips() {
+    const box = $('fsSvcQuick'); if (!box) return;
+    const [items, history] = await Promise.all([loadServiceItems(), servicesCache ? servicesCache : api('/store/sales/services').then(r => (servicesCache = r)).catch(() => [])]);
+    if (!box.isConnected) return;
+    const last = name => history.find(h => h.name.toLowerCase() === name.toLowerCase())?.last_price_cents ?? null;
+    const priceOf = i => i.price_cents ?? last(i.name);
+    const current = String(svc.name || '').trim().toLowerCase();
+    box.innerHTML = `<div class="fs-quick-head"><span>Serviços</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? '⚙ Editar' : '+ Cadastrar serviço'}</button></div>
+      ${items.length ? `<div class="fs-chips">${items.map(i => { const p = priceOf(i); return `<button type="button" class="fs-chip${i.name.toLowerCase() === current ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${i.name.toLowerCase() === current}"><b>${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; }).join('')}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (troca de tela, bateria…) para lançar com um toque.</p>'}`;
+    box.querySelectorAll('[data-fs-svc]').forEach(b => b.onclick = () => {
+      const i = items.find(x => x.id === b.dataset.fsSvc); if (!i) return;
+      const p = priceOf(i);
+      svc.name = i.name; svc.price = p != null ? centsText(p) : '';
+      // Custo: o da peça escolhida vale mais; sem peça, usa o custo cadastrado no serviço.
+      if (!svc.part) svc.cost = i.cost_cents != null ? centsText(i.cost_cents) : (svc.cost || '');
+      drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
+      if (p == null) { $('fsSvcPrice')?.focus(); }
+    });
+    $('fsSvcManage').onclick = manageServices;
+  }
+  async function manageServices(editId) {
+    const items = await loadServiceItems(true);
+    const ed = typeof editId === 'string' ? items.find(i => i.id === editId) : null;
+    openDialog(`${header('Serviços')}<p class="nv-help">Aparecem como botões no modo "Serviço" do caixa. O preço e o custo vêm preenchidos e podem ser mudados na hora. Sem preço, o botão usa o último valor cobrado.</p>
+      <form id="fsSvcForm" class="fs-row" autocomplete="off"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="Ex.: Troca de tela" value="${esc(ed?.name || '')}"></label>
+      <label class="nv-field">Preço<input name="price" inputmode="decimal" placeholder="0,00" value="${ed?.price_cents != null ? centsText(ed.price_cents) : ''}"></label>
+      <label class="nv-field">Custo (opcional)<input name="cost" inputmode="decimal" placeholder="0,00" value="${ed?.cost_cents != null ? centsText(ed.cost_cents) : ''}"></label>
+      <button class="nv-button">${ed ? 'Salvar' : 'Cadastrar'}</button>${ed ? '<button type="button" class="nv-button secondary" id="fsSvcCancelEdit">Cancelar</button>' : ''}</form><p role="status" class="nv-help" id="fsSvcStatus"></p>
+      <div class="nv-list">${items.map(i => `<div class="fs-sale"><div><b>${esc(i.name)}</b><br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}${i.cost_cents != null ? ' · custo ' + brl(i.cost_cents) : ''}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-svc-edit="${i.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-svc-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum serviço cadastrado.</p>'}</div>`);
+    const f = $('fsSvcForm'), st = $('fsSvcStatus');
+    if (ed) { f.elements.price.focus(); $('fsSvcCancelEdit').onclick = () => manageServices(); }
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const name = f.elements.name.value.trim(), pr = f.elements.price.value.trim(), co = f.elements.cost.value.trim();
+      const price = pr ? parseMoney(pr) : null, cost = co ? parseMoney(co) : null;
+      if (name.length < 2) { st.textContent = 'Informe o serviço.'; return; }
+      if ((pr && !(price >= 0)) || (co && !(cost >= 0))) { st.textContent = 'Preço ou custo inválido.'; return; }
+      try {
+        await api(ed ? '/store/sales/service-items/' + ed.id : '/store/sales/service-items', ed ? 'PATCH' : 'POST', { name, price_cents: price, cost_cents: cost });
+        await manageServices(); drawServiceChips(); $('fsSvcStatus').textContent = `"${name}" ${ed ? 'salvo' : 'cadastrado'}.`;
+      } catch (err) { st.textContent = err.message; }
+    };
+    document.querySelectorAll('[data-svc-edit]').forEach(b => b.onclick = () => manageServices(b.dataset.svcEdit));
+    document.querySelectorAll('[data-svc-del]').forEach(b => b.onclick = async () => {
+      const i = items.find(x => x.id === b.dataset.svcDel); if (!confirm(`Excluir "${i?.name}" dos serviços?`)) return;
+      try { await api('/store/sales/service-items/' + i.id, 'DELETE'); await manageServices(); drawServiceChips(); } catch (err) { st.textContent = err.message; }
+    });
+  }
+  const partLabel = p => p.name + (p.device_model ? ' · ' + p.device_model : '');
+  function drawService() {
+    const box = $('fsSvc'); if (!box) return;
+    box.innerHTML = `<div class="fs-quick" id="fsSvcQuick"></div>
+      <div class="fs-sugg"><label class="nv-field">Serviço<input id="fsSvcName" maxlength="120" list="fsSvcNames" placeholder="Ex.: Troca de tela, troca de bateria" value="${esc(svc.name || '')}"></label><datalist id="fsSvcNames"></datalist></div>
+      <div class="nv-field">Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
+      <div class="fs-row"><label class="nv-field fs-grow fs-sugg">Aparelho (marca / modelo)<input id="fsSvcModel" maxlength="80" placeholder="Ex.: Galaxy A12, iPhone 11" value="${esc(svc.model || '')}"></label>
+        <label class="nv-field fs-grow fs-sugg">Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
+      <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input id="fsSvcPrice" inputmode="decimal" placeholder="0,00" value="${esc(svc.price || '')}"></label>
+        <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
+        <label class="nv-field">Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
+      <p class="nv-help" id="fsSvcProfit"></p>
+      <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>`;
+    const read = () => { svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
+    const profit = () => {
+      const p = parseMoney(svc.price), c = parseMoney(svc.cost), out = $('fsSvcProfit'); if (!out) return;
+      out.innerHTML = Number.isFinite(p) && Number.isFinite(c) ? `Lucro do serviço: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b>${p > 0 ? ` (${margin(p, c)}% do preço)` : ''}` : '';
+    };
+    box.oninput = box.onchange = read;
+    suggestField($('fsSvcModel'), '/store/device-models', read);
+    suggestField($('fsSvcSupplier'), '/store/suppliers', read);
+    // Serviço já feito antes: sugere o nome e, se o preço estiver vazio, o último preço cobrado.
+    (servicesCache ? Promise.resolve(servicesCache) : api('/store/sales/services').then(r => (servicesCache = r)).catch(() => [])).then(rows => {
+      const dl = $('fsSvcNames'); if (!dl) return; dl.innerHTML = rows.map(r => `<option value="${esc(r.name)}">`).join('');
+      $('fsSvcName').onchange = () => { const hit = rows.find(r => r.name.toLowerCase() === $('fsSvcName').value.trim().toLowerCase()); if (hit && !$('fsSvcPrice').value.trim() && hit.last_price_cents) $('fsSvcPrice').value = centsText(hit.last_price_cents); read(); $('fsSale')?.dispatchEvent(new Event('input')); };
+    });
+    drawPartPicker(); drawServiceChips(); read();
+  }
+  function drawPartPicker() {
+    const box = $('fsSvcPart'); if (!box) return;
+    if (svc.part) {
+      const p = svc.part;
+      box.innerHTML = `<div class="fs-picked"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? esc(p.supplier_name) + ' · ' : ''}custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.stock_qty != null ? ` · <span class="${p.stock_qty <= 0 ? 'fs-neg' : ''}">estoque ${p.stock_qty}</span>` : ''}</small></div><button type="button" class="nv-button secondary fs-small" id="fsSvcPartOff">Tirar peça</button></div>`;
+      $('fsSvcPartOff').onclick = () => { svc.part = null; drawPartPicker(); };
+      return;
+    }
+    box.innerHTML = `<div class="fs-sugg"><input id="fsSvcPartQ" type="search" placeholder="Buscar peça: tela a12, bateria iphone…" aria-label="Buscar peça do estoque"><div id="fsSvcPartList" class="fs-results fs-drop"></div></div>`;
+    const input = $('fsSvcPartQ'), list = $('fsSvcPartList'); let timer;
+    const load = async () => {
+      const t = input.value.trim(); let rows = [];
+      try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(t || svc.model || '')); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected || document.activeElement !== input) return;
+      list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(partLabel(p))}</b> <small>${p.supplier_name ? esc(p.supplier_name) + ' · ' : ''}${p.cost_cents != null ? 'custo ' + brl(p.cost_cents) : 'sem custo'} · estoque ${p.stock_qty ?? '—'}</small></button>`).join('')
+        + `<p class="nv-help">${rows.length ? '' : 'Nenhuma peça encontrada. '}<button type="button" class="fs-link" id="fsSvcPartNew">+ Cadastrar peça no estoque</button></p>`;
+      list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); usePart(rows[b.dataset.n]); });
+      $('fsSvcPartNew').onmousedown = e => { e.preventDefault(); partDialog({ device_model: svc.model || '', supplier_name: svc.supplier || '', name: PART_NAMES.find(n => fp(t).startsWith(fp(n))) || '' }, p => usePart(p)); };
+    };
+    input.onfocus = load; input.oninput = () => { clearTimeout(timer); timer = setTimeout(load, 150); };
+    input.onblur = () => setTimeout(() => { if (list.isConnected) list.innerHTML = ''; }, 150);
+  }
+  const fp = v => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  // Peça escolhida: aparelho, fornecedor e custo vêm dela; preço sugerido só entra se o preço estiver vazio.
+  function usePart(p) {
+    svc.part = p;
+    if (p.device_model) svc.model = p.device_model;
+    if (p.supplier_name) svc.supplier = p.supplier_name;
+    if (p.cost_cents != null) svc.cost = centsText(p.cost_cents);
+    if (!String(svc.price || '').trim() && p.price_cents > 0) svc.price = centsText(p.price_cents);
+    if (!String(svc.name || '').trim()) svc.name = 'Troca de ' + p.name.toLowerCase();
+    drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
+  }
+  function serviceError() {
+    if (String(svc.name || '').trim().length < 2) return 'Informe o serviço (ex.: troca de tela).';
+    const c = String(svc.cost || '').trim();
+    if (c && (!Number.isFinite(parseMoney(c)) || parseMoney(c) < 0)) return 'Preço de custo inválido.';
+    return '';
+  }
+  function serviceBody(method) {
+    const item = { service: svc.name.trim(), unit_price_cents: parseMoney(svc.price) };
+    const c = String(svc.cost || '').trim(); if (c) item.cost_cents = parseMoney(c);
+    if (String(svc.supplier || '').trim()) item.supplier = svc.supplier.trim();
+    if (String(svc.model || '').trim()) item.device_model = svc.model.trim();
+    if (svc.part) item.part_id = svc.part.id;
+    if (svc.warranty) item.warranty_days = Number(svc.warranty);
+    return { items: [item], payment_method: method, description: String(svc.note || '').trim() };
+  }
+
+  // Cadastro de peça (tela, bateria…): cada peça tem aparelho, fornecedor, custo e estoque.
+  function partDialog(initial = {}, onSaved) {
+    const editing = !!initial.id;
+    openDialog(`${header(editing ? 'Editar peça' : 'Cadastrar peça')}<form id="fsPart" autocomplete="off">
+      <p class="nv-help">Peças usadas nos serviços (telas, baterias…). Cadastre uma peça para cada modelo de aparelho e fornecedor.</p>
+      <div class="fs-row"><label class="nv-field fs-grow">Peça<input name="name" maxlength="120" required list="fsPartNames" value="${esc(initial.name || '')}" placeholder="Ex.: Tela, Bateria"></label><datalist id="fsPartNames">${PART_NAMES.map(n => `<option value="${n}">`).join('')}</datalist>
+        <label class="nv-field fs-grow fs-sugg">Aparelho (marca / modelo)<input id="fsPartModel" name="device_model" maxlength="80" value="${esc(initial.device_model || '')}" placeholder="Ex.: Galaxy A12"></label></div>
+      <label class="nv-field fs-sugg">Fornecedor<input id="fsPartSupplier" name="supplier" maxlength="80" value="${esc(initial.supplier_name || '')}" placeholder="De quem a loja compra esta peça"></label>
+      <div class="fs-row"><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label>
+        <label class="nv-field fs-grow">Preço do serviço com esta peça <small class="nv-help">(opcional)</small><input name="price" inputmode="decimal" value="${initial.price_cents > 0 ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
+        ${editing ? '' : '<label class="nv-field" style="flex:0 0 130px">Quantidade na loja<input name="stock" inputmode="numeric" placeholder="Ex.: 3"></label>'}</div>
+      ${editing ? `<p class="nv-help">Estoque atual: <b>${initial.stock_qty ?? '—'}</b>. Para somar ou corrigir, use "+ Estoque" na lista de peças.</p>` : ''}
+      <button class="nv-button">${editing ? 'Salvar' : onSaved && !onSaved.list ? 'Cadastrar e usar no serviço' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
+    const f = $('fsPart'), st = f.querySelector('[role=status]');
+    suggestField($('fsPartModel'), '/store/device-models'); suggestField($('fsPartSupplier'), '/store/suppliers');
+    (initial.name ? $('fsPartModel') : f.elements.name).focus();
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const name = f.elements.name.value.trim(), costRaw = f.elements.cost.value.trim(), priceRaw = f.elements.price.value.trim(), stockRaw = f.elements.stock?.value.trim() || '';
+      const cost = costRaw ? parseMoney(costRaw) : null, price = priceRaw ? parseMoney(priceRaw) : 0, stock = stockRaw === '' ? null : Number(stockRaw);
+      if (name.length < 2) { st.textContent = 'Informe a peça (ex.: Tela).'; return; }
+      if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Preço de custo inválido.'; return; }
+      if (priceRaw && (!Number.isFinite(price) || price < 0)) { st.textContent = 'Preço do serviço inválido.'; return; }
+      if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Quantidade: use um número inteiro.'; return; }
+      const body = { name, cost_cents: cost, price_cents: price, supplier: f.elements.supplier.value.trim(), device_model: f.elements.device_model.value.trim() };
+      if (!editing) { body.kind = 'part'; body.stock_qty = stock ?? 0; }
+      try {
+        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', body);
+        $('editorDialog').close(); feedback(`Peça ${editing ? 'atualizada' : 'cadastrada'}: ${partLabel(p)}.`); onSaved?.(p);
+      } catch (err) { st.textContent = err.message; }
+    };
+  }
+  async function partsTab(box, term = '') {
+    box.innerHTML = `<div class="fs-row"><input id="fsPartSearch" class="fs-grow" type="search" placeholder="Buscar peça ou modelo (ex.: tela a12)" value="${esc(term)}" aria-label="Buscar peça"><button type="button" class="nv-button" id="fsPartNew">+ Nova peça</button></div>
+      <p class="nv-help">Peças que a loja tem para os serviços. Ao registrar um serviço com a peça, o estoque baixa sozinho e a peça entra na reposição.</p><div id="fsPartList" class="nv-list"></div>`;
+    const input = $('fsPartSearch'), list = $('fsPartList'); let timer, rows = [];
+    const reopen = () => productsDialog(input.value.trim(), 'parts'); reopen.list = true;
+    const draw = async () => {
+      try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(input.value.trim())); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected) return;
+      list.innerHTML = rows.map(p => `<div class="fs-sale fs-prod"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? 'Fornecedor: ' + esc(p.supplier_name) : 'sem fornecedor'} · custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.price_cents > 0 ? ' · serviço ' + brl(p.price_cents) : ''}</small><br>
+          <small>Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
+        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></div>`).join('')
+        || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : 'Nenhuma peça cadastrada ainda. Ex.: Tela Galaxy A12, do fornecedor João, custo R$ 80, 3 na loja.'}</p>`;
+      const byId = id => rows.find(p => p.id === id);
+      list.querySelectorAll('[data-p-edit]').forEach(b => b.onclick = () => partDialog(byId(b.dataset.pEdit), reopen));
+      list.querySelectorAll('[data-p-stock]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pStock); stockDialog({ ...p, name: partLabel(p) }, reopen); });
+      list.querySelectorAll('[data-p-del]').forEach(b => b.onclick = async () => {
+        const p = byId(b.dataset.pDel); if (!confirm(`Excluir a peça "${partLabel(p)}"? Serviços antigos continuam com ela no histórico.`)) return;
+        try { await api('/store/products/' + p.id, 'DELETE'); if (svc.part?.id === p.id) svc.part = null; draw(); } catch (err) { feedback(err.message, true); }
+      });
+    };
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 200); };
+    $('fsPartNew').onclick = () => partDialog({}, reopen);
+    input.focus(); draw();
+  }
+  // Fornecedores e modelos de aparelho que aparecem nas sugestões. Excluir só tira da lista de sugestões.
+  async function suppliersTab(box) {
+    let sups = [], models = [];
+    try { [sups, models] = await Promise.all([api('/store/suppliers'), api('/store/device-models')]); } catch (err) { box.textContent = err.message; return; }
+    if (!box.isConnected) return;
+    const row = (x, kind) => `<div class="fs-sale"><div><b>${esc(x.name)}</b><br><small>${x.phone ? esc(x.phone) + ' · ' : ''}${x.uses ? `usado ${x.uses}×` : 'ainda não usado em serviço'}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-s-del="${kind}:${x.id}">Tirar da lista</button></div></div>`;
+    box.innerHTML = `<p class="nv-help">Os nomes entram aqui sozinhos ao registrar serviços e cadastrar peças, e são sugeridos pelos mais usados.</p>
+      <form id="fsSupNew" class="fs-row" autocomplete="off"><label class="nv-field fs-grow">Novo fornecedor<input name="name" maxlength="80" required placeholder="Ex.: João Peças"></label><label class="nv-field">WhatsApp (opcional)<input name="phone" maxlength="30" inputmode="tel"></label><button class="nv-button">Adicionar</button></form>
+      <h3>Fornecedores (${sups.length})</h3><div class="nv-list">${sups.map(x => row(x, 'suppliers')).join('') || '<p class="nv-help">Nenhum fornecedor ainda.</p>'}</div>
+      <h3>Modelos de aparelho (${models.length})</h3><div class="nv-list">${models.map(x => row(x, 'device-models')).join('') || '<p class="nv-help">Nenhum modelo ainda.</p>'}</div>`;
+    $('fsSupNew').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { await api('/store/suppliers', 'POST', { name: f.elements.name.value.trim(), phone: f.elements.phone.value.trim() }); suppliersTab(box); } catch (err) { feedback(err.message, true); } };
+    box.querySelectorAll('[data-s-del]').forEach(b => b.onclick = async () => { const [kind, id] = b.dataset.sDel.split(':'); try { await api(`/store/${kind}/${id}`, 'DELETE'); suppliersTab(box); } catch (err) { feedback(err.message, true); } });
   }
 
   // ---------------- Olho: esconder/mostrar valores do caixa ----------------
@@ -632,24 +883,27 @@
   async function restockTab(box) {
     let rows = []; try { rows = await api('/store/stock/restock'); } catch (err) { box.textContent = err.message; return; }
     box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Vendido e ainda não reposto (some quando você dá entrada no estoque).</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>🖨 Imprimir lista de reposição</button></div>
-      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b><br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor. 👍</p>'}</div>`;
+      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor. 👍</p>'}</div>`;
     if ($('fsRestockPrint')) $('fsRestockPrint').onclick = () => {
       const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
       const total = rows.reduce((a, r) => a + (r.cost_cents || 0) * r.pending, 0);
       w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:22px}</style></head><body>
         <h1>Reposição de estoque · ${esc(config?.name || '')}</h1><div>${new Date().toLocaleString('pt-BR')}</div>
-        <table><thead><tr><th class="ck">✓</th><th>Produto</th><th>Modelo</th><th class="n">Repor</th><th class="n">Estoque atual</th><th class="n">Custo estimado</th></tr></thead><tbody>
-        ${rows.map(r => `<tr><td class="ck">☐</td><td>${esc(r.name)}</td><td>${esc(r.variant || '')}</td><td class="n"><b>${r.pending}</b></td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—'}</td></tr>`).join('')}
+        <table><thead><tr><th class="ck">✓</th><th>Produto</th><th>Modelo</th><th>Fornecedor</th><th class="n">Repor</th><th class="n">Estoque atual</th><th class="n">Custo estimado</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td class="ck">☐</td><td>${esc(r.name)}</td><td>${esc(r.variant || '')}</td><td>${esc(r.supplier_name || '')}</td><td class="n"><b>${r.pending}</b></td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—'}</td></tr>`).join('')}
         </tbody></table><p><b>Total estimado: ${brl(total)}</b> (pelo custo cadastrado)</p><script>setTimeout(()=>print(),200)<\/script></body></html>`);
       w.document.close();
     };
   }
 
   async function productsDialog(term = '', tab = 'list') {
-    openDialog(`${header('Produtos')}<div class="fs-tabs" role="tablist"><button type="button" role="tab" data-ptab="list" aria-selected="${tab === 'list'}">Produtos</button><button type="button" role="tab" data-ptab="gen" aria-selected="${tab === 'gen'}">🏷 Gerar códigos</button><button type="button" role="tab" data-ptab="restock" aria-selected="${tab === 'restock'}">🔁 Reposição</button></div><div id="fsPTab"></div>`);
+    const tabs = [['list', 'Produtos'], ['parts', '🔧 Peças'], ['suppliers', '🏭 Fornecedores'], ['gen', '🏷 Gerar códigos'], ['restock', '🔁 Reposição']];
+    openDialog(`${header('Estoque')}<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`);
     document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
     const box = $('fsPTab');
     if (tab === 'restock') return restockTab(box);
+    if (tab === 'parts') return partsTab(box, term);
+    if (tab === 'suppliers') return suppliersTab(box);
     if (tab === 'gen') {
       box.innerHTML = `<p class="nv-help">Para produto <b>sem código de barras</b>: o sistema cria o código, já cadastra o produto com o estoque e abre as etiquetas para imprimir (uma por unidade). Depois é só colar no produto: o leitor reconhece na venda e o estoque baixa sozinho.</p>
         <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="Ex.: Capinha Galaxy A12 transparente"></label>
@@ -725,6 +979,7 @@
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !t.readOnly && t.value.endsWith(code)) { t.value = t.value.slice(0, -code.length); t.dispatchEvent(new Event('input', { bubbles: true })); }
         if (!sale) { feedback('Abra o caixa para registrar a venda deste produto.', true); beep(false); return; }
         if ($('fsScanResults')) $('fsScanResults').innerHTML = '';
+        if (saleMode === 'service') { setMode('product'); feedback('Produto lido pelo leitor: o caixa passou para "Produto". O serviço digitado continua guardado.'); }
         handleCode(code);
         return;
       }
@@ -786,7 +1041,7 @@
     const reprint = Date.now() - new Date(r.created_at).getTime() > 10 * 60 * 1000;
     const place = [r.city, r.state].filter(Boolean).join('/');
     const items = r.items.length
-      ? `<div class="row small"><span>QTD  ITEM</span><span>VALOR</span></div>` + r.items.map(i => `<div class="it"><div class="row"><span><b>${i.quantity}</b>  ${esc(i.name)}</span><span>${brl(i.total_cents)}</span></div>${i.quantity > 1 ? `<div class="small">${i.quantity} x ${brl(i.total_cents / i.quantity)}</div>` : ''}</div>`).join('')
+      ? `<div class="row small"><span>QTD  ITEM</span><span>VALOR</span></div>` + r.items.map(i => `<div class="it"><div class="row"><span><b>${i.quantity}</b>  ${esc(i.name)}</span><span>${brl(i.total_cents)}</span></div>${i.quantity > 1 ? `<div class="small">${i.quantity} x ${brl(i.total_cents / i.quantity)}</div>` : ''}${i.service && i.warranty_days ? `<div class="small">Garantia: ${i.warranty_days} dias</div>` : ''}</div>`).join('')
       : `<div class="it"><div>${esc(r.description || 'Venda')}</div><div class="row"><span></span><span>${brl(r.total_cents)}</span></div></div>`;
     const l = r.loyalty;
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comprovante venda ${r.sale_number}</title><style>
@@ -840,6 +1095,10 @@
     const expenses = moves.filter(m => m.kind === 'expense'), transfers = moves.filter(m => m.kind !== 'expense');
     const diff = s.counted_cash_cents != null ? s.counted_cash_cents - s.expected_cash_cents : null;
     const linked = sales.filter(x => x.customer_id).length;
+    // Serviços do caixa: preço, custo (peça) e lucro, com aparelho e fornecedor.
+    const svcs = sales.flatMap(x => (x.items || []).filter(i => i.service).map(i => ({ ...i, sale_number: x.sale_number })));
+    const svcTotal = svcs.reduce((a, i) => a + i.total_cents, 0), svcKnown = svcs.filter(i => i.unit_cost_cents != null);
+    const svcProfit = svcKnown.reduce((a, i) => a + i.total_cents - i.unit_cost_cents, 0);
     const table = (head, rows, empty) => rows.length ? `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>` : `<p class="muted">${empty}</p>`;
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de caixa · ${esc(s.store_name)} · ${dmy(s.opened_at)}</title><style>
       @page{size:A4;margin:14mm}*{box-sizing:border-box}body{font:12px/1.4 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:#111;margin:0;padding:16px}
@@ -867,6 +1126,7 @@
       ${transfers.length ? `<h2>Sangrias e suprimentos</h2>${table(['Hora', 'Tipo', 'Motivo', 'Lançado por', '<span class="n">Valor</span>'], transfers.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${MOVE_LABEL[m.kind]}</td><td>${esc(m.note)}</td><td>${esc(m.created_by_name)}</td><td class="n">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</td></tr>`), '')}` : ''}
       <h2>Vendas (${sales.length}${sales.length ? ` · ${Math.round(100 * linked / sales.length)}% com cliente identificado` : ''})</h2>
       ${table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.seller_name || '')}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${METHODS[x.payment_method]}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
+      ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', 'Aparelho', 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents) : '—'}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents) : '—'}</td></tr>`), '')}` : ''}
       ${salesCanceled.length || movesCanceled.length ? `<h2>Cancelamentos</h2>${table(['Item', 'Cancelado por', 'Quando', 'Motivo', '<span class="n">Valor</span>'], [...salesCanceled.map(x => `<tr><td>Venda ${x.sale_number}${x.customer_name ? ' · ' + esc(x.customer_name) : ''}</td><td>${esc(x.canceled_by_name || '—')}</td><td>${hhmm(x.canceled_at)}</td><td>${esc(x.cancel_reason)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), ...movesCanceled.map(m => `<tr><td>${MOVE_LABEL[m.kind]}${m.category ? ' · ' + esc(m.category) : ''}</td><td>${esc(m.canceled_by_name || '—')}</td><td>${hhmm(m.canceled_at)}</td><td>${esc(m.cancel_reason)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`)], '')}` : ''}
       <div class="sign"><div>Responsável pelo caixa</div><div>Conferido por</div></div>
     </body></html>`;
@@ -972,7 +1232,19 @@
   }
 
   // ---------------- Integração com o painel ----------------
-  const css = `.fs-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px}@media(max-width:900px){.fs-grid{grid-template-columns:1fr}}
+  const css = `.fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
+  @media(max-width:900px){.fs-grid{grid-template-columns:1fr}.fs-newsale{order:-1}}
+  .fs-cashbar{position:relative}.fs-cashbar-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;margin-left:auto}.fs-cashbar:has(.fs-seller:not([hidden])) .fs-cashbar-side{padding-top:26px}
+  .fs-seller{position:absolute;top:12px;right:16px;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--nv-muted)}.fs-seller[hidden]{display:none}
+  .fs-seller select{width:auto;max-width:180px;padding:5px 28px 5px 12px;border:1px solid var(--nv-border);border-radius:999px;font:inherit;font-size:13px;font-weight:600;color:var(--nv-ink,#111);background-color:var(--nv-surface,#fff)}
+  @media(max-width:900px){.fs-cashbar-side{align-items:stretch;margin-left:0;width:100%}.fs-cashbar:has(.fs-seller:not([hidden])){padding-top:48px}.fs-cashbar:has(.fs-seller:not([hidden])) .fs-cashbar-side{padding-top:0}}
+  .fs-newsale>h2{margin:0 0 12px}.fs-mode{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 16px}
+  .fs-mode button{padding:12px 10px;border:1.5px solid var(--nv-border);border-radius:12px;background:var(--nv-surface,#fff);font:inherit;font-size:15px;font-weight:700;color:var(--nv-ink,#111);cursor:pointer}
+  .fs-mode button[aria-pressed=true]{background:var(--nv-blue);border-color:var(--nv-blue);color:#fff}.fs-mode button:focus-visible{outline:2px solid var(--nv-blue);outline-offset:2px}
+  #fsSale [data-only][hidden]{display:none!important}
+  .fs-sugg{position:relative}.fs-drop{position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:2px;max-height:280px;overflow:auto}.fs-drop:empty{display:none}.fs-drop button,.fs-drop p{background:var(--nv-surface,#fff);box-shadow:0 6px 18px rgba(16,24,40,.08)}.fs-drop p{margin:0;padding:8px 10px;border-radius:10px;border:1px dashed var(--nv-border)}
+  .fs-chip.fs-chip-on{border-color:var(--nv-blue);box-shadow:0 0 0 1.5px var(--nv-blue) inset}.fs-tag-svc{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--nv-blue-soft);font-size:12px;font-weight:600}
+  #fsSvc .fs-picked{background:var(--nv-surface,#fff)}#fsSvc .nv-field input,#fsSvc .nv-field select{width:100%}
   .fs-cashbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.fs-kpis{display:flex;gap:24px;flex-wrap:wrap;margin-top:6px}.fs-kpis div{display:flex;flex-direction:column}.fs-kpis small{color:var(--nv-muted)}.fs-kpis b{font-size:22px}
   .fs-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.fs-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.fs-row>*{min-width:0}.fs-grow{flex:1 1 180px}.fs-small{padding:6px 10px!important;font-size:13px!important;min-height:0!important}.fs-small-row{margin-top:6px}.fs-wide{width:100%;margin-top:8px}
   .fs-methods{border:0;padding:0;margin:8px 0;display:flex;gap:6px;flex-wrap:wrap}.fs-methods legend{font-size:13px;color:var(--nv-text);margin-bottom:6px}.fs-methods label{cursor:pointer}.fs-methods input{position:absolute;opacity:0;pointer-events:none}.fs-methods span{display:inline-block;padding:8px 14px;border:1px solid var(--nv-border);border-radius:999px;background:var(--nv-surface)}.fs-methods input:checked+span{background:var(--nv-blue);border-color:var(--nv-blue);color:#fff}.fs-methods input:focus-visible+span{outline:2px solid var(--nv-blue);outline-offset:2px}
@@ -990,7 +1262,7 @@
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
-  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

@@ -70,7 +70,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   async function sessionDetail(tenant, sessionId) {
     const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
         x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,COALESCE(sl.name,u.name) seller_name,
-        COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
+        COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents,
+            'service',i.service,'device_model',i.device_model,'supplier_name',i.supplier_name,'unit_cost_cents',i.unit_cost_cents,'warranty_days',i.warranty_days) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
       FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [sessionId, tenant]);
@@ -250,16 +251,24 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   // ---------- Produtos (código de barras) ----------
   // O leitor USB funciona como teclado: digita o código e Enter. O painel procura aqui.
-  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,restock_pending,active,updated_at';
+  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,restock_pending,active,updated_at,kind,supplier_id,device_model,(SELECT s.name FROM suppliers s WHERE s.id=products.supplier_id) supplier_name';
+  // Fornecedor e modelo de aparelho: acha pelo nome (sem diferenciar maiúsculas) ou cria; cada uso sobe na lista de sugestões.
+  const cleanName = v => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  const touchName = async (cq, table, tenant, name, use = true) => {
+    const n = cleanName(name); if (!n) return null;
+    return (await cq(`INSERT INTO ${table}(tenant_id,name,uses,last_used_at) VALUES($1,$2,$3,CASE WHEN $3>0 THEN now() END)
+      ON CONFLICT (tenant_id, lower(name)) DO UPDATE SET uses=${table}.uses+$3,last_used_at=CASE WHEN $3>0 THEN now() ELSE ${table}.last_used_at END,active=true RETURNING id,name`, [tenant, n, use ? 1 : 0])).rows[0];
+  };
   // Entrada no estoque (compra): guarda quantidade e custo para o relatório de compras.
   const ledger = (cq, tenant, productId, variantId, kind, quantity, unitCost, saleId, userId) => cq(`INSERT INTO stock_movements(tenant_id,product_id,variant_id,kind,quantity,unit_cost_cents,sale_id,created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [tenant, productId, variantId, kind, quantity, unitCost ?? null, saleId ?? null, userId ?? null]);
-  const restockRows = async tenant => (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,NULL::text variant,p.restock_pending pending,p.stock_qty,p.cost_cents,p.barcode
-      FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
+  // Peça: o "modelo" é o aparelho e o fornecedor vai junto, para a lista de compras.
+  const restockRows = async tenant => (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents,p.barcode,p.kind,s.name supplier_name
+      FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
     UNION ALL
-    SELECT p.id,v.id,p.name,v.name,v.restock_pending,v.stock_qty,p.cost_cents,p.barcode
+    SELECT p.id,v.id,p.name,v.name,v.restock_pending,v.stock_qty,p.cost_cents,p.barcode,p.kind,NULL
       FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.tenant_id=$1 AND p.active AND v.active AND v.restock_pending>0
-    ORDER BY 3,4`, [tenant])).rows;
+    ORDER BY 9,10 NULLS LAST,3,4`, [tenant])).rows;
   // Modelo de um produto com modelos: acha pelo nome (sem diferenciar maiúsculas) ou cria.
   const upsertVariant = async (cq, tenant, productId, name) => (await cq(`INSERT INTO product_variants(tenant_id,product_id,name) VALUES($1,$2,$3)
     ON CONFLICT (product_id, lower(name)) DO UPDATE SET active=true RETURNING id,name,stock_qty,restock_pending`, [tenant, productId, name.trim().replace(/\s+/g, ' ')])).rows[0];
@@ -269,32 +278,42 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   const productBody = z.object({
     name: z.string().trim().min(2).max(120),
     barcode: z.union([z.literal(''), z.string().trim().regex(/^[!-~]{3,64}$/, 'Código de barras inválido')]).optional(),
-    price_cents: cents,
+    price_cents: cents.optional(),
     cost_cents: cents.nullable().optional(),
     stock_qty: stockQty.nullable().optional(),
-    ask_variant: z.boolean().optional()
+    ask_variant: z.boolean().optional(),
+    // Peça de serviço (tela, bateria…): fornecedor e modelo do aparelho; preço de venda é opcional (sugestão).
+    kind: z.enum(['product', 'part']).optional(),
+    supplier: z.string().trim().max(80).optional(),
+    device_model: z.string().trim().max(80).optional()
   }).strict();
   const dupBarcode = (e, res) => { if (e.code === '23505') { bad(res, 409, 'Já existe um produto com este código de barras'); return true; } return false; };
 
   app.get('/api/store/products', ...guard, route(async (req, res) => {
     const term = String(req.query.q || '').trim().slice(0, 80);
-    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND
-        ($2='' OR fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR barcode=$2)
-      ORDER BY (barcode=$2) DESC NULLS LAST,name LIMIT 500`, [tid(req), term]);
+    const kind = req.query.kind === 'part' ? 'part' : 'product';
+    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind=$3 AND
+        ($2='' OR fp_fold(name || ' ' || coalesce(device_model,'')) LIKE '%'||fp_fold($2)||'%' OR fp_fold(coalesce(device_model,'')) LIKE '%'||fp_fold($2)||'%' OR barcode=$2)
+      ORDER BY (barcode=$2) DESC NULLS LAST,name,device_model LIMIT 500`, [tid(req), term, kind]);
     res.set('Cache-Control', 'no-store'); res.json(r.rows);
   }));
   app.get('/api/store/products/barcode/:code', ...guard, route(async (req, res) => {
     const code = String(req.params.code || '').trim();
     if (!/^[!-~]{3,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
-    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2`, [tid(req), code]);
+    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2 AND kind='product'`, [tid(req), code]);
     if (!r.rowCount) return bad(res, 404, 'Produto não cadastrado');
     res.set('Cache-Control', 'no-store'); res.json(r.rows[0]);
   }));
   app.post('/api/store/products', ...guard, route(async (req, res) => {
     const v = valid(productBody, req, res); if (!v) return;
+    const part = v.kind === 'part';
+    if (!part && v.price_cents == null) return bad(res, 400, 'Informe o preço de venda');
+    if (part && v.ask_variant) return bad(res, 400, 'Peça não usa código geral com modelos: cadastre uma peça para cada modelo');
     try {
-      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8) RETURNING ${productFields}`,
-        [tid(req), v.name, v.barcode || '', v.price_cents, v.cost_cents ?? null, v.ask_variant ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id]);
+      const sup = part ? await touchName(q, 'suppliers', tid(req), v.supplier, false) : null;
+      if (part && v.device_model) await touchName(q, 'device_models', tid(req), v.device_model, false);
+      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by,kind,supplier_id,device_model) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,NULLIF($11,'')) RETURNING ${productFields}`,
+        [tid(req), v.name, v.barcode || '', v.price_cents ?? 0, v.cost_cents ?? null, v.ask_variant ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id, part ? 'part' : 'product', sup?.id || null, part ? cleanName(v.device_model) : '']);
       if (!v.ask_variant && v.stock_qty > 0) await ledger(q, tid(req), r.rows[0].id, null, 'entry', v.stock_qty, v.cost_cents, null, req.user.id);
       await audit(req, 'create', 'product', r.rows[0].id); res.status(201).json(r.rows[0]);
     } catch (e) { if (!dupBarcode(e, res)) throw e; }
@@ -302,15 +321,21 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.patch('/api/store/products/:id', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
     const v = valid(productBody.partial().strict(), req, res); if (!v) return;
+    if (v.kind) return bad(res, 400, 'O tipo (produto ou peça) não muda depois do cadastro');
     try {
+      const sup = 'supplier' in v ? await touchName(q, 'suppliers', tid(req), v.supplier, false) : null;
+      if (v.device_model) await touchName(q, 'device_models', tid(req), v.device_model, false);
       const r = await q(`UPDATE products SET name=COALESCE($1,name),
+          supplier_id=CASE WHEN $11 THEN $12::uuid ELSE supplier_id END,
+          device_model=CASE WHEN $13::text IS NULL THEN device_model ELSE NULLIF($13,'') END,
           barcode=CASE WHEN $2::text IS NULL THEN barcode ELSE NULLIF($2,'') END,
           price_cents=COALESCE($3,price_cents),
           cost_cents=CASE WHEN $6 THEN $7::int ELSE cost_cents END,
           stock_qty=CASE WHEN $8 THEN $9::int ELSE stock_qty END,
           ask_variant=COALESCE($10,ask_variant),updated_at=now()
         WHERE id=$4 AND tenant_id=$5 AND active RETURNING ${productFields}`, [v.name ?? null, v.barcode ?? null, v.price_cents ?? null, req.params.id, tid(req),
-        'cost_cents' in v, v.cost_cents ?? null, 'stock_qty' in v, v.stock_qty ?? null, v.ask_variant ?? null]);
+        'cost_cents' in v, v.cost_cents ?? null, 'stock_qty' in v, v.stock_qty ?? null, v.ask_variant ?? null,
+        'supplier' in v, sup?.id || null, 'device_model' in v ? cleanName(v.device_model) : null]);
       if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
       await audit(req, 'update', 'product', req.params.id); res.json(r.rows[0]);
     } catch (e) { if (!dupBarcode(e, res)) throw e; }
@@ -387,6 +412,78 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     await audit(req, 'delete', 'product', req.params.id); res.json({ deleted: true });
   }));
 
+  // ---------- Sugestões: fornecedores, modelos de aparelho e serviços ----------
+  // Os mais usados primeiro; quem começa com o que foi digitado vem antes.
+  const suggest = table => route(async (req, res) => {
+    const term = String(req.query.q || '').trim().slice(0, 80);
+    const r = await q(`SELECT id,name,uses${table === 'suppliers' ? ',phone' : ''} FROM ${table} WHERE tenant_id=$1 AND active AND ($2='' OR fp_fold(name) LIKE '%'||fp_fold($2)||'%')
+      ORDER BY (fp_fold(name) LIKE fp_fold($2)||'%') DESC,uses DESC,last_used_at DESC NULLS LAST,lower(name) LIMIT ${term ? 15 : 200}`, [tid(req), term]);
+    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  });
+  const nameBody = z.object({ name: z.string().trim().min(1).max(80), phone: z.string().trim().max(30).optional() }).strict();
+  for (const [path, table] of [['suppliers', 'suppliers'], ['device-models', 'device_models']]) {
+    app.get('/api/store/' + path, ...guard, suggest(table));
+    app.post('/api/store/' + path, ...guard, route(async (req, res) => {
+      const v = valid(nameBody, req, res); if (!v) return;
+      const row = await touchName(q, table, tid(req), v.name, false);
+      if (table === 'suppliers' && v.phone !== undefined) await q('UPDATE suppliers SET phone=NULLIF($1,\'\') WHERE id=$2', [v.phone, row.id]);
+      await audit(req, 'create', table === 'suppliers' ? 'supplier' : 'device_model', row.id); res.status(201).json(row);
+    }));
+    // Tirar da lista de sugestões: vendas e peças antigas continuam com o nome.
+    app.delete('/api/store/' + path + '/:id', ...guard, route(async (req, res) => {
+      if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Item inválido');
+      const r = await q(`UPDATE ${table} SET active=false WHERE id=$1 AND tenant_id=$2 RETURNING id`, [req.params.id, tid(req)]);
+      if (!r.rowCount) return bad(res, 404, 'Não encontrado');
+      res.json({ deleted: true });
+    }));
+  }
+  // Serviços pré-cadastrados (botões no modo Serviço). A loja recebe uma lista inicial uma única vez;
+  // o que ela excluir não volta.
+  const SERVICE_DEFAULTS = ['Troca de tela', 'Troca de bateria', 'Troca de conector de carga', 'Troca de tampa traseira', 'Troca de vidro da câmera', 'Reparo comum', 'Limpeza / banho químico', 'Software / formatação', 'Diagnóstico'];
+  const catalogFields = 'id,name,price_cents,cost_cents,position';
+  app.get('/api/store/sales/service-items', ...guard, route(async (req, res) => {
+    const seeded = await q('UPDATE tenants SET service_catalog_seeded=true WHERE id=$1 AND NOT service_catalog_seeded RETURNING id', [tid(req)]);
+    if (seeded.rowCount) await q(`INSERT INTO service_catalog(tenant_id,name,position) SELECT $1,n,o FROM unnest($2::text[]) WITH ORDINALITY AS d(n,o)
+      ON CONFLICT DO NOTHING`, [tid(req), SERVICE_DEFAULTS]);
+    const r = await q(`SELECT ${catalogFields} FROM service_catalog WHERE tenant_id=$1 AND active ORDER BY position,lower(name)`, [tid(req)]);
+    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  }));
+  const catalogBody = z.object({ name: z.string().trim().min(2).max(80), price_cents: cents.nullable().optional(), cost_cents: cents.nullable().optional() }).strict();
+  app.post('/api/store/sales/service-items', ...guard, route(async (req, res) => {
+    const v = valid(catalogBody, req, res); if (!v) return;
+    const n = (await q('SELECT count(*)::int n FROM service_catalog WHERE tenant_id=$1 AND active', [tid(req)])).rows[0].n;
+    if (n >= 60) return bad(res, 409, 'Limite de 60 serviços. Exclua algum antes de cadastrar outro.');
+    // Mesmo nome: atualiza preço e custo em vez de duplicar.
+    const up = await q(`UPDATE service_catalog SET price_cents=$3,cost_cents=$4 WHERE tenant_id=$1 AND active AND lower(name)=lower($2) RETURNING ${catalogFields}`, [tid(req), v.name, v.price_cents ?? null, v.cost_cents ?? null]);
+    const r = up.rowCount ? up : await q(`INSERT INTO service_catalog(tenant_id,name,price_cents,cost_cents,position) VALUES($1,$2,$3,$4,
+      (SELECT coalesce(max(position),0)+1 FROM service_catalog WHERE tenant_id=$1)) RETURNING ${catalogFields}`, [tid(req), v.name.replace(/\s+/g, ' '), v.price_cents ?? null, v.cost_cents ?? null]);
+    await audit(req, 'create', 'service_catalog', r.rows[0].id); res.status(201).json(r.rows[0]);
+  }));
+  app.patch('/api/store/sales/service-items/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Serviço inválido');
+    const v = valid(catalogBody.partial().strict(), req, res); if (!v) return;
+    try {
+      const r = await q(`UPDATE service_catalog SET name=COALESCE($3,name),price_cents=CASE WHEN $4 THEN $5::int ELSE price_cents END,cost_cents=CASE WHEN $6 THEN $7::int ELSE cost_cents END
+        WHERE id=$1 AND tenant_id=$2 AND active RETURNING ${catalogFields}`, [req.params.id, tid(req), v.name ?? null, 'price_cents' in v, v.price_cents ?? null, 'cost_cents' in v, v.cost_cents ?? null]);
+      if (!r.rowCount) return bad(res, 404, 'Serviço não encontrado');
+      await audit(req, 'update', 'service_catalog', req.params.id); res.json(r.rows[0]);
+    } catch (e) { if (e.code === '23505') return bad(res, 409, 'Já existe um serviço com este nome'); throw e; }
+  }));
+  app.delete('/api/store/sales/service-items/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Serviço inválido');
+    const r = await q('UPDATE service_catalog SET active=false WHERE id=$1 AND tenant_id=$2 AND active RETURNING id', [req.params.id, tid(req)]);
+    if (!r.rowCount) return bad(res, 404, 'Serviço não encontrado');
+    await audit(req, 'delete', 'service_catalog', req.params.id); res.json({ deleted: true });
+  }));
+
+  // Nomes de serviço já lançados (troca de tela, troca de bateria…), os mais feitos primeiro.
+  app.get('/api/store/sales/services', ...guard, route(async (req, res) => {
+    const r = await q(`SELECT min(i.name) name,count(*)::int uses,(array_agg(i.unit_price_cents ORDER BY x.created_at DESC))[1] last_price_cents
+      FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL
+      GROUP BY lower(i.name) ORDER BY 2 DESC,1 LIMIT 40`, [tid(req)]);
+    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  }));
+
   // ---------- Vendedores ----------
   // Logins ativos da loja (dono e operadores, cadastrados na central). Pré-seleciona quem fez a última venda.
   app.get('/api/store/sales/sellers', ...guard, route(async (req, res) => {
@@ -407,7 +504,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Item de produto (preço do cadastro, ou unit_price_cents se o vendedor mudou) ou linha avulsa (nome + preço).
       items: z.array(z.union([
         z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999), unit_price_cents: cents.optional(), variant_name: z.string().trim().min(1).max(80).optional() }).strict(),
-        z.object({ name: z.string().trim().min(1).max(120), quantity: z.number().int().min(1).max(9999), unit_price_cents: cents }).strict()
+        z.object({ name: z.string().trim().min(1).max(120), quantity: z.number().int().min(1).max(9999), unit_price_cents: cents }).strict(),
+        // Serviço: preço cobrado, custo, fornecedor, aparelho e garantia. part_id = peça do estoque usada (baixa 1).
+        z.object({ service: z.string().trim().min(2).max(120), unit_price_cents: cents, cost_cents: cents.nullable().optional(), supplier: z.string().trim().max(80).optional(),
+          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), warranty_days: z.number().int().min(0).max(3650).optional() }).strict()
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
@@ -447,7 +547,21 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         const p = ids.length ? await c.query('SELECT id,name,barcode,price_cents,cost_cents,ask_variant FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
         if (p.rowCount !== ids.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
         const byId = new Map(p.rows.map(x => [x.id, x])), merged = new Map();
-        for (const it of v.items) {
+        const partIds = [...new Set(v.items.filter(it => it.part_id).map(it => it.part_id))];
+        const parts = partIds.length ? await c.query(`SELECT p.id,p.name,p.cost_cents,p.device_model,s.name supplier_name FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
+          WHERE p.tenant_id=$1 AND p.active AND p.kind='part' AND p.id=ANY($2::uuid[])`, [tid(req), partIds]) : { rows: [], rowCount: 0 };
+        if (parts.rowCount !== partIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça não encontrada ou excluída. Escolha a peça de novo.'); }
+        const partById = new Map(parts.rows.map(x => [x.id, x]));
+        for (const [n, it] of v.items.entries()) {
+          if (it.service) {
+            // O que o operador digitou vale; o que ficou em branco vem da peça escolhida.
+            const part = it.part_id ? partById.get(it.part_id) : null;
+            merged.set('s:' + n, { id: part?.id || null, service: true, name: it.service.replace(/\s+/g, ' '), barcode: null,
+              cost_cents: it.cost_cents !== undefined && it.cost_cents !== null ? it.cost_cents : part?.cost_cents ?? null,
+              supplier: cleanName(it.supplier) || part?.supplier_name || null, device_model: cleanName(it.device_model) || part?.device_model || null,
+              warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1 });
+            continue;
+          }
           const prod = it.product_id ? byId.get(it.product_id) : null;
           const unit = it.unit_price_cents ?? prod.price_cents;
           if (prod && unit !== prod.price_cents && req.user.access_level === 'basic') { await c.query('ROLLBACK'); return bad(res, 403, 'Operador novato não pode mudar o preço do produto. Peça a um operador livre ou ao dono.'); }
@@ -466,7 +580,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / gross)); x.total_cents -= cut; left -= cut; }); }
         // Modelo (película/capinha): acha ou cria, com o nome já salvo (fica para sugerir nas próximas vendas).
         for (const x of items) if (x.variant) { const vr = await upsertVariant((sql, params) => c.query(sql, params), tid(req), x.id, x.variant); x.variant = vr.name; x.vid = vr.id; }
-        if (!description) description = items.map(x => (x.quantity > 1 ? x.quantity + 'x ' : '') + x.name + (x.variant ? ' ' + x.variant : '')).join(', ').slice(0, 300);
+        // Serviço: fornecedor e aparelho entram (ou sobem) na lista de sugestões, com o nome como já está salvo.
+        for (const x of items) if (x.service) {
+          const cq = (sql, params) => c.query(sql, params);
+          if (x.supplier) x.supplier = (await touchName(cq, 'suppliers', tid(req), x.supplier)).name;
+          if (x.device_model) x.device_model = (await touchName(cq, 'device_models', tid(req), x.device_model)).name;
+        }
+        const auto = items.map(x => x.service ? x.name + (x.device_model ? ' · ' + x.device_model : '') : (x.quantity > 1 ? x.quantity + 'x ' : '') + x.name + (x.variant ? ' ' + x.variant : '')).join(', ');
+        // Serviço com observação: a descrição fica "Troca de tela · Galaxy A12 · cliente vai buscar amanhã".
+        if (!description) description = auto.slice(0, 300);
+        else if (items.some(x => x.service)) description = (auto + ' · ' + description).slice(0, 300);
       }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id)
@@ -474,15 +597,17 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const cq = (sql, params) => c.query(sql, params);
       for (const x of items) {
         const vr = x.vid ? { id: x.vid } : null;
-        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null]);
+        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
+          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null]);
         if (!x.id) continue;
         // Baixa no estoque (do modelo, ou do produto quando controla estoque) e marca para reposição.
         if (vr) await c.query('UPDATE product_variants SET stock_qty=CASE WHEN stock_qty IS NULL THEN NULL ELSE GREATEST(-999999,stock_qty-$1) END,restock_pending=restock_pending+$1,sold_count=sold_count+$1,last_sold_at=now() WHERE id=$2', [x.quantity, vr.id]);
         else await c.query('UPDATE products SET stock_qty=CASE WHEN stock_qty IS NULL THEN NULL ELSE GREATEST(-999999,stock_qty-$1) END,restock_pending=restock_pending+$1,updated_at=now() WHERE id=$2 AND tenant_id=$3', [x.quantity, x.id, tid(req)]);
         await ledger(cq, tid(req), x.id, vr?.id || null, 'sale', -x.quantity, x.cost_cents, sale.id, req.user.id);
       }
-      sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents }));
+      sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents, service, supplier, device_model, warranty_days, cost_cents }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents,
+        ...(service ? { service: true, supplier_name: supplier, device_model, warranty_days, unit_cost_cents: cost_cents } : {}) }));
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
       if (customerId && !v.order_id) {
@@ -504,7 +629,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
         c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,COALESCE(sl.name,u.name) seller_name,
         t.name store_name,t.city,t.state,t.whatsapp,
-        COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'list_price_cents',i.list_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
+        COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,'') || CASE WHEN i.service AND i.device_model IS NOT NULL THEN ' · ' || i.device_model ELSE '' END,
+            'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'list_price_cents',i.list_price_cents,'total_cents',i.total_cents,'service',i.service,'warranty_days',i.warranty_days) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
       FROM sales x JOIN tenants t ON t.id=x.tenant_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.id=$1 AND x.tenant_id=$2`, [req.params.id, tid(req)]);

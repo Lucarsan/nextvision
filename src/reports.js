@@ -48,7 +48,7 @@ export async function reportData(q, tenantId, kind, day) {
   const per = periodFor(kind, day);
   const range = [tenantId, per.from, per.to, TZ];
   const inRange = col => `${col} >= ($2::date::timestamp AT TIME ZONE $4) AND ${col} < ($3::date::timestamp AT TIME ZONE $4)`;
-  const [t, sales, canceled, items, typed, expenses, moves, buys, newProducts, newCustomers, sessions, restock, bySeller, byDay] = await Promise.all([
+  const [t, sales, canceled, items, typed, expenses, moves, buys, newProducts, newCustomers, sessions, restock, bySeller, byDay, services] = await Promise.all([
     q('SELECT name,city,state FROM tenants WHERE id=$1', [tenantId]),
     q(`SELECT x.sale_number,x.created_at,x.total_cents,x.discount_cents,x.payment_method,x.description,c.name customer,COALESCE(sl.name,u.name) seller
        FROM sales x LEFT JOIN customers c ON c.id=x.customer_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
@@ -56,27 +56,33 @@ export async function reportData(q, tenantId, kind, day) {
     q(`SELECT count(*)::int n,COALESCE(sum(total_cents),0)::int total FROM sales WHERE tenant_id=$1 AND canceled_at IS NOT NULL AND ${inRange('created_at')}`, range),
     q(`SELECT i.name || COALESCE(' ' || i.variant_name,'') name,sum(i.quantity)::int qty,sum(i.total_cents)::int total,
          sum(CASE WHEN i.unit_cost_cents IS NULL THEN NULL ELSE i.unit_cost_cents*i.quantity END)::int cost,bool_and(i.unit_cost_cents IS NOT NULL) known
-       FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')}
+       FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND NOT i.service AND ${inRange('x.created_at')}
        GROUP BY 1 ORDER BY 3 DESC,1`, range),
     q(`SELECT count(*)::int n,COALESCE(sum(total_cents),0)::int total FROM sales x WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')}
        AND NOT EXISTS (SELECT 1 FROM sale_items i WHERE i.sale_id=x.id)`, range),
     q(`SELECT m.created_at,m.category,m.note,m.method,m.amount_cents,u.name who FROM cash_movements m JOIN users u ON u.id=m.created_by
        WHERE m.tenant_id=$1 AND m.kind='expense' AND m.canceled_at IS NULL AND ${inRange('m.created_at')} ORDER BY m.created_at`, range),
     q(`SELECT kind,count(*)::int n,sum(amount_cents)::int total FROM cash_movements WHERE tenant_id=$1 AND kind IN ('withdrawal','deposit') AND canceled_at IS NULL AND ${inRange('created_at')} GROUP BY kind`, range),
-    q(`SELECT p.name || COALESCE(' ' || v.name,'') name,sum(s.quantity)::int qty,sum(s.quantity*COALESCE(s.unit_cost_cents,0))::int total,bool_and(s.unit_cost_cents IS NOT NULL) known
-       FROM stock_movements s JOIN products p ON p.id=s.product_id LEFT JOIN product_variants v ON v.id=s.variant_id
-       WHERE s.tenant_id=$1 AND s.kind='entry' AND ${inRange('s.created_at')} GROUP BY 1 ORDER BY 3 DESC,1`, range),
-    q(`SELECT name,barcode,price_cents,cost_cents,stock_qty,ask_variant,generated_barcode FROM products WHERE tenant_id=$1 AND ${inRange('created_at')} ORDER BY created_at`, range),
+    q(`SELECT p.name || COALESCE(' ' || v.name,'') || COALESCE(' ' || p.device_model,'') name,sup.name supplier,bool_or(p.kind='part') part,sum(s.quantity)::int qty,sum(s.quantity*COALESCE(s.unit_cost_cents,0))::int total,bool_and(s.unit_cost_cents IS NOT NULL) known
+       FROM stock_movements s JOIN products p ON p.id=s.product_id LEFT JOIN product_variants v ON v.id=s.variant_id LEFT JOIN suppliers sup ON sup.id=p.supplier_id
+       WHERE s.tenant_id=$1 AND s.kind='entry' AND ${inRange('s.created_at')} GROUP BY 1,2 ORDER BY 5 DESC,1`, range),
+    q(`SELECT p.name,p.barcode,p.price_cents,p.cost_cents,p.stock_qty,p.ask_variant,p.generated_barcode,p.kind,p.device_model,sup.name supplier
+       FROM products p LEFT JOIN suppliers sup ON sup.id=p.supplier_id WHERE p.tenant_id=$1 AND ${inRange('p.created_at')} ORDER BY p.created_at`, range),
     q(`SELECT count(*)::int n,count(*) FILTER (WHERE source='qrcode')::int qr FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND ${inRange('created_at')}`, range),
     q(`SELECT s.closed_at,s.expected_cash_cents,s.counted_cash_cents,u.name who FROM cash_sessions s LEFT JOIN users u ON u.id=s.closed_by
        WHERE s.tenant_id=$1 AND s.status='closed' AND ${inRange('s.closed_at')} ORDER BY s.closed_at`, range),
-    q(`SELECT p.name,NULL::text variant,p.restock_pending pending,p.stock_qty,p.cost_cents FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
+    q(`SELECT p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
        UNION ALL SELECT p.name,v.name,v.restock_pending,v.stock_qty,p.cost_cents FROM product_variants v JOIN products p ON p.id=v.product_id
        WHERE p.tenant_id=$1 AND p.active AND v.active AND v.restock_pending>0 ORDER BY 1,2`, [tenantId]),
     q(`SELECT COALESCE(sl.name,u.name) name,count(*)::int n,sum(x.total_cents)::int total FROM sales x JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 3 DESC`, range),
     q(`SELECT to_char(x.created_at AT TIME ZONE $4,'YYYY-MM-DD') d,count(*)::int n,sum(x.total_cents)::int total FROM sales x
-       WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 1`, range)
+       WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 1`, range),
+    // Serviços: agrupados por serviço, aparelho e fornecedor, com custo (peça) e lucro.
+    q(`SELECT min(i.name) name,i.device_model model,i.supplier_name supplier,count(*)::int qty,sum(i.total_cents)::int total,
+         sum(i.unit_cost_cents)::int cost,bool_and(i.unit_cost_cents IS NOT NULL) known
+       FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND i.service AND ${inRange('x.created_at')}
+       GROUP BY lower(i.name),i.device_model,i.supplier_name ORDER BY 5 DESC,1`, range)
   ]);
   const byMethod = {};
   for (const s of sales.rows) { const m = byMethod[s.payment_method] ||= { n: 0, total: 0 }; m.n++; m.total += s.total_cents; }
@@ -86,6 +92,11 @@ export async function reportData(q, tenantId, kind, day) {
   const expensesTotal = expenses.rows.reduce((a, e) => a + e.amount_cents, 0);
   const itemsTotal = items.rows.reduce((a, i) => a + i.total, 0), itemsCost = items.rows.reduce((a, i) => a + (i.cost || 0), 0);
   const costKnown = items.rows.every(i => i.known);
+  // Gasto por fornecedor: custo das peças usadas nos serviços + compras de estoque com fornecedor cadastrado.
+  const bySupplier = new Map();
+  const sup = name => { if (!bySupplier.has(name)) bySupplier.set(name, { name, services: 0, services_cost: 0, purchases: 0 }); return bySupplier.get(name); };
+  for (const sv of services.rows) if (sv.supplier) { const x = sup(sv.supplier); x.services += sv.qty; x.services_cost += sv.cost || 0; }
+  for (const b of buys.rows) if (b.supplier) sup(b.supplier).purchases += b.total;
   return {
     kind, day, period: per, store: t.rows[0] || {}, timezone: TZ,
     sales: sales.rows, sales_total: salesTotal, discounts: sales.rows.reduce((a, s) => a + (s.discount_cents || 0), 0),
@@ -94,6 +105,8 @@ export async function reportData(q, tenantId, kind, day) {
     expenses: expenses.rows, expenses_total: expensesTotal, expenses_by_category: expByCat,
     moves: Object.fromEntries(moves.rows.map(m => [m.kind, m])),
     purchases: buys.rows, purchases_total: buys.rows.reduce((a, b) => a + b.total, 0),
+    services: services.rows, services_total: services.rows.reduce((a, x) => a + x.total, 0),
+    by_supplier: [...bySupplier.values()].sort((a, b) => (b.services_cost + b.purchases) - (a.services_cost + a.purchases)),
     new_products: newProducts.rows, new_customers: newCustomers.rows[0], sessions: sessions.rows, restock: restock.rows,
     balance: salesTotal - expensesTotal
   };
@@ -111,7 +124,8 @@ const hhmm = (d, tz) => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit
 export function reportHtml(d) {
   const long = d.kind !== 'daily';
   // Lucro bruto só dos itens com custo cadastrado (xerox, avulsos e produtos sem custo ficam de fora).
-  const withCost = d.items.filter(i => i.known && i.cost != null), noCost = d.items.filter(i => !(i.known && i.cost != null));
+  const services = d.services || [], all = [...d.items, ...services.map(x => ({ ...x, name: x.name + (x.model ? ' · ' + x.model : '') }))];
+  const withCost = all.filter(i => i.known && i.cost != null), noCost = all.filter(i => !(i.known && i.cost != null));
   const gross = withCost.length ? withCost.reduce((a, i) => a + i.total - i.cost, 0) : null;
   const title = `Relatório ${KIND_LABEL[d.kind]} · ${d.store.name || ''}`;
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(title)}</title></head>
@@ -125,9 +139,9 @@ export function reportHtml(d) {
 <table style="width:100%;border-collapse:separate;border-spacing:6px;margin:14px -6px 0"><tr>
 ${kpi(`Vendas (${d.sales.length})`, brl(d.sales_total), '#027a48')}${kpi('Saídas', brl(d.expenses_total), '#b42318')}${kpi('Saldo (vendas − saídas)', brl(d.balance))}
 </tr><tr>
-${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}${kpi('Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Descontos dados', brl(d.discounts))}
+${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Descontos dados', brl(d.discounts))}
 </tr></table>
-${noCost.length && d.items.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
+${noCost.length && all.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
 
 ${h2('Balanço por forma de pagamento')}
 ${table(['Forma', R('Vendas'), R('Total')], Object.entries(d.by_method).map(([k, v]) => [esc(METHODS[k] || k), v.n, brl(v.total)]), 'Nenhuma venda no período.')}
@@ -137,21 +151,25 @@ ${d.canceled.n ? `<p style="font-size:13px;color:#b42318">Vendas canceladas: ${d
 ${long && d.by_day.length ? h2('Vendas por dia') + table(['Dia', R('Vendas'), R('Total')], d.by_day.map(x => [dmy(x.d), x.n, brl(x.total)]), '') : ''}
 ${d.by_seller.length ? h2('Por vendedor') + table(['Vendedor', R('Vendas'), R('Total')], d.by_seller.map(x => [esc(x.name), x.n, brl(x.total)]), '') : ''}
 
-${h2('Produtos vendidos')}
+${h2(services.length ? 'Produtos e itens vendidos' : 'Produtos vendidos')}
 ${table(['Item', R('Qtd'), R('Total'), R('Custo')], d.items.map(i => [esc(i.name), i.qty, brl(i.total), i.cost != null ? brl(i.cost) : '—']), 'Nenhum item vendido.')}
 ${d.typed.n ? `<p style="font-size:12px;color:#6b7280">Mais ${d.typed.n} venda(s) lançada(s) só com valor digitado, sem itens: ${brl(d.typed.total)}.</p>` : ''}
+
+${services.length ? h2(`Serviços realizados (${brl(d.services_total)})`) + table(['Serviço', 'Aparelho', 'Fornecedor', R('Qtd'), R('Total'), R('Custo'), R('Lucro')],
+    services.map(x => [esc(x.name), esc(x.model || '—'), esc(x.supplier || '—'), x.qty, brl(x.total), x.known ? brl(x.cost) : '—', x.known ? `<span style="color:${x.total - x.cost < 0 ? '#b42318' : '#027a48'}">${brl(x.total - x.cost)}</span>` : '—']), '') : ''}
+${(d.by_supplier || []).length ? h2('Por fornecedor') + table(['Fornecedor', R('Serviços'), R('Custo das peças nos serviços'), R('Compras de estoque')], d.by_supplier.map(x => [esc(x.name), x.services || '—', brl(x.services_cost), brl(x.purchases)]), '') : ''}
 
 ${h2(`Saídas lançadas (${brl(d.expenses_total)})`)}
 ${long ? table(['Categoria', R('Total')], Object.entries(d.expenses_by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => [esc(k), brl(v)]), 'Nenhuma saída no período.')
     : table(['Hora', 'Categoria', 'Descrição', 'Forma', R('Valor')], d.expenses.map(e => [hhmm(e.created_at, d.timezone), esc(e.category), esc(e.note), esc(METHODS[e.method] || ''), brl(e.amount_cents)]), 'Nenhuma saída no dia.')}
 
 ${h2(`Compras de estoque (${brl(d.purchases_total)})`)}
-${table(['Item', R('Qtd'), R('Custo total')], d.purchases.map(b => [esc(b.name), b.qty, b.known ? brl(b.total) : brl(b.total) + ' *']), 'Nenhuma entrada de estoque no período.')}
+${table(['Item', 'Fornecedor', R('Qtd'), R('Custo total')], d.purchases.map(b => [esc(b.name) + (b.part ? ' <small>(peça)</small>' : ''), esc(b.supplier || '—'), b.qty, b.known ? brl(b.total) : brl(b.total) + ' *']), 'Nenhuma entrada de estoque no período.')}
 ${d.purchases.some(b => !b.known) ? '<p style="font-size:12px;color:#6b7280">* entrada sem custo informado (conta como zero).</p>' : ''}
 ${d.kind === 'monthly' ? `<p style="font-size:13px"><b>Total gasto no mês:</b> saídas ${brl(d.expenses_total)} + compras de estoque ${brl(d.purchases_total)} = <b>${brl(d.expenses_total + d.purchases_total)}</b>. <span style="color:#6b7280">Se a compra também foi lançada como saída no caixa, ela aparece nos dois.</span></p>` : ''}
 
-${h2('Produtos novos cadastrados')}
-${table(['Produto', 'Código', R('Venda'), R('Custo'), R('Estoque')], d.new_products.map(p => [esc(p.name) + (p.ask_variant ? ' <small>(com modelos)</small>' : ''), esc(p.barcode || '—') + (p.generated_barcode ? ' <small>(gerado)</small>' : ''), brl(p.price_cents), p.cost_cents != null ? brl(p.cost_cents) : '—', p.ask_variant ? 'por modelo' : (p.stock_qty ?? '—')]), 'Nenhum produto novo no período.')}
+${h2(d.new_products.some(p => p.kind === 'part') ? 'Produtos e peças novos cadastrados' : 'Produtos novos cadastrados')}
+${table(['Produto', 'Código', R('Venda'), R('Custo'), R('Estoque')], d.new_products.map(p => [esc(p.name) + (p.kind === 'part' ? ` ${esc(p.device_model || '')} <small>(peça${p.supplier ? ' · ' + esc(p.supplier) : ''})</small>` : '') + (p.ask_variant ? ' <small>(com modelos)</small>' : ''), esc(p.barcode || '—') + (p.generated_barcode ? ' <small>(gerado)</small>' : ''), brl(p.price_cents), p.cost_cents != null ? brl(p.cost_cents) : '—', p.ask_variant ? 'por modelo' : (p.stock_qty ?? '—')]), 'Nenhum produto novo no período.')}
 
 ${h2(`Reposição — vendido e ainda não reposto (${d.restock.length})`)}
 ${table(['Produto', 'Modelo', R('Repor'), R('Estoque atual'), R('Custo estimado')], d.restock.map(r => [esc(r.name), esc(r.variant || ''), `<b>${r.pending}</b>`, r.stock_qty ?? '—', r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—']), 'Nada para repor.')}

@@ -10,6 +10,8 @@
   const first = name => String(name || '').trim().split(/\s+/)[0] || '';
   const cap = t => t ? t[0].toLocaleUpperCase('pt-BR') + t.slice(1).toLocaleLowerCase('pt-BR') : '';
   const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
+  const MOVE_LABEL = { expense: 'Saída', withdrawal: 'Sangria', deposit: 'Suprimento' };
+  const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
   const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}. 🙏\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
   let config = null, saleCustomer = null, lastSale = null;
 
@@ -82,8 +84,8 @@
     const methods = Object.entries(sum.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('') || '<span class="nv-help">Nenhuma venda ainda.</span>';
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
-        <div class="fs-kpis"><div><small>Vendas</small><b>${sum.sales_count}</b></div><div><small>Total vendido</small><b>${brl(sum.sales_total_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
-        <div class="fs-actions"><button class="nv-button secondary" id="fsWithdraw">− Sangria</button><button class="nv-button secondary" id="fsDeposit">+ Suprimento</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></section>
+        <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
+        <div class="fs-actions"><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></section>
       <div class="fs-grid">
         <section class="nv-card"><h2>Nova venda</h2><form id="fsSale" autocomplete="off">
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
@@ -96,9 +98,11 @@
           <div id="fsLast"></div></section>
         <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
           <div class="nv-list">${data.sales.map(x => `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
-          ${data.movements.length ? `<h3>Sangrias e suprimentos</h3>${data.movements.map(m => `<div class="fs-sale"><div>${m.kind === 'withdrawal' ? 'Sangria' : 'Suprimento'} · ${hhmm(m.created_at)}${m.note ? ' · ' + esc(m.note) : ''}</div><b>${m.kind === 'withdrawal' ? '−' : '+'}${brl(m.amount_cents)}</b></div>`).join('')}` : ''}
           <p class="nv-help">Troco inicial: ${brl(sum.opening_cents)}</p></section>
-      </div>`;
+      </div>
+      <section class="nv-card fs-moves"><div class="nv-heading"><h2>Saídas, sangrias e suprimentos</h2><button class="nv-button secondary fs-small" id="fsExpense2">− Lançar saída</button></div>
+        ${Object.keys(sum.expenses_by_method).length ? `<div class="fs-methods-sum">${Object.entries(sum.expenses_by_method).map(([k, v]) => `<span class="fs-pill fs-pill-out">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</div>` : ''}
+        <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras saídas do dia aparecem aqui.</p>'}</div></section>`;
     saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast();
     const sf = $('fsSale');
     const updChange = () => {
@@ -112,6 +116,13 @@
     sf.addEventListener('input', updChange); sf.addEventListener('change', updChange); updChange();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
+    $('fsExpense').onclick = $('fsExpense2').onclick = () => movement('expense', box, alive);
+    $('fsPrint').onclick = () => printReport(s.id);
+    box.querySelectorAll('[data-fs-move-cancel]').forEach(b => b.onclick = async () => {
+      const reason = prompt('Motivo do cancelamento do lançamento (ex.: valor errado):'); if (!reason || reason.trim().length < 3) return;
+      try { await api(`/store/cash/movements/${b.dataset.fsMoveCancel}/cancel`, 'POST', { reason: reason.trim() }); feedback('Lançamento cancelado.'); loadCash(box, alive); }
+      catch (err) { feedback(err.message, true); }
+    });
     $('fsDeposit').onclick = () => movement('deposit', box, alive);
     $('fsClose').onclick = () => closeCash(sum, box, alive);
     box.querySelectorAll('[data-fs-cancel]').forEach(b => b.onclick = async () => {
@@ -127,21 +138,23 @@
     box.innerHTML = `<section class="nv-card fs-open"><h2>Caixa fechado</h2><p class="nv-help">Abra o caixa para registrar as vendas do dia. Cada venda fica ligada a um cliente e soma no cartão fidelidade.</p>
       <form id="fsOpen" class="fs-row"><label class="nv-field">Troco inicial na gaveta<input name="opening" inputmode="decimal" placeholder="0,00"></label><button class="nv-button">Abrir caixa</button></form><p role="status" class="nv-help" id="fsOpenStatus"></p>
       ${l ? `<p class="nv-help">Último fechamento: ${dmy(l.closed_at)} às ${hhmm(l.closed_at)}${l.closed_by_name ? ' por ' + esc(l.closed_by_name) : ''} · esperado ${brl(l.expected_cash_cents)} · contado ${brl(l.counted_cash_cents)}${diff ? ` · <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">diferença ${brl(diff)}</b>` : ' · sem diferença'}</p>` : ''}
-      <button class="nv-button secondary" id="fsHistory">Histórico de caixas</button></section>`;
+      <div class="fs-actions">${l ? '<button class="nv-button secondary" id="fsPrintLast">🖨 Relatório do último caixa</button>' : ''}<button class="nv-button secondary" id="fsHistory">Histórico de caixas</button></div></section>`;
     $('fsOpen').onsubmit = async e => {
       e.preventDefault(); const raw = e.currentTarget.elements.opening.value; const v = raw.trim() ? parseMoney(raw) : 0;
       if (!Number.isFinite(v) || v < 0) { $('fsOpenStatus').textContent = 'Valor inválido.'; return; }
       try { await api('/store/cash/open', 'POST', { opening_cents: v }); feedback('Caixa aberto.'); loadCash(box, alive); } catch (err) { $('fsOpenStatus').textContent = err.message; }
     };
     $('fsHistory').onclick = history;
+    if ($('fsPrintLast')) $('fsPrintLast').onclick = () => printReport(l.id);
   }
 
   async function history() {
     const rows = await api('/store/cash/sessions');
-    openDialog(`${header('Histórico de caixas')}<div class="fs-table"><table><thead><tr><th>Abertura</th><th>Fechamento</th><th>Vendas</th><th>Com cliente</th><th>Total</th><th>Gaveta (esperado / contado)</th></tr></thead><tbody>${rows.map(r => {
+    openDialog(`${header('Histórico de caixas')}<div class="fs-table"><table><thead><tr><th>Abertura</th><th>Fechamento</th><th>Vendas</th><th>Com cliente</th><th>Entradas</th><th>Saídas</th><th>Gaveta (esperado / contado)</th><th></th></tr></thead><tbody>${rows.map(r => {
       const diff = r.counted_cash_cents != null ? r.counted_cash_cents - r.expected_cash_cents : null;
-      return `<tr><td>${dmy(r.opened_at)} ${hhmm(r.opened_at)}<br><small>${esc(r.opened_by_name)}</small></td><td>${r.closed_at ? dmy(r.closed_at) + ' ' + hhmm(r.closed_at) : '<b>aberto</b>'}</td><td>${r.sales_count}</td><td>${r.sales_count ? Math.round(100 * r.linked_count / r.sales_count) + '%' : '—'}</td><td>${brl(r.sales_total_cents)}</td><td>${r.closed_at ? `${brl(r.expected_cash_cents)} / ${brl(r.counted_cash_cents)}${diff ? ` <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">(${brl(diff)})</b>` : ''}` : '—'}${r.close_note ? `<br><small>${esc(r.close_note)}</small>` : ''}</td></tr>`;
-    }).join('') || '<tr><td colspan="6">Nenhum caixa ainda.</td></tr>'}</tbody></table></div>`);
+      return `<tr><td>${dmy(r.opened_at)} ${hhmm(r.opened_at)}<br><small>${esc(r.opened_by_name)}</small></td><td>${r.closed_at ? dmy(r.closed_at) + ' ' + hhmm(r.closed_at) : '<b>aberto</b>'}</td><td>${r.sales_count}</td><td>${r.sales_count ? Math.round(100 * r.linked_count / r.sales_count) + '%' : '—'}</td><td>${brl(r.sales_total_cents)}</td><td>${brl(r.expenses_total_cents)}</td><td>${r.closed_at ? `${brl(r.expected_cash_cents)} / ${brl(r.counted_cash_cents)}${diff ? ` <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">(${brl(diff)})</b>` : ''}` : '—'}${r.close_note ? `<br><small>${esc(r.close_note)}</small>` : ''}</td><td><button type="button" class="nv-button secondary fs-small" data-fs-print="${r.id}">🖨</button></td></tr>`;
+    }).join('') || '<tr><td colspan="8">Nenhum caixa ainda.</td></tr>'}</tbody></table></div>`);
+    document.querySelectorAll('[data-fs-print]').forEach(b => b.onclick = () => printReport(b.dataset.fsPrint));
   }
 
   function drawCustomerPicker() {
@@ -203,29 +216,87 @@
   }
 
   function movement(kind, box, alive) {
-    const title = kind === 'withdrawal' ? 'Sangria (retirar dinheiro da gaveta)' : 'Suprimento (colocar dinheiro na gaveta)';
-    openDialog(`${header(title)}<form id="fsMove"><label class="nv-field">Valor<input name="amount" inputmode="decimal" required placeholder="0,00"></label><label class="nv-field">Motivo<input name="note" maxlength="200" placeholder="${kind === 'withdrawal' ? 'Ex.: pagamento de fornecedor' : 'Ex.: troco extra'}"></label><button class="nv-button">Confirmar</button><p role="status" class="nv-help"></p></form>`);
+    const title = kind === 'expense' ? 'Lançar saída (despesa)' : kind === 'withdrawal' ? 'Sangria (tirar dinheiro da gaveta)' : 'Suprimento (colocar dinheiro na gaveta)';
+    const expense = kind === 'expense';
+    openDialog(`${header(title)}<form id="fsMove" autocomplete="off">
+      ${expense ? '<p class="nv-help">Tudo que saiu de dinheiro da loja hoje: fornecedor, conta, diária, entrega… Em dinheiro, sai da gaveta; em Pix ou cartão, entra só no relatório.</p>' : `<p class="nv-help">${kind === 'withdrawal' ? 'Dinheiro tirado da gaveta para guardar (cofre, depósito). Não é despesa: para pagamentos use "Lançar saída".' : 'Dinheiro colocado na gaveta durante o dia (ex.: mais troco).'}</p>`}
+      <div class="fs-row"><label class="nv-field">Valor<input name="amount" inputmode="decimal" required placeholder="0,00"></label>
+      ${expense ? `<label class="nv-field fs-grow">Categoria<select name="category">${CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select></label>` : ''}</div>
+      ${expense ? `<fieldset class="fs-methods"><legend>Pago com</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 0 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>` : ''}
+      <label class="nv-field">${expense ? 'Descrição' : 'Motivo'}<input name="note" maxlength="200" placeholder="${expense ? 'Ex.: tela Samsung A12 do fornecedor João' : kind === 'withdrawal' ? 'Ex.: levado para o cofre' : 'Ex.: troco extra'}"></label>
+      <button class="nv-button">Confirmar</button><p role="status" class="nv-help"></p></form>`);
     $('fsMove').onsubmit = async e => {
       e.preventDefault(); const f = e.currentTarget, v = parseMoney(f.elements.amount.value);
       if (!Number.isFinite(v) || v <= 0) { f.querySelector('[role=status]').textContent = 'Valor inválido.'; return; }
-      try { await api('/store/cash/movements', 'POST', { kind, amount_cents: v, note: f.elements.note.value.trim() }); $('editorDialog').close(); feedback('Registrado.'); loadCash(box, alive); }
+      const body = { kind, amount_cents: v, note: f.elements.note.value.trim() };
+      if (expense) { body.method = f.elements.method.value; body.category = f.elements.category.value; }
+      try { await api('/store/cash/movements', 'POST', body); $('editorDialog').close(); feedback(`${MOVE_LABEL[kind]} de ${brl(v)} registrada.`); loadCash(box, alive); }
       catch (err) { f.querySelector('[role=status]').textContent = err.message; }
     };
   }
 
   function closeCash(sum, box, alive) {
-    const lines = Object.entries(sum.by_method).map(([k, v]) => `<tr><td>${METHODS[k]}</td><td>${v.count}</td><td>${brl(v.total_cents)}</td></tr>`).join('');
-    openDialog(`${header('Fechar caixa')}<div class="fs-table"><table><thead><tr><th>Pagamento</th><th>Vendas</th><th>Total</th></tr></thead><tbody>${lines || '<tr><td colspan="3">Nenhuma venda.</td></tr>'}<tr><th>Total</th><th>${sum.sales_count}</th><th>${brl(sum.sales_total_cents)}</th></tr></tbody></table></div>
-      <p class="nv-help">Dinheiro esperado na gaveta: troco ${brl(sum.opening_cents)} + vendas em dinheiro ${brl(sum.by_method.cash?.total_cents || 0)} + suprimentos ${brl(sum.deposits_cents)} − sangrias ${brl(sum.withdrawals_cents)} = <b>${brl(sum.expected_cash_cents)}</b></p>
-      <form id="fsCloseForm"><label class="nv-field">Dinheiro contado na gaveta<input name="counted" inputmode="decimal" required placeholder="0,00"></label><p id="fsDiff" class="nv-help"></p><label class="nv-field">Observação (opcional)<input name="note" maxlength="400"></label><button class="nv-button">Fechar caixa</button><p role="status" class="nv-help"></p></form>`);
+    const keys = [...new Set([...Object.keys(sum.by_method), ...Object.keys(sum.expenses_by_method)])];
+    const lines = Object.keys(METHODS).filter(k => keys.includes(k)).map(k => `<tr><td>${METHODS[k]}</td><td class="fs-pos">${brl(sum.by_method[k]?.total_cents || 0)}</td><td class="fs-neg">${brl(sum.expenses_by_method[k]?.total_cents || 0)}</td><td>${brl((sum.by_method[k]?.total_cents || 0) - (sum.expenses_by_method[k]?.total_cents || 0))}</td></tr>`).join('');
+    openDialog(`${header('Fechar caixa')}<div class="fs-table"><table><thead><tr><th>Forma</th><th>Entradas</th><th>Saídas</th><th>Saldo</th></tr></thead><tbody>${lines || '<tr><td colspan="4">Nenhum lançamento.</td></tr>'}<tr><th>Total</th><th class="fs-pos">${brl(sum.sales_total_cents)}</th><th class="fs-neg">${brl(sum.expenses_total_cents)}</th><th>${brl(sum.balance_cents)}</th></tr></tbody></table></div>
+      <p class="nv-help">Dinheiro esperado na gaveta: troco ${brl(sum.opening_cents)} + vendas em dinheiro ${brl(sum.by_method.cash?.total_cents || 0)} + suprimentos ${brl(sum.deposits_cents)} − sangrias ${brl(sum.withdrawals_cents)} − saídas em dinheiro ${brl(sum.expenses_by_method.cash?.total_cents || 0)} = <b>${brl(sum.expected_cash_cents)}</b></p>
+      <form id="fsCloseForm"><label class="nv-field">Dinheiro contado na gaveta<input name="counted" inputmode="decimal" required placeholder="0,00"></label><p id="fsDiff" class="nv-help"></p><label class="nv-field">Observação (opcional)<input name="note" maxlength="400"></label><label class="fs-check"><input type="checkbox" name="print" checked> Imprimir relatório ao fechar</label><button class="nv-button">Fechar caixa</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsCloseForm');
     f.elements.counted.oninput = () => { const v = parseMoney(f.elements.counted.value); const d = v - sum.expected_cash_cents; $('fsDiff').innerHTML = Number.isFinite(v) ? (d === 0 ? 'Bateu certinho ✓' : `Diferença: <b class="${d < 0 ? 'fs-neg' : 'fs-pos'}">${brl(d)}</b> (${d < 0 ? 'faltando' : 'sobrando'})`) : ''; };
     f.onsubmit = async e => {
       e.preventDefault(); const v = parseMoney(f.elements.counted.value);
       if (!Number.isFinite(v) || v < 0) { f.querySelector('[role=status]').textContent = 'Informe o valor contado.'; return; }
-      try { const r = await api('/store/cash/close', 'POST', { counted_cash_cents: v, note: f.elements.note.value.trim() }); $('editorDialog').close(); lastSale = null; feedback(`Caixa fechado. ${r.summary.sales_count} vendas, ${brl(r.summary.sales_total_cents)}.` + (r.difference_cents ? ` Diferença na gaveta: ${brl(r.difference_cents)}.` : '')); loadCash(box, alive); }
+      const wantPrint = f.elements.print.checked;
+      try { const r = await api('/store/cash/close', 'POST', { counted_cash_cents: v, note: f.elements.note.value.trim() }); $('editorDialog').close(); lastSale = null; feedback(`Caixa fechado. Entradas ${brl(r.summary.sales_total_cents)}, saídas ${brl(r.summary.expenses_total_cents)}, saldo ${brl(r.summary.balance_cents)}.` + (r.difference_cents ? ` Diferença na gaveta: ${brl(r.difference_cents)}.` : '')); loadCash(box, alive); if (wantPrint) printReport(r.session.id); }
       catch (err) { f.querySelector('[role=status]').textContent = err.message; }
     };
+  }
+
+  // ---------------- Relatório para imprimir ----------------
+  async function printReport(sessionId) {
+    let r; try { r = await api(`/store/cash/sessions/${sessionId}/report`); } catch (err) { feedback(err.message, true); return; }
+    const s = r.session, sum = r.summary, dt = d => d ? `${dmy(d)}/${new Date(d).getFullYear()} ${hhmm(d)}` : '—';
+    const keys = Object.keys(METHODS).filter(k => sum.by_method[k] || sum.expenses_by_method[k]);
+    const sales = r.sales.filter(x => !x.canceled_at).reverse(), salesCanceled = r.sales.filter(x => x.canceled_at).reverse();
+    const moves = r.movements.filter(m => !m.canceled_at).reverse(), movesCanceled = r.movements.filter(m => m.canceled_at).reverse();
+    const expenses = moves.filter(m => m.kind === 'expense'), transfers = moves.filter(m => m.kind !== 'expense');
+    const diff = s.counted_cash_cents != null ? s.counted_cash_cents - s.expected_cash_cents : null;
+    const linked = sales.filter(x => x.customer_id).length;
+    const table = (head, rows, empty) => rows.length ? `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>` : `<p class="muted">${empty}</p>`;
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de caixa · ${esc(s.store_name)} · ${dmy(s.opened_at)}</title><style>
+      @page{size:A4;margin:14mm}*{box-sizing:border-box}body{font:12px/1.4 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:#111;margin:0;padding:16px}
+      h1{font-size:18px;margin:0}h2{font-size:13px;margin:18px 0 6px;padding-bottom:3px;border-bottom:1.5px solid #111;text-transform:uppercase;letter-spacing:.04em}
+      .muted{color:#555}.head{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:8px}
+      .box{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.box div{border:1px solid #bbb;border-radius:6px;padding:8px}.box b{display:block;font-size:17px}
+      table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #ddd;vertical-align:top}th{font-size:11px;color:#444}td.n,th.n,th:has(.n){text-align:right;white-space:nowrap}
+      tr.tot td{font-weight:700;border-top:1.5px solid #111}.neg{color:#b42318}.sign{display:flex;gap:40px;margin-top:40px}.sign div{flex:1;border-top:1px solid #111;padding-top:4px;text-align:center}
+      .warn{background:#fff6e5;border:1px solid #f0c36d;padding:6px 8px;border-radius:6px;margin-top:8px}
+    </style></head><body>
+      <div class="head"><div><h1>${esc(s.store_name)}</h1><div>Relatório de caixa${s.city ? ' · ' + esc(s.city) + (s.state ? '/' + esc(s.state) : '') : ''}</div></div><div class="muted" style="text-align:right">Emitido em ${dt(r.generated_at)}</div></div>
+      ${s.status === 'open' ? '<p class="warn"><b>Prévia:</b> caixa ainda aberto. Valores podem mudar até o fechamento.</p>' : ''}
+      <p>Abertura: <b>${dt(s.opened_at)}</b> por ${esc(s.opened_by_name)}<br>Fechamento: <b>${s.closed_at ? dt(s.closed_at) + ' por ' + esc(s.closed_by_name || '—') : 'em aberto'}</b></p>
+      <div class="box"><div>Entradas (vendas)<b>${brl(sum.sales_total_cents)}</b><span class="muted">${sum.sales_count} venda(s)</span></div><div>Saídas<b class="neg">${brl(sum.expenses_total_cents)}</b><span class="muted">${sum.expenses_count} lançamento(s)</span></div><div>Saldo do dia<b>${brl(sum.balance_cents)}</b><span class="muted">entradas − saídas</span></div></div>
+      <h2>Por forma de pagamento</h2>
+      ${table(['Forma', '<span class="n">Entradas</span>', '<span class="n">Saídas</span>', '<span class="n">Saldo</span>'], [...keys.map(k => `<tr><td>${METHODS[k]}</td><td class="n">${brl(sum.by_method[k]?.total_cents || 0)}</td><td class="n">${brl(sum.expenses_by_method[k]?.total_cents || 0)}</td><td class="n">${brl((sum.by_method[k]?.total_cents || 0) - (sum.expenses_by_method[k]?.total_cents || 0))}</td></tr>`), `<tr class="tot"><td>Total</td><td class="n">${brl(sum.sales_total_cents)}</td><td class="n">${brl(sum.expenses_total_cents)}</td><td class="n">${brl(sum.balance_cents)}</td></tr>`], 'Nenhum lançamento.')}
+      <h2>Gaveta (dinheiro)</h2>
+      <table><tbody><tr><td>Troco inicial</td><td class="n">${brl(sum.opening_cents)}</td></tr><tr><td>+ Vendas em dinheiro</td><td class="n">${brl(sum.by_method.cash?.total_cents || 0)}</td></tr><tr><td>+ Suprimentos</td><td class="n">${brl(sum.deposits_cents)}</td></tr><tr><td>− Sangrias</td><td class="n">${brl(sum.withdrawals_cents)}</td></tr><tr><td>− Saídas em dinheiro</td><td class="n">${brl(sum.expenses_by_method.cash?.total_cents || 0)}</td></tr>
+        <tr class="tot"><td>Esperado na gaveta</td><td class="n">${brl(s.status === 'closed' ? s.expected_cash_cents : sum.expected_cash_cents)}</td></tr>
+        ${s.status === 'closed' ? `<tr><td>Contado</td><td class="n">${brl(s.counted_cash_cents)}</td></tr><tr class="tot"><td>Diferença</td><td class="n ${diff < 0 ? 'neg' : ''}">${diff ? brl(diff) + (diff < 0 ? ' (faltando)' : ' (sobrando)') : 'sem diferença'}</td></tr>` : ''}</tbody></table>
+      ${s.close_note ? `<p>Observação do fechamento: ${esc(s.close_note)}</p>` : ''}
+      <h2>Saídas</h2>
+      ${table(['Hora', 'Categoria', 'Descrição', 'Forma', 'Lançado por', '<span class="n">Valor</span>'], expenses.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${esc(m.category)}</td><td>${esc(m.note)}</td><td>${METHODS[m.method]}</td><td>${esc(m.created_by_name)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`), 'Nenhuma saída.')}
+      ${transfers.length ? `<h2>Sangrias e suprimentos</h2>${table(['Hora', 'Tipo', 'Motivo', 'Lançado por', '<span class="n">Valor</span>'], transfers.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${MOVE_LABEL[m.kind]}</td><td>${esc(m.note)}</td><td>${esc(m.created_by_name)}</td><td class="n">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</td></tr>`), '')}` : ''}
+      <h2>Vendas (${sales.length}${sales.length ? ` · ${Math.round(100 * linked / sales.length)}% com cliente identificado` : ''})</h2>
+      ${table(['Nº', 'Hora', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${METHODS[x.payment_method]}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
+      ${salesCanceled.length || movesCanceled.length ? `<h2>Cancelamentos</h2>${table(['Item', 'Cancelado por', 'Quando', 'Motivo', '<span class="n">Valor</span>'], [...salesCanceled.map(x => `<tr><td>Venda ${x.sale_number}${x.customer_name ? ' · ' + esc(x.customer_name) : ''}</td><td>${esc(x.canceled_by_name || '—')}</td><td>${hhmm(x.canceled_at)}</td><td>${esc(x.cancel_reason)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), ...movesCanceled.map(m => `<tr><td>${MOVE_LABEL[m.kind]}${m.category ? ' · ' + esc(m.category) : ''}</td><td>${esc(m.canceled_by_name || '—')}</td><td>${hhmm(m.canceled_at)}</td><td>${esc(m.cancel_reason)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`)], '')}` : ''}
+      <div class="sign"><div>Responsável pelo caixa</div><div>Conferido por</div></div>
+    </body></html>`;
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.append(frame);
+    frame.contentDocument.open(); frame.contentDocument.write(html); frame.contentDocument.close();
+    setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } finally { setTimeout(() => frame.remove(), 60000); } }, 250);
+    window.FPSales.lastReportHtml = html;
   }
 
   // ---------------- Mensagens ----------------
@@ -334,7 +405,7 @@
   .fs-tabs{display:flex;gap:4px;border-bottom:1px solid var(--nv-border);margin-bottom:14px;overflow-x:auto}.fs-tabs button{border:0;background:none;padding:10px 14px;cursor:pointer;border-bottom:2px solid transparent;color:var(--nv-muted);white-space:nowrap}.fs-tabs button[aria-selected=true]{border-bottom-color:var(--nv-blue);color:var(--nv-ink);font-weight:700}
   .fs-daybar{margin-bottom:10px}.fs-pre{white-space:pre-wrap;font:inherit;font-size:13px;background:var(--nv-bg);border-radius:10px;padding:10px;margin:6px 0}.fs-ok{color:var(--nv-green);font-weight:700;font-size:13px}.fs-warn{background:#fff6e5;border-radius:8px;padding:8px 10px;color:#7a4b00}
   .fs-neg{color:#b42318}.fs-pos{color:#027a48}.fs-check{display:flex;gap:8px;align-items:center;margin-bottom:8px}.fs-table{overflow:auto}.fs-table table{width:100%;border-collapse:collapse;font-size:14px}.fs-table th,.fs-table td{text-align:left;padding:8px;border-bottom:1px solid var(--nv-border);vertical-align:top}
-  .fs-open{max-width:640px}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}`;
+  .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}`;
 
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);

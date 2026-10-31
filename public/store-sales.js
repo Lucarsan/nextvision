@@ -21,7 +21,7 @@
   const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
   const MOVE_LABEL = { expense: 'Saída', withdrawal: 'Sangria', deposit: 'Suprimento' };
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
-  const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}. 🙏\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
+  const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
   let config = null, saleCustomer = null, lastSale = null, quickItems = null, quickCart = [];
 
   async function api(path, method = 'GET', body) {
@@ -48,8 +48,8 @@
   function loyaltyText(l) {
     if (!l || !l.enabled) return '';
     const rules = config.loyalty_rules ? '\nRegras: ' + config.loyalty_rules : '';
-    if (l.complete) return `🎁 Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
-    return `⭐ Cartão fidelidade: ${l.checkins} de ${l.target} compras. ${l.remaining === 1 ? 'Falta 1 compra' : 'Faltam ' + l.remaining + ' compras'} para ganhar: ${l.reward}.` + rules;
+    if (l.complete) return `Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
+    return `Cartão fidelidade: ${l.checkins} de ${l.target} compras. ${l.remaining === 1 ? 'Falta 1 compra' : 'Faltam ' + l.remaining + ' compras'} para ganhar: ${l.reward}.` + rules;
   }
   function render(template, values) {
     let lines = template.split('\n');
@@ -447,7 +447,7 @@
         <div class="fs-row"><label class="nv-field">Valor mínimo da venda para contar<input name="min" inputmode="decimal" ${dis} value="${config.loyalty_min_sale_cents ? (config.loyalty_min_sale_cents / 100).toFixed(2).replace('.', ',') : ''}" placeholder="0,00"></label><label class="nv-field fs-grow">Regras de uso (vão na mensagem)<input name="loyalty_rules" maxlength="600" ${dis} value="${esc(config.loyalty_rules || '')}" placeholder="Ex.: Válido por 90 dias. Não cumulativo com outras promoções."></label></div>
         <small class="nv-help">Vendas do caixa e pedidos de serviço finalizados contam no mesmo cartão.</small></section>
       <section class="nv-form-panel"><h3>Mensagem de status</h3><label class="nv-field">Texto<textarea name="status_message" rows="6" maxlength="1000" ${dis}>${esc(config.status_message || DEFAULT_STATUS)}</textarea></label>
-        <small class="nv-help">Use {cliente}, {loja}, {fidelidade} (progresso e regras do cartão), {avaliacao} (link do Google; a linha some se não houver link), {compras}, {meta}, {faltam}, {premio}, {regras}.</small>
+        <small class="nv-help">Use {cliente}, {loja}, {fidelidade} (progresso e regras do cartão), {avaliacao} (link do Google; a linha some se não houver link), {compras}, {meta}, {faltam}, {premio}, {regras}. Evite emojis: o WhatsApp do computador costuma mostrá-los como "?".</small>
         <h4>Prévia</h4><pre class="fs-pre" id="fsPreview"></pre></section>
       ${owner ? '<button class="nv-button">Salvar</button>' : ''}<p role="status" class="nv-help" id="fsCfgStatus"></p></form>`;
     const f = $('fsCfg');

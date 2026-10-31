@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
-import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';
+import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -43,6 +43,7 @@ const deviceAuth=route(async(req,res,next)=>{
  req.device=result.rows[0];next();
 });
 registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
+registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
  const store=await q("SELECT id,status FROM tenants WHERE id=$1",[req.params.id]);
@@ -142,8 +143,8 @@ app.post('/api/master/tenants',auth,roles('master'),route(async(req,res)=>{
 }));
 app.patch('/api/master/tenants/:id',auth,roles('master'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
- const v=valid(z.object({status:z.enum(['trial','active','past_due','suspended']).optional(),niche:nicheSchema.optional(),camera_limit:z.number().int().min(1).max(128).optional()}).strict().refine(v=>v.status!==undefined||v.niche!==undefined||v.camera_limit!==undefined),req,res);if(!v)return;
- const r=await q('UPDATE tenants SET status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id]);
+ const v=valid(z.object({status:z.enum(['trial','active','past_due','suspended']).optional(),niche:nicheSchema.optional(),camera_limit:z.number().int().min(1).max(128).optional(),sales_enabled:z.boolean().optional()}).strict().refine(v=>v.status!==undefined||v.niche!==undefined||v.camera_limit!==undefined||v.sales_enabled!==undefined),req,res);if(!v)return;
+ const r=await q('UPDATE tenants SET status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit),sales_enabled=COALESCE($5,sales_enabled) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id,v.sales_enabled??null]);
  if(!r.rowCount)return bad(res,404,'Loja não encontrada');await audit(req,'update','tenant',req.params.id,req.params.id);res.json(r.rows[0]);
 }));
 app.post('/api/master/tenants/:id/users',auth,roles('master'),route(async(req,res)=>{if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');const v=valid(z.object({name:z.string().min(2),email:z.string().email(),password:z.string().min(12),role:z.enum(['owner','operator']).default('owner')}),req,res);if(!v)return;const exists=await q('SELECT id FROM tenants WHERE id=$1',[req.params.id]);if(!exists.rowCount)return bad(res,404,'Loja não encontrada');const r=await q('INSERT INTO users(tenant_id,name,email,password_hash,role) VALUES($1,$2,$3,$4,$5) RETURNING id,name,email,role',[req.params.id,v.name,v.email.toLowerCase(),await bcrypt.hash(v.password,12),v.role]);await audit(req,'create','user',r.rows[0].id,req.params.id);res.status(201).json(r.rows[0]);}));
@@ -647,5 +648,5 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
  res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
 }));
 app.use(express.static('public'));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
-app.use((err,req,res,next)=>{console.error(err.code||err.name);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
+app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
 app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

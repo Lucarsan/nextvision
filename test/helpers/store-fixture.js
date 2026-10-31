@@ -40,7 +40,7 @@ export async function createStoreFixture() {
     const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const { port } = listener.address(); await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
-    server = spawn(process.execPath, ['src/server.js'], { env: { ...env, JWT_SECRET: secret, PORT: String(port), RESEND_API_KEY: '', EMAIL_FROM: '' }, stdio: ['ignore', 'ignore', 'pipe'] }); server.stderr.resume();
+    server = spawn(process.execPath, ['src/server.js'], { env: { ...env, JWT_SECRET: secret, PORT: String(port), RESEND_API_KEY: '', EMAIL_FROM: '' }, stdio: ['ignore', 'ignore', 'pipe'] }); if (process.env.FP_DEBUG) server.stderr.pipe(process.stderr); else server.stderr.resume();
     const request = async (path, { method = 'GET', body, token = ownerToken } = {}) => {
       const response = await fetch(base + '/api' + path, { method, headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) });
       return { status: response.status, data: await response.json() };

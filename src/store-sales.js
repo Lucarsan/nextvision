@@ -65,7 +65,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   async function sessionDetail(tenant, sessionId) {
     const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
-        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name
+        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,
+        COALESCE((SELECT json_agg(json_build_object('name',i.name,'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
+          FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
       FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by
       WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [sessionId, tenant]);
     const moves = await q(`SELECT m.id,m.kind,m.method,m.category,m.amount_cents,m.note,m.created_at,m.canceled_at,m.cancel_reason,u.name created_by_name,uc.name canceled_by_name
@@ -237,19 +239,74 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 
+  // ---------- Produtos (código de barras) ----------
+  // O leitor USB funciona como teclado: digita o código e Enter. O painel procura aqui.
+  const productFields = 'id,name,barcode,price_cents,active,updated_at';
+  const productBody = z.object({
+    name: z.string().trim().min(2).max(120),
+    barcode: z.union([z.literal(''), z.string().trim().regex(/^[!-~]{3,64}$/, 'Código de barras inválido')]).optional(),
+    price_cents: cents
+  }).strict();
+  const dupBarcode = (e, res) => { if (e.code === '23505') { bad(res, 409, 'Já existe um produto com este código de barras'); return true; } return false; };
+
+  app.get('/api/store/products', ...guard, route(async (req, res) => {
+    const term = String(req.query.q || '').trim().slice(0, 80);
+    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND
+        ($2='' OR fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR barcode=$2)
+      ORDER BY (barcode=$2) DESC NULLS LAST,name LIMIT 500`, [tid(req), term]);
+    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  }));
+  app.get('/api/store/products/barcode/:code', ...guard, route(async (req, res) => {
+    const code = String(req.params.code || '').trim();
+    if (!/^[!-~]{3,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
+    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2`, [tid(req), code]);
+    if (!r.rowCount) return bad(res, 404, 'Produto não cadastrado');
+    res.set('Cache-Control', 'no-store'); res.json(r.rows[0]);
+  }));
+  app.post('/api/store/products', ...guard, route(async (req, res) => {
+    const v = valid(productBody, req, res); if (!v) return;
+    try {
+      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,created_by) VALUES($1,$2,NULLIF($3,''),$4,$5) RETURNING ${productFields}`,
+        [tid(req), v.name, v.barcode || '', v.price_cents, req.user.id]);
+      await audit(req, 'create', 'product', r.rows[0].id); res.status(201).json(r.rows[0]);
+    } catch (e) { if (!dupBarcode(e, res)) throw e; }
+  }));
+  app.patch('/api/store/products/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
+    const v = valid(productBody.partial().strict(), req, res); if (!v) return;
+    try {
+      const r = await q(`UPDATE products SET name=COALESCE($1,name),
+          barcode=CASE WHEN $2::text IS NULL THEN barcode ELSE NULLIF($2,'') END,
+          price_cents=COALESCE($3,price_cents),updated_at=now()
+        WHERE id=$4 AND tenant_id=$5 AND active RETURNING ${productFields}`, [v.name ?? null, v.barcode ?? null, v.price_cents ?? null, req.params.id, tid(req)]);
+      if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
+      await audit(req, 'update', 'product', req.params.id); res.json(r.rows[0]);
+    } catch (e) { if (!dupBarcode(e, res)) throw e; }
+  }));
+  // Excluir só desativa: vendas antigas continuam com nome e preço do item.
+  app.delete('/api/store/products/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
+    const r = await q('UPDATE products SET active=false,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND active RETURNING id', [req.params.id, tid(req)]);
+    if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
+    await audit(req, 'delete', 'product', req.params.id); res.json({ deleted: true });
+  }));
+
   // ---------- Vendas ----------
   app.post('/api/store/sales', ...guard, route(async (req, res) => {
     const v = valid(z.object({
       customer_id: uuid.optional(),
       new_customer: z.object({ name: z.string().trim().min(2).max(120), phone: z.string().trim().max(30).default('') }).optional(),
       anonymous: z.boolean().default(false),
-      total_cents: cents.min(1),
+      total_cents: cents.min(1).optional(),
+      items: z.array(z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999) }).strict()).min(1).max(200).optional(),
       payment_method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']),
       description: z.string().trim().max(300).default(''),
       order_id: uuid.optional()
     }).strict(), req, res); if (!v) return;
     if ([v.customer_id, v.new_customer, v.anonymous || undefined].filter(Boolean).length !== 1) return bad(res, 400, 'Escolha o cliente da venda');
     if (v.order_id && !v.customer_id) return bad(res, 400, 'Pedido exige cliente');
+    if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
+    if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os produtos');
     const c = await db.connect();
     try {
       await c.query('BEGIN');
@@ -265,14 +322,29 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; }
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
+      // Itens: preço e nome vêm do cadastro (não do navegador); o mesmo produto repetido soma.
+      let items = [], total = v.total_cents, description = v.description;
+      if (v.items) {
+        const qty = new Map(); for (const it of v.items) qty.set(it.product_id, (qty.get(it.product_id) || 0) + it.quantity);
+        const p = await c.query('SELECT id,name,barcode,price_cents FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), [...qty.keys()]]);
+        if (p.rowCount !== qty.size) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
+        const byId = new Map(p.rows.map(x => [x.id, x]));
+        items = [...qty].map(([id, quantity], position) => { const x = byId.get(id); return { ...x, quantity, total_cents: x.price_cents * quantity, position }; });
+        total = items.reduce((a, x) => a + x.total_cents, 0);
+        if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, 'Total da venda inválido (confira preços e quantidades)'); }
+        if (!description) description = items.map(x => (x.quantity > 1 ? x.quantity + 'x ' : '') + x.name).join(', ').slice(0, 300);
+      }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,payment_method,description,created_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, v.total_cents, v.payment_method, v.description, req.user.id])).rows[0];
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.payment_method, description, req.user.id])).rows[0];
+      for (const x of items) await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.price_cents, x.total_cents, x.position]);
+      sale.items = items.map(({ id, name, barcode, quantity, price_cents, total_cents }) => ({ product_id: id, name, barcode, quantity, unit_price_cents: price_cents, total_cents }));
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
       if (customerId && !v.order_id) {
         const ck = await c.query(`INSERT INTO loyalty_checkins(tenant_id,customer_id,sale_id) SELECT $1,$2,$3
-          WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled AND $4>=loyalty_min_sale_cents) RETURNING id`, [tid(req), customerId, sale.id, v.total_cents]);
+          WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled AND $4>=loyalty_min_sale_cents) RETURNING id`, [tid(req), customerId, sale.id, total]);
         counted = ck.rowCount > 0;
       }
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'sale', sale.id]);

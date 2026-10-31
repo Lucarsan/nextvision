@@ -183,3 +183,49 @@ test('itens frequentes do caixa', { skip }, async () => {
     assert.equal((await request('/store/sales/quick-items/' + pel.id, { method: 'DELETE' })).status, 404);
   } finally { await f.cleanup(); }
 });
+
+test('QR code de atendimento cadastra cliente novo e abre o WhatsApp da loja', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, db, tenant } = f;
+    const slug = 'qr-' + tenant.slice(0, 8);
+    await db.query('UPDATE tenants SET slug=$1 WHERE id=$2', [slug, tenant]);
+    await db.query('INSERT INTO tenant_slugs(slug,tenant_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [slug, tenant]);
+    const pub = path => '/public/stores/' + slug + path;
+    // Sem WhatsApp da loja: a página avisa e o envio é recusado.
+    assert.deepEqual(await api(pub('/contact'), { token: null }), { name: 'Loja de teste', logo_url: null, ready: false });
+    assert.equal((await request(pub('/contact'), { method: 'POST', token: null, body: { name: 'Maria', phone: '85988887777' } })).status, 409);
+    await db.query("UPDATE tenants SET whatsapp='558532130953' WHERE id=$1", [tenant]);
+
+    const r = await api(pub('/contact'), { method: 'POST', token: null, body: { name: 'maria souza', phone: '(85) 98888-7777' } }, 201);
+    assert.equal(r.whatsapp_url, 'https://wa.me/558532130953?text=' + encodeURIComponent('Olá! Sou Maria e vim pelo QR code da loja.'));
+    let list = await api('/customers');
+    assert.equal(list.filter(c => c.source === 'qrcode').length, 1);
+    assert.equal(list.find(c => c.source === 'qrcode').phone, '85988887777');
+
+    // Mesmo número de novo (com +55 e sem o 9): não duplica.
+    await api(pub('/contact'), { method: 'POST', token: null, body: { name: 'Maria S', phone: '+55 85 8888-7777' } }, 200);
+    // Cliente importado só com telefone ganha o nome informado.
+    await api('/customers', { method: 'POST', body: { name: '(85) 97777-1111', phone: '85977771111' } }, 201);
+    await api(pub('/contact'), { method: 'POST', token: null, body: { name: 'João Lima', phone: '85977771111' } }, 200);
+    list = await api('/customers');
+    assert.equal(list.filter(c => c.source === 'qrcode').length, 1);
+    assert.ok(list.some(c => c.name === 'João Lima' && c.phone === '85977771111'));
+
+    assert.equal((await request(pub('/contact'), { method: 'POST', token: null, body: { name: 'X', phone: '123' } })).status, 400);
+    assert.equal((await request('/public/stores/nao-existe/contact', { token: null })).status, 404);
+
+    // Painel: link, prévia e mensagem personalizada.
+    const qr = await api('/store/qr');
+    assert.match(qr.url, new RegExp('/' + slug + '/oi$'));
+    assert.equal(qr.new_last_24h, 1);
+    await api('/store/qr', { method: 'PATCH', body: { qr_message: 'Oi, sou {nome}! Quero imprimir na {loja}.' } });
+    const r2 = await api(pub('/contact'), { method: 'POST', token: null, body: { name: 'Ana', phone: '85966665555' } }, 201);
+    assert.ok(r2.whatsapp_url.endsWith(encodeURIComponent('Oi, sou Ana! Quero imprimir na Loja de teste.')));
+
+    const svg = await fetch(f.base + '/api' + pub('/qr.svg'));
+    assert.equal(svg.status, 200); assert.match(svg.headers.get('content-type'), /svg/);
+    const page = await fetch(f.base + '/' + slug + '/oi');
+    assert.equal(page.status, 200); assert.match(await page.text(), /Fale com a loja/);
+  } finally { await f.cleanup(); }
+});

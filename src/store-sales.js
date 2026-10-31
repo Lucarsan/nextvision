@@ -355,6 +355,22 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 
+  // Comprovante de uma venda (impressora térmica 80 mm). Não é documento fiscal.
+  app.get('/api/store/sales/:id/receipt', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
+        c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,
+        t.name store_name,t.city,t.state,t.whatsapp,
+        COALESCE((SELECT json_agg(json_build_object('name',i.name,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
+          FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
+      FROM sales x JOIN tenants t ON t.id=x.tenant_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by
+      WHERE x.id=$1 AND x.tenant_id=$2`, [req.params.id, tid(req)]);
+    if (!r.rowCount) return bad(res, 404, 'Venda não encontrada');
+    const sale = r.rows[0];
+    const loyalty = sale.customer_id && !sale.canceled_at ? (await progressFor(tid(req), [sale.customer_id])).get(sale.customer_id) : null;
+    res.set('Cache-Control', 'no-store'); res.json({ ...sale, timezone: TZ, generated_at: new Date().toISOString(), loyalty: loyalty?.enabled ? loyalty : null });
+  }));
+
   app.post('/api/store/sales/:id/cancel', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;

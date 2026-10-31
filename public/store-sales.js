@@ -110,10 +110,11 @@
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, conserto"></label></div>
           <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
           <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
+          <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> 🧾 Imprimir comprovante ao registrar</label>
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
         <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
-          <div class="nv-list">${data.sales.map(x => `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
+          <div class="nv-list">${data.sales.map(x => `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
           <p class="nv-help fs-opening">Troco inicial: ${brl(sum.opening_cents)}</p></section>
       </div>
       <section class="nv-card fs-moves"><div class="nv-heading"><h2>Saídas, sangrias e suprimentos</h2><button class="nv-button secondary fs-small" id="fsExpense2">− Lançar saída</button></div>
@@ -133,6 +134,7 @@
     setupScanInput(); drawCart(); updChange(); setupEye(box);
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
+    const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
     quickCart = []; quickBase = 0; lastAuto = ''; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
     $('fsExpense').onclick = $('fsExpense2').onclick = () => movement('expense', box, alive);
@@ -144,6 +146,7 @@
     });
     $('fsDeposit').onclick = () => movement('deposit', box, alive);
     $('fsClose').onclick = () => closeCash(sum, box, alive);
+    box.querySelectorAll('[data-fs-receipt]').forEach(b => b.onclick = () => printReceipt(b.dataset.fsReceipt));
     box.querySelectorAll('[data-fs-cancel]').forEach(b => b.onclick = async () => {
       const reason = prompt('Motivo do cancelamento (ex.: lançada em dobro):'); if (!reason || reason.trim().length < 3) return;
       try { const r = await api(`/store/sales/${b.dataset.fsCancel}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda cancelada.' + (r.loyalty_already_redeemed ? ' A compra já tinha sido usada num prêmio e continua no histórico do cartão.' : '')); loadCash(box, alive); }
@@ -307,15 +310,20 @@
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cart = []; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null; feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+    try { lastSale = await api('/store/sales', 'POST', body); cart = []; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+      receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
+      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`Venda #${lastSale.sale.sale_number} registrada: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function drawLast() {
     const box = $('fsLast'); if (!box || !lastSale) return; const s = lastSale, c = s.customer;
-    if (!c) { box.innerHTML = `<div class="fs-last"><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div>`; return; }
+    const receiptBtn = '<button type="button" class="nv-button secondary" id="fsReceiptNow">🧾 Imprimir comprovante</button>';
+    const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
+    if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
     const note = s.loyalty?.enabled ? (s.loyalty_counted ? 'Somou 1 compra no cartão.' : s.sale.order_id ? 'Pagamento de pedido: conta no cartão quando o pedido é finalizado.' : 'Abaixo do valor mínimo: não somou no cartão.') : '';
     box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${esc(c.name)}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${progressBar(s.loyalty)}</div>
-      <div class="fs-actions">${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
+      <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
+    wireReceipt();
     if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
   }
@@ -526,6 +534,62 @@
     };
   }
 
+  // ---------------- Comprovante da venda (térmica 80 mm, ex.: Epson TM-T20) ----------------
+  // Imprime pela impressora padrão do Windows. A altura da página é medida pelo conteúdo,
+  // para a bobina avançar só o necessário e a guilhotina cortar logo após o texto.
+  const RECEIPT_AUTO_KEY = 'fp_receipt_autoprint';
+  const autoPrint = () => { try { return localStorage.getItem(RECEIPT_AUTO_KEY) === '1'; } catch { return false; } };
+  const receiptExtras = new Map(); // troco e valor recebido desta sessão do navegador (não ficam no banco)
+  async function printReceipt(saleId) {
+    let r; try { r = await api(`/store/sales/${saleId}/receipt`); } catch (err) { feedback(err.message, true); return; }
+    const extra = receiptExtras.get(saleId) || {};
+    const when = new Date(r.created_at).toLocaleString('pt-BR', { timeZone: r.timezone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const now = new Date().toLocaleString('pt-BR', { timeZone: r.timezone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const reprint = Date.now() - new Date(r.created_at).getTime() > 10 * 60 * 1000;
+    const place = [r.city, r.state].filter(Boolean).join('/');
+    const items = r.items.length
+      ? r.items.map(i => `<div class="it"><div>${esc(i.name)}</div><div class="row"><span>${i.quantity} x ${brl(i.unit_price_cents)}</span><span>${brl(i.total_cents)}</span></div></div>`).join('')
+      : `<div class="it"><div>${esc(r.description || 'Venda')}</div><div class="row"><span></span><span>${brl(r.total_cents)}</span></div></div>`;
+    const l = r.loyalty;
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comprovante venda ${r.sale_number}</title><style>
+      @page{size:80mm 200mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#000}
+      body{width:72mm;margin:0 auto;padding:2mm 0 6mm;font:12px/1.35 Arial,Helvetica,sans-serif}
+      .c{text-align:center}.store{font-size:16px;font-weight:700}.hr{border-top:1px dashed #000;margin:6px 0}
+      .row{display:flex;justify-content:space-between;gap:8px}.row span:last-child{white-space:nowrap;text-align:right}
+      .it{margin:3px 0}.tot{font-size:17px;font-weight:700}.title{font-weight:700;letter-spacing:.04em}
+      .cancel{border:2px solid #000;font-weight:700;text-align:center;padding:4px;margin:6px 0;font-size:15px}.small{font-size:11px}
+    </style></head><body>
+      <div class="c store">${esc(r.store_name)}</div>
+      ${place || r.whatsapp ? `<div class="c small">${esc(place)}${place && r.whatsapp ? ' · ' : ''}${r.whatsapp ? 'WhatsApp ' + esc(r.whatsapp) : ''}</div>` : ''}
+      <div class="hr"></div><div class="c title">COMPROVANTE DE VENDA</div>
+      ${r.canceled_at ? '<div class="cancel">VENDA CANCELADA</div>' : ''}
+      <div class="row"><span>Venda nº ${r.sale_number}</span><span>${when}</span></div>
+      <div>Atendente: ${esc(r.created_by_name)}</div>
+      ${r.customer_name ? `<div>Cliente: ${esc(r.customer_name)}</div>` : ''}
+      ${r.order_number ? `<div>Pedido nº ${esc(r.order_number)}</div>` : ''}
+      <div class="hr"></div>${items}<div class="hr"></div>
+      <div class="row tot"><span>TOTAL</span><span>${brl(r.total_cents)}</span></div>
+      <div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>
+      ${extra.received_cents != null ? `<div class="row"><span>Valor recebido</span><span>${brl(extra.received_cents)}</span></div><div class="row"><span>Troco</span><span>${brl(extra.change_cents)}</span></div>` : ''}
+      ${l ? `<div class="hr"></div><div class="c">${l.complete ? `Cartão fidelidade completo! Prêmio: ${esc(l.reward)}` : `Cartão fidelidade: ${l.checkins} de ${l.target}. Faltam ${l.remaining} para ganhar: ${esc(l.reward)}`}</div>` : ''}
+      <div class="hr"></div><div class="c">Obrigado pela preferência!</div>
+      <div class="c small">Não é documento fiscal${reprint ? ` · Reimpressão ${now}` : ''}</div>
+    </body></html>`;
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:80mm;height:400px;border:0';
+    document.body.append(frame);
+    const doc = frame.contentDocument; doc.open(); doc.write(html); doc.close();
+    window.FPSales.lastReceiptHtml = html;
+    setTimeout(() => {
+      try {
+        // Altura real do conteúdo → tamanho da página (px CSS → mm), com folga para o corte.
+        const mm = Math.ceil(doc.body.getBoundingClientRect().height * 25.4 / 96) + 4;
+        const st = doc.createElement('style'); st.textContent = `@page{size:80mm ${Math.max(60, mm)}mm;margin:0}`; doc.head.append(st);
+        frame.contentWindow.focus(); frame.contentWindow.print();
+      } finally { setTimeout(() => frame.remove(), 60000); }
+    }, 150);
+  }
+
   // ---------------- Relatório para imprimir ----------------
   async function printReport(sessionId) {
     let r; try { r = await api(`/store/cash/sessions/${sessionId}/report`); } catch (err) { feedback(err.message, true); return; }
@@ -682,6 +746,7 @@
   .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{margin-top:10px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:4px 10px;background:#fafafa}.fs-cart-row{display:grid;grid-template-columns:minmax(0,1fr) auto 76px 28px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #eee}.fs-cart-name{font-size:14px;font-weight:600;min-width:0;overflow-wrap:anywhere}.fs-cart-name small{display:block;font-weight:400;font-size:12px;opacity:.7}.fs-qq{display:inline-flex;align-items:center;border:1px solid var(--nv-border,#d0d5dd);border-radius:10px;overflow:hidden;background:#fff}.fs-qq button{border:0;background:none;width:34px;height:36px;font-size:18px;cursor:pointer}.fs-qq input{width:52px;height:36px;border:0;text-align:center;font:inherit;font-size:15px;-moz-appearance:textfield}.fs-qq input::-webkit-inner-spin-button{-webkit-appearance:none}.fs-cart-sub{text-align:right;font-size:14px}.fs-cart-del{border:0;background:none;cursor:pointer;color:#b42318;font-size:15px}.fs-cart-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 0 4px;font-size:14px}@media(max-width:420px){.fs-cart-row{grid-template-columns:minmax(0,1fr) auto 28px}.fs-cart-sub{grid-column:1/3;text-align:left;font-size:13px}}.fs-quick-empty{margin:0}
   .fs-private .fs-kpis b,.fs-private .fs-methods-sum b,.fs-private .fs-sale-end>b,.fs-private .fs-opening,.fs-private .fs-lastclose{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none;-webkit-user-select:none}
   .fs-private .fs-lastclose b{color:transparent!important}
+  .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
   .fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}

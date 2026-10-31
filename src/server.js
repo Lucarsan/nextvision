@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
-import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';
+import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -525,13 +525,12 @@ const allowedMediaAsset=name=>/^(index|stream|segment|part|init)[A-Za-z0-9_.-]{0
 // LL-HLS polls parts every second. Limit per IP generously and per order link tightly.
 const hlsPerIp=rateLimit({windowMs:60000,limit:1800,standardHeaders:'draft-7',legacyHeaders:false});
 const hlsPerLink=rateLimit({windowMs:60000,limit:600,standardHeaders:'draft-7',legacyHeaders:false,keyGenerator:req=>'hls-link:'+String(req.params.token||'').slice(0,100)});
-app.get('/api/public/orders/:token/live/:asset',hlsPerIp,hlsPerLink,route(async(req,res)=>{
+// Autoriza o vídeo ao vivo de um pedido (mesma regra para o proxy antigo e para a borda).
+async function resolveLive(token){
  const legacy=legacyMediaConfig();
- const {token,asset}=req.params;
- if(!/^[\w-]{16,100}$/.test(token)||!allowedMediaAsset(asset))return bad(res,404,'Não encontrado');
  const hash=crypto.createHash('sha256').update(token).digest('hex');
  // A camera must belong to this tenant and this active order; never expose a general camera feed
- const found=await q(`SELECT o.id,o.tenant_id,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
+ const found=await q(`SELECT o.id,o.tenant_id,t.slug tenant_slug,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  JOIN cameras c ON c.id=(CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text THEN o.process_snapshot->'step_cameras'->>o.step_index::text ELSE o.process_snapshot->>'camera_id' END)::uuid AND c.tenant_id=o.tenant_id AND c.enabled AND c.deleted_at IS NULL
@@ -539,21 +538,29 @@ app.get('/api/public/orders/:token/live/:asset',hlsPerIp,hlsPerLink,route(async(
  LEFT JOIN store_media sm ON sm.tenant_id=o.tenant_id
  WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.status='live'
  AND o.deleted_at IS NULL AND t.status IN ('trial','active') AND (sm.tenant_id IS NOT NULL OR c.id=$3::uuid OR $4::boolean)`,[hash,token,legacy?.cameraId||null,Boolean(legacy&&!legacy.cameraId)]);
- if(!found.rowCount)return bad(res,404,'Vídeo indisponível');
+ if(!found.rowCount)return {status:404,message:'Vídeo indisponível'};
  const order=found.rows[0];
  // Vídeo da própria loja (túnel da loja); senão, a origem antiga configurada no Render.
  const config=mediaConfigFor(order,legacy);
- if(!config){console.error('HLS configuration incomplete');return bad(res,503,'Vídeo indisponível');}
+ if(!config){console.error('HLS configuration incomplete');return {status:503,message:'Vídeo indisponível'};}
  const chosen=cameraForStep(order.step_cameras,order.process_camera,order.step_index);
- if(chosen!==order.media_camera||(!config.perStore&&config.cameraId&&chosen!==config.cameraId))return bad(res,404,'Vídeo indisponível');
+ if(chosen!==order.media_camera||(!config.perStore&&config.cameraId&&chosen!==config.cameraId))return {status:404,message:'Vídeo indisponível'};
  const competing=await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL
  AND (CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text
  THEN o.process_snapshot->'step_cameras'->>o.step_index::text
  ELSE o.process_snapshot->>'camera_id' END)=$3 LIMIT 1`,[order.tenant_id,order.id,chosen]);
- if(competing.rowCount)return bad(res,409,'Câmera ocupada por outro pedido');
+ if(competing.rowCount)return {status:409,message:'Câmera ocupada por outro pedido'};
  const streamPath=streamPathFor({id:chosen,stream_path:order.stream_path},legacy);
- if(!/^[A-Za-z0-9_-]{1,100}$/.test(streamPath||''))return bad(res,503,'Câmera sem caminho de transmissão');
+ if(!/^[A-Za-z0-9_-]{1,100}$/.test(streamPath||''))return {status:503,message:'Câmera sem caminho de transmissão'};
+ return {order,config,chosen,streamPath};
+}
+app.get('/api/public/orders/:token/live/:asset',hlsPerIp,hlsPerLink,route(async(req,res)=>{
+ const {token,asset}=req.params;
+ if(!/^[\w-]{16,100}$/.test(token)||!allowedMediaAsset(asset))return bad(res,404,'Não encontrado');
+ const live=await resolveLive(token);
+ if(live.status)return bad(res,live.status,live.message);
+ const {config,streamPath}=live;
  const url=new URL('/'+streamPath+'/'+asset,config.origin);
  // MediaMTX binds HLS child playlists/segments to a ?session= token.
  // Preserve only known HLS query parameters, never arbitrary URLs.
@@ -609,6 +616,32 @@ app.get('/api/public/orders/:token/live/:asset',hlsPerIp,hlsPerLink,route(async(
  if(bytes.byteLength>8*1024*1024)return bad(res,502,'Segmento excede o limite');
  res.send(Buffer.from(bytes));
 }));
+// De onde o player do cliente puxa o vídeo: pela borda da Cloudflare (Worker) quando a
+// loja está liberada e o Worker publicado; senão, pelo proxy antigo acima.
+app.get('/api/public/orders/:token/live-source',rateLimit({windowMs:60000,limit:60}),route(async(req,res)=>{
+ const token=req.params.token;
+ if(!/^[\w-]{16,100}$/.test(token))return bad(res,404,'Não encontrado');
+ const live=await resolveLive(token);
+ if(live.status)return bad(res,live.status,live.message);
+ res.set('Cache-Control','no-store');
+ const {order,config,streamPath}=live;
+ if(config.perStore&&edgeReady()&&edgeEnabledFor({id:order.tenant_id,slug:order.tenant_slug})){
+  const src=edgeSourceFor({origin:config.origin,streamPath,username:config.username,password:config.password,orderToken:token});
+  return res.json({mode:'edge',url:src.url,expires_at:src.expiresAt});
+ }
+ res.json({mode:'proxy',url:'/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8'});
+}));
+// Chamada pelo Worker a cada ~15 s por link: o pedido ainda pode ver esta câmera?
+app.post('/api/edge/live-check',rateLimit({windowMs:60000,limit:3000}),route(async(req,res)=>{
+ const p=openEdgeToken(req.body?.token);
+ if(!p||typeof p.t!=='string'||!/^[\w-]{16,100}$/.test(p.t))return bad(res,403,'Link inválido');
+ const live=await resolveLive(p.t);
+ if(live.status)return bad(res,live.status===409?409:403,live.message);
+ if(String(live.config.origin)!==p.o||live.streamPath!==p.s)return bad(res,403,'Câmera mudou');
+ res.status(204).end();
+}));
+app.get('/api/master/edge-video',auth,roles('master'),(req,res)=>{res.set('Cache-Control','no-store');res.json(edgeWorkerStatus())});
+app.post('/api/master/edge-video/publish',auth,roles('master'),route(async(req,res)=>res.json(await ensureEdgeWorker())));
 app.get('/api/public/orders/:token/recordings',rateLimit({windowMs:60000,limit:60}),route(async(req,res)=>{
  const token=req.params.token;
  if(!/^[\w-]{16,100}$/.test(token))return bad(res,404,'Não encontrado');
@@ -649,4 +682,4 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
 }));
 app.use(express.static('public'));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
-app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});
+app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');void ensureEdgeWorker();try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

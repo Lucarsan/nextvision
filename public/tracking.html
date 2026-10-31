@@ -136,8 +136,16 @@ async function setupLivePlayer(){
  if(liveVideo){liveVideo.onerror=null;liveVideo.onplaying=null;liveVideo.onended=null;if(liveVideo!==video){liveVideo.pause();liveVideo.removeAttribute('src');liveVideo.load();}}
  liveVideo=video;liveFailed=false;
  if(!video)return;
- const src='/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8';
  liveMessage(video,'Conectando à transmissão autorizada…');
+ // A central diz de onde puxar: borda da Cloudflare (link assinado) ou proxy antigo.
+ let src='/api/public/orders/'+encodeURIComponent(token)+'/live/index.m3u8';
+ try{
+  const r=await fetch('/api/public/orders/'+encodeURIComponent(token)+'/live-source',{cache:'no-store'});
+  if(generation!==liveGeneration||!video.isConnected)return;
+  if(!r.ok){const status=r.status;retryLive(video,status===404?'Aguardando câmera autorizada.':status===409?'Câmera ocupada por outro pedido.':status===503?'Transmissão ainda não configurada.':status===429?'Aguardando liberação de novas requisições.':'Conexão de vídeo interrompida.');return;}
+  const source=await r.json();
+  if(typeof source?.url==='string'&&(source.url.startsWith('/api/public/orders/')||source.url.startsWith('https://')))src=source.url;
+ }catch{if(generation===liveGeneration)retryLive(video,'Conexão de vídeo interrompida.');return;}
  video.onended=()=>{if(generation===liveGeneration)retryLive(video,'A transmissão foi interrompida.');};
  video.onplaying=()=>{if(generation===liveGeneration){liveRetryDelay=2000;liveFailed=false;liveMessage(video,'Ao vivo');}};
  if(video.canPlayType('application/vnd.apple.mpegurl')){
@@ -157,7 +165,7 @@ async function setupLivePlayer(){
   if(generation!==liveGeneration)return;
   if(!data.fatal){if(data.type===Hls.ErrorTypes.NETWORK_ERROR)liveMessage(video,'Conexão instável. Reconectando…');return;}
   const status=data.response?.code||data.networkDetails?.status||0;
-  const message=status===404?'Aguardando câmera autorizada.':status===409?'Câmera ocupada por outro pedido.':status===503?'Transmissão ainda não configurada.':status===502?'Origem do vídeo indisponível.':status===429?'Aguardando liberação de novas requisições.':'Conexão de vídeo interrompida.';
+  const message=status===403?'Renovando acesso ao vídeo…':status===404?'Aguardando câmera autorizada.':status===409?'Câmera ocupada por outro pedido.':status===503?'Transmissão ainda não configurada.':status===502?'Origem do vídeo indisponível.':status===429?'Aguardando liberação de novas requisições.':'Conexão de vídeo interrompida.';
   player.destroy();if(hlsPlayer===player)hlsPlayer=null;retryLive(video,message);
  });
  player.loadSource(src);player.attachMedia(video);

@@ -344,7 +344,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       new_customer: z.object({ name: z.string().trim().min(2).max(120), phone: z.string().trim().max(30).default('') }).optional(),
       anonymous: z.boolean().default(false),
       total_cents: cents.min(1).optional(),
-      items: z.array(z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999) }).strict()).min(1).max(200).optional(),
+      // Item de produto (preço do cadastro, ou unit_price_cents se o vendedor mudou) ou linha avulsa (nome + preço).
+      items: z.array(z.union([
+        z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999), unit_price_cents: cents.optional() }).strict(),
+        z.object({ name: z.string().trim().min(1).max(120), quantity: z.number().int().min(1).max(9999), unit_price_cents: cents }).strict()
+      ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
       payment_method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']),
@@ -373,28 +377,41 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; }
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
-      // Itens: preço e nome vêm do cadastro (não do navegador); o mesmo produto repetido soma.
+      // Itens: nome, código e custo vêm do cadastro; o preço é o do cadastro, a não ser que o vendedor
+      // tenha mudado (unit_price_cents). O mesmo produto com o mesmo preço soma. O desconto geral é
+      // distribuído entre os itens, para cada linha mostrar o valor de fato cobrado.
       let items = [], total = v.total_cents, description = v.description;
       if (v.items) {
-        const qty = new Map(); for (const it of v.items) qty.set(it.product_id, (qty.get(it.product_id) || 0) + it.quantity);
-        const p = await c.query('SELECT id,name,barcode,price_cents,cost_cents FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), [...qty.keys()]]);
-        if (p.rowCount !== qty.size) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
-        const byId = new Map(p.rows.map(x => [x.id, x]));
-        items = [...qty].map(([id, quantity], position) => { const x = byId.get(id); return { ...x, quantity, total_cents: x.price_cents * quantity, position }; });
-        total = items.reduce((a, x) => a + x.total_cents, 0) - (v.discount_cents || 0);
-        if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, v.discount_cents ? 'O desconto não pode ser igual ou maior que o valor dos produtos' : 'Total da venda inválido (confira preços e quantidades)'); }
+        const ids = [...new Set(v.items.filter(it => it.product_id).map(it => it.product_id))];
+        const p = ids.length ? await c.query('SELECT id,name,barcode,price_cents,cost_cents FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
+        if (p.rowCount !== ids.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
+        const byId = new Map(p.rows.map(x => [x.id, x])), merged = new Map();
+        for (const it of v.items) {
+          const prod = it.product_id ? byId.get(it.product_id) : null;
+          const unit = it.unit_price_cents ?? prod.price_cents;
+          const key = prod ? prod.id + ':' + unit : 'l:' + it.name.toLowerCase() + ':' + unit;
+          const cur = merged.get(key);
+          if (cur) cur.quantity += it.quantity;
+          else merged.set(key, prod ? { id: prod.id, name: prod.name, barcode: prod.barcode, cost_cents: prod.cost_cents, list_price_cents: prod.price_cents, unit_price_cents: unit, quantity: it.quantity }
+            : { id: null, name: it.name, barcode: null, cost_cents: null, list_price_cents: null, unit_price_cents: unit, quantity: it.quantity });
+        }
+        items = [...merged.values()].map((x, position) => ({ ...x, total_cents: x.unit_price_cents * x.quantity, position }));
+        const gross = items.reduce((a, x) => a + x.total_cents, 0), disc = v.discount_cents || 0;
+        total = gross - disc;
+        if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, disc ? 'O desconto não pode ser igual ou maior que o valor dos itens' : 'Total da venda inválido (confira preços e quantidades)'); }
+        if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / gross)); x.total_cents -= cut; left -= cut; }); }
         if (!description) description = items.map(x => (x.quantity > 1 ? x.quantity + 'x ' : '') + x.name).join(', ').slice(0, 300);
       }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id, sellerId])).rows[0];
       for (const x of items) {
-        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.price_cents, x.total_cents, x.position, x.cost_cents]);
+        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents]);
         // Baixa no estoque (só de produtos que controlam estoque).
-        await c.query('UPDATE products SET stock_qty=GREATEST(-999999,stock_qty-$1),updated_at=now() WHERE id=$2 AND tenant_id=$3 AND stock_qty IS NOT NULL', [x.quantity, x.id, tid(req)]);
+        if (x.id) await c.query('UPDATE products SET stock_qty=GREATEST(-999999,stock_qty-$1),updated_at=now() WHERE id=$2 AND tenant_id=$3 AND stock_qty IS NOT NULL', [x.quantity, x.id, tid(req)]);
       }
-      sale.items = items.map(({ id, name, barcode, quantity, price_cents, total_cents }) => ({ product_id: id, name, barcode, quantity, unit_price_cents: price_cents, total_cents }));
+      sale.items = items.map(({ id, name, barcode, quantity, unit_price_cents, list_price_cents, total_cents }) => ({ product_id: id, name, barcode, quantity, unit_price_cents, list_price_cents, total_cents }));
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
       if (customerId && !v.order_id) {
@@ -416,7 +433,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
         c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,COALESCE(sl.name,u.name) seller_name,
         t.name store_name,t.city,t.state,t.whatsapp,
-        COALESCE((SELECT json_agg(json_build_object('name',i.name,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
+        COALESCE((SELECT json_agg(json_build_object('name',i.name,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'list_price_cents',i.list_price_cents,'total_cents',i.total_cents) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
       FROM sales x JOIN tenants t ON t.id=x.tenant_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.id=$1 AND x.tenant_id=$2`, [req.params.id, tid(req)]);

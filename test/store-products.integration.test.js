@@ -162,3 +162,29 @@ test('vendedor da venda: lista da loja, pré-seleção da última venda e logins
     assert.equal((await request('/master/tenants/' + tenant + '/users')).status, 403, 'lojista não lista logins da central');
   } finally { await f.cleanup(); }
 });
+
+test('preço editado por item, linhas avulsas e desconto distribuído nos itens', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const pel = await api('/store/products', { method: 'POST', body: { name: 'Película', price_cents: 2000, stock_qty: 5 } }, 201);
+    // Película vendida por R$ 15 (preço editado) + 10 xerox a R$ 0,20 (linha avulsa).
+    const r = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [
+      { product_id: pel.id, quantity: 2, unit_price_cents: 1500 }, { name: 'Xerox', quantity: 10, unit_price_cents: 20 }] } }, 201);
+    assert.equal(r.sale.total_cents, 3200);
+    assert.deepEqual(r.sale.items.map(i => [i.name, i.quantity, i.unit_price_cents, i.list_price_cents, i.total_cents]), [['Película', 2, 1500, 2000, 3000], ['Xerox', 10, 20, null, 200]]);
+    assert.equal(r.sale.description, '2x Película, 10x Xerox');
+    const rec = await api('/store/sales/' + r.sale.id + '/receipt');
+    assert.deepEqual(rec.items.map(i => [i.name, i.quantity, i.total_cents]), [['Película', 2, 3000], ['Xerox', 10, 200]]);
+    assert.equal((await api('/store/products?q=pel'))[0].stock_qty, 3, 'baixa só do produto');
+    // Desconto geral: distribuído entre os itens, soma das linhas = total cobrado.
+    const d = await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'cash', discount_cents: 100, items: [
+      { product_id: pel.id, quantity: 1 }, { name: 'Capa avulsa', quantity: 1, unit_price_cents: 1000 }] } }, 201);
+    assert.equal(d.sale.total_cents, 2900);
+    assert.equal(d.sale.items.reduce((a, i) => a + i.total_cents, 0), 2900);
+    // Linha avulsa precisa de nome e preço.
+    assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ name: 'Sem preço', quantity: 1 }] } })).status, 400);
+  } finally { await f.cleanup(); }
+});

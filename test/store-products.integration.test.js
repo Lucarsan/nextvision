@@ -58,6 +58,13 @@ test('produtos com código de barras e venda pelo leitor', { skip }, async () =>
     assert.equal((await api('/store/products/barcode/CAB-01')).id, reused.id, 'código liberado pelo produto excluído');
     assert.equal((await request('/store/products/' + reused.id, { method: 'PATCH', body: { barcode: '7891234567895' } })).status, 409);
 
+    // Comprovante: loja, itens com preço do momento, cliente e cartão fidelidade; outra loja não acessa.
+    const rec = await api(`/store/sales/${sale.sale.id}/receipt`);
+    assert.equal(rec.sale_number, sale.sale.sale_number); assert.equal(rec.store_name, 'Loja de teste'); assert.equal(rec.customer_name, 'Maria');
+    assert.deepEqual(rec.items.map(i => [i.name, i.quantity, i.unit_price_cents, i.total_cents]), [['Película 3D', 2, 1500, 3000], ['Cabo USB-C', 1, 2500, 2500]]);
+    assert.equal(rec.loyalty.target, 5);
+    assert.equal((await request(`/store/sales/${sale.sale.id}/receipt`, { token: foreignToken })).status, 403);
+
     // Cancelar a venda mantém os itens no histórico, fora do total.
     await api(`/store/sales/${sale.sale.id}/cancel`, { method: 'POST', body: { reason: 'Teste de cancelamento' } });
     const after = await api('/store/cash');

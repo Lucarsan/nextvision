@@ -80,6 +80,13 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     assert.equal(await page.locator('.fs-item').count(), 0, 'carrinho esvazia depois da venda');
     const cash = await f.api('/store/cash');
     assert.equal(cash.sales[0].total_cents, 9500);
+
+    // Comprovante: ícone 🧾 na venda da lista (troco desta sessão aparece).
+    await page.getByRole('button', { name: 'Imprimir comprovante da venda 1' }).click();
+    await page.waitForFunction(() => /Venda nº 1/.test(window.FPSales.lastReceiptHtml || ''));
+    const receipt = await page.evaluate(() => window.FPSales.lastReceiptHtml);
+    assert.match(receipt, /Película 3D/); assert.match(receipt, /3 x R\$\s?15,00/); assert.match(receipt, /Troco/); assert.match(receipt, /Não é documento fiscal/);
+    if (process.env.FP_SHOT) { const p2 = await context.newPage(); await p2.setViewportSize({ width: 302, height: 700 }); await p2.setContent(receipt); await p2.screenshot({ path: process.env.FP_SHOT, fullPage: true }); await p2.close(); }
     assert.deepEqual(cash.sales[0].items.map(i => [i.name, i.quantity]), [['Película 3D', 3], ['Cabo USB-C', 2]]);
 
     // Digitação humana (lenta) não é tratada como leitura.

@@ -41,19 +41,37 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   async function cashSummary(tenant, sessionId, client = { query: q }) {
     const totals = await client.query(`SELECT payment_method,count(*)::int n,coalesce(sum(total_cents),0)::bigint total
       FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY payment_method`, [sessionId, tenant]);
-    const moves = await client.query(`SELECT kind,coalesce(sum(amount_cents),0)::bigint total FROM cash_movements WHERE session_id=$1 AND tenant_id=$2 GROUP BY kind`, [sessionId, tenant]);
+    const moves = await client.query(`SELECT kind,method,count(*)::int n,coalesce(sum(amount_cents),0)::bigint total FROM cash_movements
+      WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY kind,method`, [sessionId, tenant]);
     const s = await client.query('SELECT opening_cents FROM cash_sessions WHERE id=$1', [sessionId]);
     const by = Object.fromEntries(totals.rows.map(r => [r.payment_method, { count: r.n, total_cents: Number(r.total) }]));
-    const mv = Object.fromEntries(moves.rows.map(r => [r.kind, Number(r.total)]));
+    const sum = kind => moves.rows.filter(r => r.kind === kind).reduce((a, r) => a + Number(r.total), 0);
+    const expensesBy = Object.fromEntries(moves.rows.filter(r => r.kind === 'expense').map(r => [r.method, { count: r.n, total_cents: Number(r.total) }]));
     const opening = s.rows[0]?.opening_cents || 0;
-    const cashSales = by.cash?.total_cents || 0;
+    const salesTotal = totals.rows.reduce((a, r) => a + Number(r.total), 0);
+    const expenses = sum('expense');
     return {
       by_method: by,
       sales_count: totals.rows.reduce((a, r) => a + r.n, 0),
-      sales_total_cents: totals.rows.reduce((a, r) => a + Number(r.total), 0),
-      opening_cents: opening, deposits_cents: mv.deposit || 0, withdrawals_cents: mv.withdrawal || 0,
-      expected_cash_cents: opening + cashSales + (mv.deposit || 0) - (mv.withdrawal || 0)
+      sales_total_cents: salesTotal,
+      expenses_by_method: expensesBy,
+      expenses_count: moves.rows.filter(r => r.kind === 'expense').reduce((a, r) => a + r.n, 0),
+      expenses_total_cents: expenses,
+      balance_cents: salesTotal - expenses,
+      opening_cents: opening, deposits_cents: sum('deposit'), withdrawals_cents: sum('withdrawal'),
+      expected_cash_cents: opening + (by.cash?.total_cents || 0) + sum('deposit') - sum('withdrawal') - (expensesBy.cash?.total_cents || 0)
     };
+  }
+
+  async function sessionDetail(tenant, sessionId) {
+    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
+        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name
+      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by
+      WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [sessionId, tenant]);
+    const moves = await q(`SELECT m.id,m.kind,m.method,m.category,m.amount_cents,m.note,m.created_at,m.canceled_at,m.cancel_reason,u.name created_by_name,uc.name canceled_by_name
+      FROM cash_movements m JOIN users u ON u.id=m.created_by LEFT JOIN users uc ON uc.id=m.canceled_by
+      WHERE m.session_id=$1 AND m.tenant_id=$2 ORDER BY m.created_at DESC`, [sessionId, tenant]);
+    return { sales: sales.rows, movements: moves.rows, summary: await cashSummary(tenant, sessionId) };
   }
 
   // ---------- Configuração ----------
@@ -89,13 +107,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.set('Cache-Control', 'no-store');
     if (!open.rowCount) return res.json({ session: null, last_closed: last.rows[0] || null });
     const s = open.rows[0];
-    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
-        x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name
-      FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by
-      WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [s.id, tid(req)]);
-    const moves = await q(`SELECT m.id,m.kind,m.amount_cents,m.note,m.created_at,u.name created_by_name FROM cash_movements m JOIN users u ON u.id=m.created_by
-      WHERE m.session_id=$1 AND m.tenant_id=$2 ORDER BY m.created_at DESC`, [s.id, tid(req)]);
-    res.json({ session: s, sales: sales.rows, movements: moves.rows, summary: await cashSummary(tid(req), s.id), last_closed: last.rows[0] || null });
+    res.json({ session: s, ...(await sessionDetail(tid(req), s.id)), last_closed: last.rows[0] || null });
   }));
 
   app.post('/api/store/cash/open', ...guard, route(async (req, res) => {
@@ -107,11 +119,38 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   app.post('/api/store/cash/movements', ...guard, route(async (req, res) => {
-    const v = valid(z.object({ kind: z.enum(['withdrawal', 'deposit']), amount_cents: cents.min(1), note: z.string().trim().max(200).default('') }).strict(), req, res); if (!v) return;
-    const r = await q(`INSERT INTO cash_movements(tenant_id,session_id,kind,amount_cents,note,created_by)
-      SELECT $1,s.id,$2,$3,$4,$5 FROM cash_sessions s WHERE s.tenant_id=$1 AND s.status='open' RETURNING *`, [tid(req), v.kind, v.amount_cents, v.note, req.user.id]);
+    const v = valid(z.object({
+      kind: z.enum(['withdrawal', 'deposit', 'expense']), amount_cents: cents.min(1),
+      method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']).default('cash'),
+      category: z.string().trim().max(60).default(''), note: z.string().trim().max(200).default('')
+    }).strict(), req, res); if (!v) return;
+    if (v.kind !== 'expense' && v.method !== 'cash') return bad(res, 400, 'Sangria e suprimento são sempre em dinheiro');
+    if (v.kind === 'expense' && !v.note && !v.category) return bad(res, 400, 'Informe a categoria ou a descrição da saída');
+    const r = await q(`INSERT INTO cash_movements(tenant_id,session_id,kind,method,category,amount_cents,note,created_by)
+      SELECT $1,s.id,$2,$3,$4,$5,$6,$7 FROM cash_sessions s WHERE s.tenant_id=$1 AND s.status='open' RETURNING *`,
+      [tid(req), v.kind, v.method, v.category, v.amount_cents, v.note, req.user.id]);
     if (!r.rowCount) return bad(res, 409, 'Abra o caixa primeiro');
     await audit(req, v.kind, 'cash_movement', r.rows[0].id); res.status(201).json(r.rows[0]);
+  }));
+
+  app.post('/api/store/cash/movements/:id/cancel', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Lançamento inválido');
+    const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;
+    const r = await q(`UPDATE cash_movements m SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 FROM cash_sessions s
+      WHERE m.id=$3 AND m.tenant_id=$4 AND m.canceled_at IS NULL AND s.id=m.session_id AND s.status='open' RETURNING m.id`, [req.user.id, v.reason, req.params.id, tid(req)]);
+    if (!r.rowCount) return bad(res, 409, 'Só é possível cancelar lançamentos do caixa aberto');
+    await audit(req, 'cancel', 'cash_movement', req.params.id); res.json({ canceled: true });
+  }));
+
+  // Relatório do caixa (aberto ou fechado) para impressão.
+  app.get('/api/store/cash/sessions/:id/report', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Caixa inválido');
+    const s = await q(`SELECT s.*,uo.name opened_by_name,uc.name closed_by_name,t.name store_name,t.city,t.state
+      FROM cash_sessions s JOIN users uo ON uo.id=s.opened_by LEFT JOIN users uc ON uc.id=s.closed_by JOIN tenants t ON t.id=s.tenant_id
+      WHERE s.id=$1 AND s.tenant_id=$2`, [req.params.id, tid(req)]);
+    if (!s.rowCount) return bad(res, 404, 'Caixa não encontrado');
+    res.set('Cache-Control', 'no-store');
+    res.json({ session: s.rows[0], ...(await sessionDetail(tid(req), req.params.id)), generated_at: new Date().toISOString(), timezone: TZ });
   }));
 
   app.post('/api/store/cash/close', ...guard, route(async (req, res) => {
@@ -135,10 +174,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         uo.name opened_by_name,uc.name closed_by_name,
         (SELECT count(*)::int FROM sales x WHERE x.session_id=s.id AND x.canceled_at IS NULL) sales_count,
         (SELECT coalesce(sum(total_cents),0)::bigint FROM sales x WHERE x.session_id=s.id AND x.canceled_at IS NULL) sales_total_cents,
-        (SELECT count(*)::int FROM sales x WHERE x.session_id=s.id AND x.canceled_at IS NULL AND x.customer_id IS NOT NULL) linked_count
+        (SELECT count(*)::int FROM sales x WHERE x.session_id=s.id AND x.canceled_at IS NULL AND x.customer_id IS NOT NULL) linked_count,
+        (SELECT coalesce(sum(amount_cents),0)::bigint FROM cash_movements m WHERE m.session_id=s.id AND m.kind='expense' AND m.canceled_at IS NULL) expenses_total_cents
       FROM cash_sessions s JOIN users uo ON uo.id=s.opened_by LEFT JOIN users uc ON uc.id=s.closed_by
       WHERE s.tenant_id=$1 ORDER BY s.opened_at DESC LIMIT 30`, [tid(req)]);
-    res.json(r.rows.map(x => ({ ...x, sales_total_cents: Number(x.sales_total_cents) })));
+    res.json(r.rows.map(x => ({ ...x, sales_total_cents: Number(x.sales_total_cents), expenses_total_cents: Number(x.expenses_total_cents) })));
   }));
 
   // ---------- Clientes (busca rápida no caixa) ----------

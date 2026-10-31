@@ -108,3 +108,46 @@ test('caixa, vendas, fidelidade e mensagens do dia', { skip }, async () => {
     assert.ok(r.rows[0].n >= 4);
   } finally { await f.cleanup(); }
 });
+
+test('saídas do caixa, cancelamento de lançamento e relatório do dia', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, foreignToken } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    const session = await api('/store/cash/open', { method: 'POST', body: { opening_cents: 5000 } }, 201);
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 10000, payment_method: 'cash' } }, 201);
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 20000, payment_method: 'pix' } }, 201);
+
+    // Saída precisa de categoria ou descrição; sangria não aceita Pix.
+    assert.equal((await request('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 100 } })).status, 400);
+    assert.equal((await request('/store/cash/movements', { method: 'POST', body: { kind: 'withdrawal', amount_cents: 100, method: 'pix' } })).status, 400);
+
+    await api('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 3000, method: 'cash', category: 'Fornecedor / peças', note: 'Tela A12' } }, 201);
+    await api('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 7000, method: 'pix', category: 'Energia' } }, 201);
+    const wrong = await api('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 999, method: 'cash', category: 'Outros' } }, 201);
+    await api(`/store/cash/movements/${wrong.id}/cancel`, { method: 'POST', body: { reason: 'Valor errado' } });
+    await api('/store/cash/movements', { method: 'POST', body: { kind: 'withdrawal', amount_cents: 2000, note: 'Cofre' } }, 201);
+
+    const cash = await api('/store/cash');
+    const s = cash.summary;
+    assert.equal(s.sales_total_cents, 30000);
+    assert.equal(s.expenses_total_cents, 10000, 'saída cancelada não conta');
+    assert.equal(s.balance_cents, 20000);
+    assert.deepEqual(s.expenses_by_method, { cash: { count: 1, total_cents: 3000 }, pix: { count: 1, total_cents: 7000 } });
+    // gaveta: 50 + 100 (venda dinheiro) - 30 (saída dinheiro) - 20 (sangria) = 100
+    assert.equal(s.expected_cash_cents, 10000);
+    const canceled = cash.movements.find(m => m.id === wrong.id);
+    assert.equal(canceled.canceled_by_name, 'Owner'); assert.equal(canceled.cancel_reason, 'Valor errado');
+
+    const closed = await api('/store/cash/close', { method: 'POST', body: { counted_cash_cents: 10000 } });
+    assert.equal(closed.difference_cents, 0);
+    assert.equal((await request(`/store/cash/movements/${cash.movements[0].id}/cancel`, { method: 'POST', body: { reason: 'tarde' } })).status, 409);
+
+    const report = await api(`/store/cash/sessions/${session.id}/report`);
+    assert.equal(report.session.status, 'closed'); assert.equal(report.session.store_name, 'Loja de teste');
+    assert.equal(report.summary.balance_cents, 20000); assert.equal(report.sales.length, 2); assert.equal(report.movements.length, 4);
+    assert.equal((await request(`/store/cash/sessions/${session.id}/report`, { token: foreignToken })).status, 403, 'outra loja sem o recurso');
+    const hist = await api('/store/cash/sessions');
+    assert.equal(hist[0].expenses_total_cents, 10000);
+  } finally { await f.cleanup(); }
+});

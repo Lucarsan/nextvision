@@ -261,3 +261,56 @@ test('produto com modelos (película/capinha): pergunta o modelo, estoque por mo
     assert.equal((await api('/store/sales/' + s1.sale.id + '/receipt')).items[0].name, 'Película 3D Galaxy A12');
   } finally { await f.cleanup(); }
 });
+
+test('relatórios por e-mail: conteúdo, configuração, envio e agendamento sem duplicar', { skip }, async () => {
+  const http = await import('node:http');
+  const sent = [];
+  const mail = http.createServer((req, res) => { let b = ''; req.on('data', c => b += c); req.on('end', () => { sent.push({ auth: req.headers.authorization, body: JSON.parse(b) }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"id":"x"}'); }); });
+  await new Promise(r => mail.listen(0, '127.0.0.1', r));
+  process.env.RESEND_API_KEY = 'test-key'; process.env.EMAIL_FROM = 'Ficou Pronto <rel@example.test>'; process.env.RESEND_API_URL = `http://127.0.0.1:${mail.address().port}/emails`;
+  const { reportData, reportHtml, runDueReports } = await import('../src/reports.js');
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, db } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const pel = await api('/store/products', { method: 'POST', body: { name: 'Película 3D', barcode: 'P3D', price_cents: 2000, cost_cents: 300, ask_variant: true } }, 201);
+    await api('/store/products/' + pel.id + '/stock', { method: 'POST', body: { add: 10, variant_name: 'Galaxy A12', unit_cost_cents: 250 } });
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: pel.id, quantity: 2, variant_name: 'Galaxy A12' }] } }, 201);
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'cash', total_cents: 500, description: 'xerox' } }, 201);
+    await api('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 1500, method: 'cash', category: 'Alimentação', note: 'almoço' } }, 201);
+    const day = (await db.query("SELECT to_char(now() AT TIME ZONE 'America/Fortaleza','YYYY-MM-DD') d")).rows[0].d;
+    const d = await reportData(db.query.bind(db), tenant, 'daily', day);
+    assert.equal(d.sales_total, 4500); assert.equal(d.expenses_total, 1500); assert.equal(d.balance, 3000);
+    assert.equal(d.purchases_total, 2500); assert.equal(d.items_cost, 600, 'custo do cadastro no momento da venda');
+    assert.deepEqual(d.items.map(i => [i.name, i.qty]), [['Película 3D Galaxy A12', 2]]);
+    assert.deepEqual(d.restock.map(r => [r.name, r.variant, r.pending]), [['Película 3D', 'Galaxy A12', 2]]);
+    assert.equal(d.new_products.length, 1);
+    const html = reportHtml(d);
+    for (const t of ['Produtos vendidos', 'Saídas lançadas', 'Compras de estoque', 'Produtos novos cadastrados', 'Reposição', 'Película 3D Galaxy A12', 'almoço']) assert.ok(html.includes(t), t);
+    const m = reportHtml(await reportData(db.query.bind(db), tenant, 'monthly', day));
+    assert.match(m, /Total gasto no mês/);
+
+    // Configuração (dono) e prévia.
+    assert.equal((await request('/store/reports/send', { method: 'POST', body: { kind: 'daily' } })).status, 400, 'sem e-mail cadastrado');
+    await api('/store/reports/settings', { method: 'PATCH', body: { report_email: 'Dono@Example.test', report_daily: true, report_weekly: true, report_monthly: false } });
+    assert.equal((await api('/store/reports/settings')).report_email, 'dono@example.test');
+    const prev = await fetch(f.base + '/api/store/reports/preview?kind=weekly', { headers: { Authorization: 'Bearer ' + f.ownerToken } });
+    assert.equal(prev.status, 200); assert.match(await prev.text(), /RELATÓRIO SEMANAL/);
+    const nov = await f.addOperator(tenant, 'basic');
+    assert.equal((await request('/store/reports/preview', { token: nov.token })).status, 403);
+    assert.equal((await request('/internal/reports/run', { method: 'POST' })).status, 401);
+
+    // Agendador: sábado 31/10 às 18:00 locais (último dia do mês) → diário + semanal; mensal desligado. Rodar de novo não duplica.
+    const q2 = (sql, p) => db.query(sql, p);
+    await db.query("UPDATE tenants SET report_email=NULL WHERE id<>$1", [tenant]);
+    const r1 = await runDueReports(q2, new Date('2026-10-31T21:00:00Z'));
+    assert.deepEqual(r1.filter(x => x.tenant === tenant).map(x => x.kind).sort(), ['daily', 'weekly']);
+    const r2 = await runDueReports(q2, new Date('2026-10-31T21:10:00Z'));
+    assert.equal(r2.filter(x => x.tenant === tenant).length, 0);
+    const mine = sent.filter(x => x.body.to[0] === 'dono@example.test');
+    assert.equal(mine.length, 2); assert.equal(mine[0].auth, 'Bearer test-key'); assert.match(mine[0].body.subject, /Relatório (diário|semanal)/);
+    // Antes das 18h de sexta: nada.
+    assert.equal((await runDueReports(q2, new Date('2026-10-30T20:00:00Z'))).length, 0);
+  } finally { await f.cleanup(); mail.close(); }
+});

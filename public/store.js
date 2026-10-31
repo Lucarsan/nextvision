@@ -498,7 +498,9 @@ function settingsTabs(box, settings) {
   msgs.innerHTML = '<h2>Mensagens por ação</h2><p class="nv-help">Textos usados nos botões de WhatsApp. Variáveis: {cliente}, {item}, {loja}, {pedido}, {etapa} e {link}.</p><form id="templatesForm">' + Object.entries(TEMPLATE_LABELS).map(([k, label]) => '<label class="nv-field">' + label + '<textarea name="' + k + '" rows="2" maxlength="1000">' + safe(tpl[k] || DEFAULT_TEMPLATES[k]) + '</textarea></label>').join('') + '<button class="nv-button">Salvar mensagens</button><p id="templatesStatus" role="status"></p></form>';
   const qr = document.createElement('section'); qr.className = 'nv-card'; qr.id = 'qrCard'; qr.innerHTML = '<h2>QR code de atendimento</h2><p class="nv-help">Carregando…</p>';
   box.append(qr); loadQrCard(qr);
-  const tabs = [['Perfil', [identity, loc]], ['Mensagens', [msgs, ready]], ['Fidelidade', [loyalty, redeem]], ['QR code', [qr]]];
+  const rep = document.createElement('section'); rep.className = 'nv-card'; rep.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">Carregando…</p>';
+  box.append(rep); loadReportsCard(rep);
+  const tabs = [['Perfil', [identity, loc]], ['Mensagens', [msgs, ready]], ['Fidelidade', [loyalty, redeem]], ['QR code', [qr]], ['Relatórios', [rep]]];
   const bar = document.createElement('div'); bar.className = 'fp-tabs'; bar.setAttribute('role', 'tablist');
   box.prepend(bar); if (identity) identity.after(loc); else box.append(loc); if (ready) ready.before(msgs); else box.append(msgs);
   const select = name => { bar.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name))); tabs.forEach(([n, els]) => els.forEach(el => { if (el) el.hidden = n !== name; })); };
@@ -522,6 +524,28 @@ async function loadQrCard(card) {
   $('qrCopy').onclick = async () => { try { await navigator.clipboard.writeText(d.url); feedback('Link copiado.'); } catch { $('qrLink').select(); } };
   $('qrPrint').onclick = () => printQrPoster(d);
   $('qrForm').onsubmit = async e => { e.preventDefault(); try { await api('/store/qr', 'PATCH', { qr_message: e.currentTarget.elements.qr_message.value.trim() }); $('qrStatus').textContent = 'Mensagem salva.'; } catch (error) { $('qrStatus').textContent = error.message; } };
+}
+// Relatórios por e-mail: diário 18h, semanal no sábado 15h, mensal no último dia 18h.
+async function loadReportsCard(card) {
+  let d; try { d = await api('/store/reports/settings'); } catch (error) { card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">' + safe(error.message) + '</p>'; return; }
+  const ck = (k, label) => '<label class="nv-check" style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" name="' + k + '"' + (d[k] ? ' checked' : '') + '> ' + label + '</label>';
+  const runs = (d.last_runs || []).map(r => '<li>' + safe({ daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal' }[r.kind]) + ' ' + safe(r.period_key) + ': ' + (r.status === 'sent' ? 'enviado' : r.status === 'error' ? '<span style="color:#b42318">erro — ' + safe(r.error || '') + '</span>' : 'enviando') + '</li>').join('');
+  card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">Resumo automático com vendas, produtos vendidos, saídas, compras de estoque, produtos novos, reposição e balanço.</p>'
+    + (d.email_configured ? '' : '<p class="nv-help" style="color:#b42318">O envio de e-mail ainda não está ligado no servidor. Os relatórios ficam disponíveis em "Ver" até a central ativar o envio.</p>')
+    + '<form id="reportForm"><label class="nv-field">E-mail que recebe<input name="report_email" type="email" maxlength="200" value="' + safe(d.report_email || '') + '" placeholder="dono@exemplo.com"></label>'
+    + ck('report_daily', 'Diário — todo dia às 18h') + ck('report_weekly', 'Semanal — sábado às 15h') + ck('report_monthly', 'Mensal — último dia do mês às 18h')
+    + '<div class="nv-row" style="margin-top:8px"><button class="nv-button">Salvar</button></div><p role="status" class="nv-help" id="reportStatus"></p></form>'
+    + '<h3 style="margin:16px 0 6px">Ver ou enviar agora</h3><div class="nv-row">'
+    + ['daily', 'weekly', 'monthly'].map(k => '<button type="button" class="nv-button secondary" data-rep-view="' + k + '">Ver ' + { daily: 'hoje', weekly: 'semana', monthly: 'mês' }[k] + '</button>').join('')
+    + '<button type="button" class="nv-button secondary" id="reportSendNow">✉ Enviar o de hoje agora</button></div>'
+    + (runs ? '<h3 style="margin:16px 0 6px">Últimos envios</h3><ul class="nv-help">' + runs + '</ul>' : '');
+  $('reportForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { await api('/store/reports/settings', 'PATCH', { report_email: f.elements.report_email.value.trim(), report_daily: f.elements.report_daily.checked, report_weekly: f.elements.report_weekly.checked, report_monthly: f.elements.report_monthly.checked }); $('reportStatus').textContent = 'Salvo.'; } catch (error) { $('reportStatus').textContent = error.message; } };
+  card.querySelectorAll('[data-rep-view]').forEach(b => b.onclick = async () => {
+    const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para ver o relatório.', true); return; }
+    try { const r = await fetch('/api/store/reports/preview?kind=' + b.dataset.repView, { headers: { Authorization: 'Bearer ' + sessionStorage.getItem('nv_token') } }); const html = await r.text(); if (!r.ok) throw Error(JSON.parse(html).error || 'Erro'); w.document.write(html); w.document.close(); }
+    catch (error) { w.close(); feedback(error.message, true); }
+  });
+  $('reportSendNow').onclick = async () => { try { const r = await api('/store/reports/send', 'POST', { kind: 'daily' }); $('reportStatus').textContent = 'Enviado para ' + r.to + '.'; } catch (error) { $('reportStatus').textContent = error.message; } };
 }
 function printQrPoster(d) {
   const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir o cartaz.', true); return; }

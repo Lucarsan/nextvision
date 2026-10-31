@@ -299,7 +299,9 @@ test('relatórios por e-mail: conteúdo, configuração, envio e agendamento sem
     assert.equal(prev.status, 200); assert.match(await prev.text(), /RELATÓRIO SEMANAL/);
     const nov = await f.addOperator(tenant, 'basic');
     assert.equal((await request('/store/reports/preview', { token: nov.token })).status, 403);
-    assert.equal((await request('/internal/reports/run', { method: 'POST' })).status, 401);
+    assert.equal((await request('/internal/reports/run', { method: 'POST' })).status, 200, 'sem chave configurada o ping é aberto (só envia o que está no horário)');
+    // O ping usa a hora real; limpa o que ele possa ter enviado antes de simular o horário.
+    await db.query('DELETE FROM report_runs'); sent.length = 0;
 
     // Agendador: sábado 31/10 às 18:00 locais (último dia do mês) → diário + semanal; mensal desligado. Rodar de novo não duplica.
     const q2 = (sql, p) => db.query(sql, p);

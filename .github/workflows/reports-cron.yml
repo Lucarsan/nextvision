@@ -17,9 +17,8 @@ jobs:
           URL: ${{ vars.REPORTS_URL || 'https://nextvision-mgx6.onrender.com' }}
           KEY: ${{ secrets.REPORTS_CRON_KEY }}
         run: |
-          if [ -z "$KEY" ]; then echo "REPORTS_CRON_KEY não configurada"; exit 0; fi
           for i in 1 2 3; do
-            if curl -fsS --max-time 90 -X POST "$URL/api/internal/reports/run" -H "x-cron-key: $KEY"; then exit 0; fi
+            if curl -fsS --max-time 90 -X POST "$URL/api/internal/reports/run" ${KEY:+-H "x-cron-key: $KEY"}; then exit 0; fi
             sleep 20
           done
           exit 1

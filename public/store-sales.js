@@ -32,6 +32,8 @@
     if (!r.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { status: r.status });
     return data;
   }
+  // 558532130953 -> (85) 3213-0953; 5585999998888 -> (85) 99999-8888
+  const phoneBR = p => { let d = String(p || '').replace(/\D/g, ''); if (d.length >= 12 && d.startsWith('55')) d = d.slice(2); return d.length === 10 ? `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}` : d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : String(p || ''); };
   const centsText = c => (Number(c || 0) / 100).toFixed(2).replace('.', ',');
   const looksLikeCode = v => /^[!-~]{3,64}$/.test(v) && /\d/.test(v);
   // "12,50", "1.234,56" ou "12.5" → centavos
@@ -325,7 +327,7 @@
     if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     const body = cart.length
-      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })), discount_cents: Math.min(discountCents(cartGross()), Math.max(0, cartGross() - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
+      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })), discount_cents: Math.min(discountCents(cartGross()), Math.max(0, cartGross() - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
       : quickCart.length
         ? { items: quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
         : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
@@ -384,12 +386,37 @@
     } catch { /* sem som não impede a venda */ }
   }
 
-  function addToCart(p, quantity = 1) {
+  function addToCart(p, quantity = 1, variant = null) {
     if (quickCart.length) { feedback('Esta venda já tem itens frequentes (valor digitado). Registre-a ou clique em "Limpar" nos itens frequentes antes de bipar produtos.', true); beep(false); return false; }
-    const item = cart.find(i => i.id === p.id);
-    if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: p.stock_qty ?? null }); }
-    else cart.push({ id: p.id, name: p.name, barcode: p.barcode, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: p.stock_qty ?? null, quantity });
+    // Produto com modelos (código geral de película/capinha): pergunta o modelo antes de pôr na venda.
+    if (p.ask_variant && !variant) { variantPicker(p, v => addToCart(p, quantity, v)); return true; }
+    const vname = variant?.name || null;
+    const item = cart.find(i => i.id === p.id && (i.variant || null) === vname);
+    const stock = variant ? variant.stock_qty ?? null : p.stock_qty ?? null;
+    if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: stock }); }
+    else cart.push({ id: p.id, name: p.name, variant: vname, barcode: p.barcode, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: stock, quantity });
     drawCart(p.id); return true;
+  }
+  // Pergunta o modelo: sugere os mais vendidos e filtra enquanto digita; modelo novo fica salvo na venda.
+  function variantPicker(p, onPick) {
+    openDialog(`${header('Qual modelo? · ' + esc(p.name))}<form id="fsVar" autocomplete="off"><label class="nv-field">Modelo aplicado<input name="m" maxlength="80" placeholder="Ex.: Galaxy A12, iPhone 13…" required></label>
+      <div id="fsVarList" class="fs-results"></div><button class="nv-button">Pôr na venda</button><p role="status" class="nv-help"></p></form>`);
+    const f = $('fsVar'), input = f.elements.m, list = $('fsVarList'); let rows = [], timer;
+    const pick = v => { $('editorDialog').close(); onPick(v); beep(true); };
+    const load = async () => {
+      try { rows = await api(`/store/products/${p.id}/variants?q=` + encodeURIComponent(input.value.trim())); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected) return;
+      list.innerHTML = rows.slice(0, 12).map((v, n) => `<button type="button" data-fs-var="${n}"><b>${esc(v.name)}</b> <small>${v.stock_qty != null ? 'estoque ' + v.stock_qty + ' · ' : ''}${v.sold_count} vendida(s)</small></button>`).join('')
+        || `<p class="nv-help">${input.value.trim() ? `Modelo novo: "${esc(input.value.trim())}". Ele fica salvo para as próximas vendas.` : 'Nenhum modelo vendido ainda. Digite o modelo aplicado.'}</p>`;
+      list.querySelectorAll('[data-fs-var]').forEach(b => b.onclick = () => pick(rows[b.dataset.fsVar]));
+    };
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(load, 150); };
+    f.onsubmit = e => {
+      e.preventDefault(); const t = input.value.trim().replace(/\s+/g, ' ');
+      if (!t) { if (rows[0]) pick(rows[0]); else f.querySelector('[role=status]').textContent = 'Informe o modelo.'; return; }
+      pick(rows.find(v => v.name.toLowerCase() === t.toLowerCase()) || { name: t, stock_qty: null });
+    };
+    input.focus(); load();
   }
 
   // Desconto: em R$ ("5,00") ou em % ("10%") sobre a soma dos produtos.
@@ -411,7 +438,7 @@
     const disc = Math.min(discountCents(sub), Math.max(0, sub - 1)), total = sub - disc;
     const knownCost = cart.every(i => i.cost_cents != null), cost = cart.reduce((a, i) => a + (i.cost_cents || 0) * i.quantity, 0);
     const below = knownCost && cost > 0 && total < cost;
-    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.cost_cents != null ? ` <span class="fs-costcode" title="Código interno da loja">${costCode(i.cost_cents)}</span>` : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small></div>
+    out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}${i.variant ? ` <span class="fs-var">${esc(i.variant)}</span>` : ''}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.cost_cents != null ? ` <span class="fs-costcode" title="Código interno da loja">${costCode(i.cost_cents)}</span>` : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small></div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
       <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
       <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
@@ -483,9 +510,13 @@
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
       <label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label></div>
       <p class="nv-help" id="fsMargin"></p>
-      <label class="nv-field">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
+      <label class="fs-check"><input type="checkbox" name="ask_variant"${initial.ask_variant ? ' checked' : ''}> Código geral com modelos (película, capinha…): na venda, pergunta o modelo aplicado</label>
+      <label class="nv-field" id="fsStockField">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
+      <small class="nv-help" id="fsVarHelp">O estoque fica por modelo: use "+ Estoque" na lista de produtos e informe o modelo (ex.: 10 películas Galaxy A12).</small>
       <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsProd'), st = f.querySelector('[role=status]');
+    const syncVar = () => { const on = f.elements.ask_variant.checked; $('fsStockField').hidden = on; $('fsVarHelp').hidden = !on; };
+    f.elements.ask_variant.onchange = syncVar; syncVar();
     const showMargin = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value); const m = Number.isFinite(p) && Number.isFinite(c) ? margin(p, c) : null;
       $('fsMargin').innerHTML = m == null ? 'Com o custo, o caixa mostra até quanto dá para descontar sem prejuízo.' : `Lucro por unidade: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b> (${m}% do preço)`; };
     f.oninput = showMargin; showMargin();
@@ -502,7 +533,8 @@
       if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Estoque: use um número inteiro (ou deixe vazio).'; return; }
       if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
       try {
-        const body = { name, price_cents: price, cost_cents: cost, stock_qty: stock }; if (!initial.generated_barcode) body.barcode = barcode;
+        const askVariant = f.elements.ask_variant.checked;
+        const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant ? null : stock, ask_variant: askVariant }; if (!initial.generated_barcode) body.barcode = barcode;
         const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', body);
         $('editorDialog').close(); feedback(`Produto ${editing ? 'atualizado' : 'cadastrado'}: ${p.name} · ${brl(p.price_cents)}.`);
         if (onSaved) onSaved(p);
@@ -561,24 +593,63 @@
       <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label><button class="nv-button">🏷 Abrir etiquetas para imprimir</button></form>`);
     $('fsLab').onsubmit = e => { e.preventDefault(); printLabels(p, Number(e.currentTarget.elements.n.value) || 1); };
   }
-  function stockDialog(p, onDone) {
-    openDialog(`${header('Entrada de estoque')}<form id="fsStock"><p class="nv-help"><b>${esc(p.name)}</b> · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b></p>
-      <label class="nv-field">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label><small class="nv-help">Para corrigir para menos, use número negativo (ex.: −2).</small>
-      ${p.barcode ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
+  // Entrada de estoque (compra). Produto com modelos: informa o modelo. O custo entra no relatório de compras.
+  function stockDialog(p, onDone, variantName = '') {
+    openDialog(`${header('Entrada de estoque')}<form id="fsStock" autocomplete="off"><p class="nv-help"><b>${esc(p.name)}</b>${p.ask_variant ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · vendido e não reposto: <b>${p.restock_pending}</b>` : ''}</p>
+      ${p.ask_variant ? `<label class="nv-field">Modelo<input name="m" maxlength="80" required list="fsStockVars" value="${esc(variantName)}" placeholder="Ex.: Galaxy A12"></label><datalist id="fsStockVars"></datalist>` : ''}
+      <div class="fs-row"><label class="nv-field fs-grow">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label>
+      <label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
+      <small class="nv-help">Para corrigir para menos, use número negativo (ex.: −2). O custo entra no total de compras de estoque do relatório.</small>
+      ${p.barcode ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode && !p.ask_variant ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
       <button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
-    const f = $('fsStock'); f.elements.n.focus();
+    const f = $('fsStock');
+    if (p.ask_variant) { api(`/store/products/${p.id}/variants`).then(rows => { const dl = $('fsStockVars'); if (dl) dl.innerHTML = rows.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); (variantName ? f.elements.n : f.elements.m).focus(); }
+    else f.elements.n.focus();
     f.onsubmit = async e => {
-      e.preventDefault(); const n = Number(f.elements.n.value.replace('−', '-').trim());
-      if (!Number.isInteger(n) || n === 0) { f.querySelector('[role=status]').textContent = 'Informe a quantidade (número inteiro).'; return; }
-      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', { add: n }); feedback(`Estoque de ${r.name}: ${r.stock_qty}.`); if (f.elements.print?.checked && n > 0) printLabels(r, n); $('editorDialog').close(); onDone?.(); }
-      catch (err) { f.querySelector('[role=status]').textContent = err.message; }
+      e.preventDefault(); const n = Number(f.elements.n.value.replace('−', '-').trim()), st = f.querySelector('[role=status]');
+      if (!Number.isInteger(n) || n === 0) { st.textContent = 'Informe a quantidade (número inteiro).'; return; }
+      const costRaw = f.elements.cost.value.trim(), cost = costRaw ? parseMoney(costRaw) : null;
+      if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Custo inválido.'; return; }
+      const body = { add: n, unit_cost_cents: cost }; if (p.ask_variant) body.variant_name = f.elements.m.value.trim();
+      if (p.ask_variant && !body.variant_name) { st.textContent = 'Informe o modelo.'; return; }
+      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', body); feedback(r.variant ? `Estoque de ${r.name} ${r.variant.name}: ${r.variant.stock_qty}.` : `Estoque de ${r.name}: ${r.stock_qty}.`); if (f.elements.print?.checked && n > 0) printLabels(r, n); $('editorDialog').close(); onDone?.(); }
+      catch (err) { st.textContent = err.message; }
+    };
+  }
+  // Modelos de um produto (película, capinha): estoque e reposição por modelo.
+  async function variantsDialog(p, onBack) {
+    let rows = []; try { rows = await api(`/store/products/${p.id}/variants`); } catch (err) { feedback(err.message, true); return; }
+    openDialog(`${header('Modelos · ' + esc(p.name))}<div class="fs-row"><button type="button" class="nv-button" id="fsVarAdd">+ Entrada de estoque</button><button type="button" class="nv-button secondary" id="fsVarBack">← Produtos</button></div>
+      <p class="nv-help">Os modelos aparecem aqui ao vender ou ao dar entrada no estoque. Os mais vendidos são sugeridos primeiro no caixa.</p>
+      <div class="nv-list">${rows.map(v => `<div class="fs-sale"><div><b>${esc(v.name)}</b><br><small>Estoque: <b class="${v.stock_qty != null && v.stock_qty <= 0 ? 'fs-neg' : ''}">${v.stock_qty ?? '—'}</b> · vendidas: ${v.sold_count}${v.restock_pending ? ` · <span class="fs-neg">repor ${v.restock_pending}</span>` : ''}</small></div>
+        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-fs-vin="${esc(v.name)}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-fs-vdel="${v.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum modelo ainda.</p>'}</div>`);
+    const again = () => variantsDialog(p, onBack);
+    $('fsVarAdd').onclick = () => stockDialog(p, again); $('fsVarBack').onclick = onBack;
+    document.querySelectorAll('[data-fs-vin]').forEach(b => b.onclick = () => stockDialog(p, again, b.dataset.fsVin));
+    document.querySelectorAll('[data-fs-vdel]').forEach(b => b.onclick = async () => { if (!confirm('Tirar este modelo da lista de sugestões?')) return; try { await api(`/store/products/${p.id}/variants/${b.dataset.fsVdel}`, 'DELETE'); again(); } catch (err) { feedback(err.message, true); } });
+  }
+  // Reposição: o que foi vendido e ainda não teve entrada de estoque. Imprime para levar às compras.
+  async function restockTab(box) {
+    let rows = []; try { rows = await api('/store/stock/restock'); } catch (err) { box.textContent = err.message; return; }
+    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Vendido e ainda não reposto (some quando você dá entrada no estoque).</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>🖨 Imprimir lista de reposição</button></div>
+      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b><br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor. 👍</p>'}</div>`;
+    if ($('fsRestockPrint')) $('fsRestockPrint').onclick = () => {
+      const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
+      const total = rows.reduce((a, r) => a + (r.cost_cents || 0) * r.pending, 0);
+      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:22px}</style></head><body>
+        <h1>Reposição de estoque · ${esc(config?.name || '')}</h1><div>${new Date().toLocaleString('pt-BR')}</div>
+        <table><thead><tr><th class="ck">✓</th><th>Produto</th><th>Modelo</th><th class="n">Repor</th><th class="n">Estoque atual</th><th class="n">Custo estimado</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td class="ck">☐</td><td>${esc(r.name)}</td><td>${esc(r.variant || '')}</td><td class="n"><b>${r.pending}</b></td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—'}</td></tr>`).join('')}
+        </tbody></table><p><b>Total estimado: ${brl(total)}</b> (pelo custo cadastrado)</p><script>setTimeout(()=>print(),200)<\/script></body></html>`);
+      w.document.close();
     };
   }
 
   async function productsDialog(term = '', tab = 'list') {
-    openDialog(`${header('Produtos')}<div class="fs-tabs" role="tablist"><button type="button" role="tab" data-ptab="list" aria-selected="${tab === 'list'}">Produtos</button><button type="button" role="tab" data-ptab="gen" aria-selected="${tab === 'gen'}">🏷 Gerar códigos</button></div><div id="fsPTab"></div>`);
+    openDialog(`${header('Produtos')}<div class="fs-tabs" role="tablist"><button type="button" role="tab" data-ptab="list" aria-selected="${tab === 'list'}">Produtos</button><button type="button" role="tab" data-ptab="gen" aria-selected="${tab === 'gen'}">🏷 Gerar códigos</button><button type="button" role="tab" data-ptab="restock" aria-selected="${tab === 'restock'}">🔁 Reposição</button></div><div id="fsPTab"></div>`);
     document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
     const box = $('fsPTab');
+    if (tab === 'restock') return restockTab(box);
     if (tab === 'gen') {
       box.innerHTML = `<p class="nv-help">Para produto <b>sem código de barras</b>: o sistema cria o código, já cadastra o produto com o estoque e abre as etiquetas para imprimir (uma por unidade). Depois é só colar no produto: o leitor reconhece na venda e o estoque baixa sozinho.</p>
         <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="Ex.: Capinha Galaxy A12 transparente"></label>
@@ -615,12 +686,13 @@
       if (!list.isConnected) return;
       list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
         return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
-          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b></small></div>
-          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">🏷 Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
+          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant ? 'Estoque por modelo' : `Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
+          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">🏷 Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
       const byId = id => rows.find(p => p.id === id);
       list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(byId(b.dataset.fsEdit), reopen));
       list.querySelectorAll('[data-fs-stock]').forEach(b => b.onclick = () => stockDialog(byId(b.dataset.fsStock), reopen));
+      list.querySelectorAll('[data-fs-vars]').forEach(b => b.onclick = () => variantsDialog(byId(b.dataset.fsVars), reopen));
       list.querySelectorAll('[data-fs-lab]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsLab); labelsDialog(p, Math.max(1, p.stock_qty || 1)); });
       list.querySelectorAll('[data-fs-pdel]').forEach(b => b.onclick = async () => {
         const p = byId(b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
@@ -726,7 +798,7 @@
       .cancel{border:2px solid #000;font-weight:700;text-align:center;padding:4px;margin:6px 0;font-size:15px}.small{font-size:11px}
     </style></head><body>
       <div class="c store">${esc(r.store_name)}</div>
-      ${place || r.whatsapp ? `<div class="c small">${esc(place)}${place && r.whatsapp ? ' · ' : ''}${r.whatsapp ? 'WhatsApp ' + esc(r.whatsapp) : ''}</div>` : ''}
+      ${place || r.whatsapp ? `<div class="c small">${esc(place)}${place && r.whatsapp ? ' · ' : ''}${r.whatsapp ? 'WhatsApp ' + esc(phoneBR(r.whatsapp)) : ''}</div>` : ''}
       <div class="hr"></div><div class="c title">COMPROVANTE DE VENDA</div>
       ${r.canceled_at ? '<div class="cancel">VENDA CANCELADA</div>' : ''}
       <div class="row"><span>Venda nº ${r.sale_number}</span><span>${when}</span></div>
@@ -918,7 +990,7 @@
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
-  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller select{width:100%;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:var(--nv-surface,#fff)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

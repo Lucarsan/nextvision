@@ -289,13 +289,27 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }).strict();
   const dupBarcode = (e, res) => { if (e.code === '23505') { bad(res, 409, 'Já existe um produto com este código de barras'); return true; } return false; };
 
+  // Busca por nome: cada palavra pode estar em qualquer parte ("cabo tipo c" acha "Cabo USB Tipo-C").
+  // include_deleted=1 (com termo): traz também os excluídos, para reaproveitar o cadastro antigo na reposição.
   app.get('/api/store/products', ...guard, route(async (req, res) => {
-    const term = String(req.query.q || '').trim().slice(0, 80);
+    const term = String(req.query.q || '').trim().replace(/\s+/g, ' ').slice(0, 80);
     const kind = req.query.kind === 'part' ? 'part' : 'product';
-    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind=$3 AND
-        ($2='' OR fp_fold(name || ' ' || coalesce(device_model,'')) LIKE '%'||fp_fold($2)||'%' OR fp_fold(coalesce(device_model,'')) LIKE '%'||fp_fold($2)||'%' OR barcode=$2)
-      ORDER BY (barcode=$2) DESC NULLS LAST,name,device_model LIMIT 500`, [tid(req), term, kind]);
+    const words = term ? term.split(' ').filter(Boolean).slice(0, 8) : [];
+    const deleted = !!term && req.query.include_deleted === '1';
+    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND (active OR $5) AND kind=$3 AND
+        ($2='' OR barcode=$2 OR fp_fold(name || ' ' || coalesce(device_model,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
+      ORDER BY (barcode=$2) DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,name,device_model,updated_at DESC LIMIT 500`, [tid(req), term, kind, words, deleted]);
     res.set('Cache-Control', 'no-store'); res.json(r.rows);
+  }));
+  // Produto excluído volta para a lista com o cadastro antigo (nome, código, preços); o estoque recomeça do zero.
+  app.post('/api/store/products/:id/restore', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
+    try {
+      const r = await q(`UPDATE products SET active=true,stock_qty=CASE WHEN stock_qty IS NULL THEN NULL ELSE 0 END,restock_pending=0,updated_at=now()
+        WHERE id=$1 AND tenant_id=$2 AND NOT active RETURNING ${productFields}`, [req.params.id, tid(req)]);
+      if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
+      await audit(req, 'restore', 'product', r.rows[0].id); res.json(r.rows[0]);
+    } catch (e) { if (!dupBarcode(e, res)) throw e; }
   }));
   app.get('/api/store/products/barcode/:code', ...guard, route(async (req, res) => {
     const code = String(req.params.code || '').trim();

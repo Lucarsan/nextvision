@@ -398,7 +398,7 @@ async function loadSection(view) {
   try {
     if (view === 'orders') return await loadOrders(box, version);
     if (view === 'customers') return await loadCustomers(box, version);
-    if ((view === 'cash' || view === 'messages') && window.FPSales) return await window.FPSales.load(view, box, () => version === viewVersion);
+    if ((view === 'cash' || view === 'stock' || view === 'messages') && window.FPSales) return await window.FPSales.load(view, box, () => version === viewVersion);
     if (view === 'more') { box.innerHTML = '<section class="nv-card"><h2>Mais opções</h2><div class="nv-list">'+[...(window.FPSales?.moreItems()||[]),['customers','Clientes'],['processes','Processos'],['plan','Meu plano'],['settings','Configurações'],['support','Suporte']].map(([key,label])=>'<button class="nv-button secondary" data-view="'+key+'">'+label+'</button>').join('')+'</div></section>';return;}
     if (view === 'queues') { box.innerHTML = '<section class="nv-card"><h2>Fila de atendimento</h2><p class="nv-help">Atendimento por ordem de chegada. Arraste pelo ⋮⋮ para mudar a ordem.</p><div id="queueList" class="nv-list"></div></section>'; drawQueue(); return; }
     await loadEditor(view, box, version);

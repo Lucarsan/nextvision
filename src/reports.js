@@ -5,6 +5,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
+import { linkStats, duration } from './link-analytics.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const SCHEDULE = { daily: { hour: 18 }, weekly: { hour: 15, weekday: 6 }, monthly: { hour: 18 } };
@@ -97,8 +98,10 @@ export async function reportData(q, tenantId, kind, day) {
   const sup = name => { if (!bySupplier.has(name)) bySupplier.set(name, { name, services: 0, services_cost: 0, purchases: 0 }); return bySupplier.get(name); };
   for (const sv of services.rows) if (sv.supplier) { const x = sup(sv.supplier); x.services += sv.qty; x.services_cost += sv.cost || 0; }
   for (const b of buys.rows) if (b.supplier) sup(b.supplier).purchases += b.total;
+  // Acompanhamento dos clientes (links abertos, vídeo assistido). Se falhar, o relatório sai sem esta parte.
+  const engagement = await linkStats(q, { from: per.from, to: per.to, tenantId }).then(x => x.stores[0] || null).catch(() => null);
   return {
-    kind, day, period: per, store: t.rows[0] || {}, timezone: TZ,
+    kind, day, period: per, store: t.rows[0] || {}, timezone: TZ, engagement,
     sales: sales.rows, sales_total: salesTotal, discounts: sales.rows.reduce((a, s) => a + (s.discount_cents || 0), 0),
     by_method: byMethod, by_seller: bySeller.rows, by_day: byDay.rows, canceled: canceled.rows[0],
     items: items.rows, items_total: itemsTotal, items_cost: itemsCost, cost_known: costKnown, typed: typed.rows[0],
@@ -143,6 +146,11 @@ ${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}${kpi(services.le
 </tr></table>
 ${noCost.length && all.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
 
+${d.engagement && (d.engagement.links || d.engagement.opens) ? h2('Acompanhamento dos clientes') + `<table style="width:100%;border-collapse:separate;border-spacing:6px;margin:4px -6px 4px"><tr>
+${kpi('Pedidos com link', d.engagement.links)}${kpi('Aberturas do link', d.engagement.opens, '#c2410c')}${kpi('Pessoas acompanhando', d.engagement.people)}
+</tr><tr>
+${kpi('Links abertos', d.engagement.open_rate == null ? '—' : d.engagement.open_rate + '%')}${kpi('Voltaram para ver de novo', d.engagement.returns)}${kpi('Vídeo ao vivo assistido', duration(d.engagement.live_seconds))}
+</tr></table><p style="font-size:12px;color:#6b7280;margin:0 0 6px">Tempo médio na página: ${esc(duration(d.engagement.avg_visible_seconds))}${d.engagement.downloads ? ' · ' + d.engagement.downloads + ' vídeo(s) baixado(s)' : ''}${d.engagement.talks ? ' · ' + d.engagement.talks + ' conversa(s) pelo WhatsApp da loja' : ''}.</p>` : ''}
 ${h2('Balanço por forma de pagamento')}
 ${table(['Forma', R('Vendas'), R('Total')], Object.entries(d.by_method).map(([k, v]) => [esc(METHODS[k] || k), v.n, brl(v.total)]), 'Nenhuma venda no período.')}
 ${d.moves.withdrawal || d.moves.deposit ? `<p style="font-size:13px;color:#4b5563">${['withdrawal', 'deposit'].filter(k => d.moves[k]).map(k => `${MOVE[k]}: ${brl(d.moves[k].total)} (${d.moves[k].n})`).join(' · ')}</p>` : ''}

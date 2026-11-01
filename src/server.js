@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
-import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
+import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -45,7 +45,7 @@ const deviceAuth=route(async(req,res,next)=>{
  req.device=result.rows[0];next();
 });
 registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
-registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});
+registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});
 registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
@@ -394,7 +394,7 @@ app.delete('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)
   await c.query('COMMIT');res.json({ok:true});
  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
 }));
-app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.completed_at,o.external_reference,o.order_number,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
+app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.completed_at,o.external_reference,o.order_number,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,(SELECT count(*) FROM link_visits lv WHERE lv.order_id=o.id)::int link_opens,(SELECT count(DISTINCT lv.visitor_id) FROM link_visits lv WHERE lv.order_id=o.id)::int link_people FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({customer_id:uuid,process_id:uuid,reference:z.string().trim().max(70).default(''),details:orderDetails.default({})}),req,res);if(!v)return;
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
@@ -457,7 +457,7 @@ app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,lim
  const codeHash=crypto.createHash('sha256').update(code).digest('hex');
  const coupon=await client.query("INSERT INTO loyalty_redemptions(tenant_id,customer_id,code_hash,target_snapshot,reward_snapshot) VALUES($1,$2,$3,$4,$5) RETURNING id,issued_at",[o.tenant_id,o.customer_id,codeHash,o.loyalty_target,o.loyalty_reward]);
  await client.query('UPDATE loyalty_checkins SET redemption_id=$1 WHERE id=ANY($2::uuid[])',[coupon.rows[0].id,eligible.rows.map(x=>x.id)]);
- await client.query('COMMIT');res.status(201).json({code,issued_at:coupon.rows[0].issued_at,reward:o.loyalty_reward});
+ await client.query('COMMIT');void q("INSERT INTO link_events(tenant_id,order_id,kind) SELECT o.tenant_id,o.id,'loyalty_claim' FROM orders o WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL",[digestToken(req.params.token),req.params.token]).catch(()=>{});res.status(201).json({code,issued_at:coupon.rows[0].issued_at,reward:o.loyalty_reward});
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }));
 app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async(req,res)=>{
@@ -674,6 +674,7 @@ app.get('/api/public/orders/:token/recordings/:id/download',rateLimit({windowMs:
  const seconds=Math.min(6*3600,Math.max(1,Math.round((new Date(rec.ended_at)-new Date(rec.started_at))/1000)));
  const filename='pedido-'+(rec.order_number||'video')+'-etapa-'+(Number(rec.step_index)+1)+(Number(rec.visit_index)?'-parte-'+(Number(rec.visit_index)+1):'')+'.mp4';
  const link=edgeDownloadFor({origin:config.origin,streamPath,username:config.username,password:config.password,start:new Date(new Date(rec.started_at).getTime()+skew),seconds,filename});
+ void q("INSERT INTO link_events(tenant_id,order_id,kind) SELECT rec.tenant_id,rec.order_id,'video_download' FROM recordings rec WHERE rec.id=$1",[rec.id]).catch(()=>{});
  res.json({url:link.url,filename,expires_at:link.expiresAt,seconds});
 }));
 // Chamada pelo Worker a cada ~15 s por link: o pedido ainda pode ver esta câmera?

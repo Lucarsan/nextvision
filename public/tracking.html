@@ -64,6 +64,25 @@ const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'
 const cap=s=>{s=String(s??'').trim();return s?s[0].toLocaleUpperCase('pt-BR')+s.slice(1):s};
 const low=s=>String(s??'').trim().toLocaleLowerCase('pt-BR');
 const token=location.pathname.split('/').filter(Boolean).pop();
+// Medição anônima do acompanhamento: um número aleatório do aparelho (sem nome, telefone ou IP),
+// tempo com a página visível e tempo assistindo ao vivo. Enviado a cada 30 s e ao sair da página.
+const fpStats=(()=>{
+ const rid=()=>{try{return crypto.randomUUID()}catch{const b=crypto.getRandomValues(new Uint8Array(16));b[6]=b[6]&15|64;b[8]=b[8]&63|128;const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20)}};
+ let visitor;try{visitor=localStorage.getItem('fp_visitor');if(!/^[0-9a-f-]{36}$/.test(visitor||'')){visitor=rid();localStorage.setItem('fp_visitor',visitor)}}catch{visitor=rid()}
+ const visit=rid(),ua=navigator.userAgent||'';
+ const device=/iPad|Tablet/i.test(ua)?'tablet':/Mobi|Android|iPhone/i.test(ua)?'mobile':/Windows|Macintosh|Linux|CrOS/i.test(ua)?'desktop':'other';
+ const source=/whatsapp/i.test(document.referrer)?'whatsapp':document.referrer?'other':'direct';
+ let visible=0,live=0,lastSent=-1;
+ const url='/api/public/orders/'+encodeURIComponent(token)+'/visit';
+ const body=()=>JSON.stringify({visit,visitor,visible,live,device,source});
+ const send=beacon=>{if(lastSent===visible+live*100000&&beacon)return;lastSent=visible+live*100000;try{if(beacon&&navigator.sendBeacon){navigator.sendBeacon(url,new Blob([body()],{type:'application/json'}));return}fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body(),keepalive:true}).catch(()=>{})}catch{}};
+ setInterval(()=>{if(document.hidden)return;visible++;const v=window.__fpLiveVideo;if(v&&v.isConnected&&!v.paused&&!v.ended&&v.readyState>=3)live++;if(visible%30===0)send(false)},1000);
+ document.addEventListener('visibilitychange',()=>{if(document.hidden)send(true)});
+ addEventListener('pagehide',()=>send(true));
+ send(false);
+ return{visitor,event:kind=>{try{fetch('/api/public/orders/'+encodeURIComponent(token)+'/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,visitor}),keepalive:true}).catch(()=>{})}catch{}}};
+})();
+document.addEventListener('click',e=>{if(e.target.closest?.('#talkStore'))fpStats.event('talk_store')});
 let updating=false,lastHtml='',lastStepKey='';const openSteps=new Set();
 const NICHE={electronics:{label:'Assistência técnica',noun:'Seu aparelho',live:'Seu aparelho na bancada'},automotive:{label:'Oficina automotiva',noun:'Seu veículo',live:'Seu veículo ao vivo'},carwash:{label:'Lava-jato',noun:'Seu veículo',live:'Seu veículo ao vivo'},pet:{label:'Pet shop',noun:'Seu pet',live:'Seu pet ao vivo'},food:{label:'Alimentação',noun:'Seu pedido',live:'Seu pedido ao vivo'},general:{label:'Serviços',noun:'Seu pedido',live:'Ao vivo agora'}};
 const nicheOf=p=>NICHE[p.niche]||NICHE.general;
@@ -150,7 +169,7 @@ async function setupLivePlayer(){
  clearTimeout(liveRetryTimer);liveRetryTimer=null;
  if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null}
  if(liveVideo){liveVideo.onerror=null;liveVideo.onplaying=null;liveVideo.onended=null;if(liveVideo!==video){liveVideo.pause();liveVideo.removeAttribute('src');liveVideo.load();}}
- liveVideo=video;liveFailed=false;
+ liveVideo=video;window.__fpLiveVideo=video;liveFailed=false;
  if(!video)return;
  liveMessage(video,'Conectando à transmissão autorizada…');
  // A central diz de onde puxar: borda da Cloudflare (link assinado) ou proxy antigo.

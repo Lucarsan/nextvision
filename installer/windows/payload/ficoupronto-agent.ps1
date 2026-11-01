@@ -45,6 +45,9 @@ $central = 'aguardando'
 $recording = @{}
 $recordingStatus = @{ state = 'unknown'; detail = 'aguardando' }
 $nextRecordingSync = [datetime]::UtcNow
+# Backup: primeira conferencia 2 min depois de ligar; depois a cada 30 min (baixa so se o ultimo tem mais de 24 h).
+$backupStatus = Get-FpBackupStatus
+$nextBackup = [datetime]::UtcNow.AddMinutes(2)
 Log ('Agente ' + $paths.Version + ' iniciado com ' + @($config.cameras).Count + ' camera(s).')
 
 try {
@@ -112,6 +115,12 @@ try {
       catch { $recordingStatus = @{ state = 'degraded'; detail = 'erro na gravacao' }; Log ('Gravacao: ' + $_.Exception.Message) }
     }
 
+    if (-not $blocked -and $now -ge $nextBackup) {
+      $nextBackup = $now.AddMinutes(30)
+      try { $backupStatus = Sync-FpBackup $config $secrets.device_token; if ($backupStatus.state -ne 'ok') { Log ('Backup: ' + $backupStatus.detail) } }
+      catch { $backupStatus = @{ state = 'degraded'; detail = 'erro no backup' }; Log ('Backup: ' + $_.Exception.Message) }
+    }
+
     if ($now -ge $nextHeartbeat) {
       $camStates = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; state = $s.State; detail = [string]$s.Status } })
       $okCount = @($camStates | Where-Object { $_.state -eq 'ok' }).Count
@@ -123,6 +132,7 @@ try {
           tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
           publisher = @{ state = $(if ($camStates.Count -eq 0) { 'unknown' } elseif ($okCount -eq $camStates.Count) { 'ok' } elseif ($okCount -gt 0) { 'degraded' } else { 'down' }) }
           disk = @{ state = $(if ($free -ge 5) { 'ok' } else { 'degraded' }); detail = ([string]$free + ' GB livres') }
+          backup = @{ state = [string]$backupStatus.state; detail = [string]$backupStatus.detail }
         } }
       $r = Invoke-FpApi -Base $config.api_base -Method POST -Path '/api/connect/heartbeat' -Body $body -Token $secrets.device_token -TimeoutSec 15
       if ($r.Status -in @(401, 403)) { if (-not $blocked) { Log ('Central recusou o computador: ' + $r.Error) }; $blocked = $true; $nextHeartbeat = $now.AddSeconds(60) }
@@ -132,7 +142,7 @@ try {
     # Estado local para a tela de manutencao (sem segredos).
     if ($now -ge $nextStatus) {
       $nextStatus = $now.AddSeconds(2)
-      Write-NvJson $paths.Status @{ observed_at = $now.ToString('o'); version = $paths.Version; central = $central; recording = [string]$recordingStatus.detail
+      Write-NvJson $paths.Status @{ observed_at = $now.ToString('o'); version = $paths.Version; central = $central; recording = [string]$recordingStatus.detail; backup = [string]$backupStatus.detail
         recordings_free = $(try { [string][math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1) + ' GB livres no disco' } catch { '' })
         cameras = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; name = $_.name; host = $_.host; state = $s.State; detail = [string]$s.Status } }) }
     }

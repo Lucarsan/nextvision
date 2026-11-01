@@ -4,4 +4,4 @@ cloudflared.exe|https://github.com/cloudflare/cloudflared/releases/download/2026
 WinSW-x64.exe|https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe|05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da
 mediamtx.zip|https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_windows_amd64.zip|b2f5246b07cb72961df03b8d5e8cad43dc657bcf3f49a87bb031bdf22721af74
 # BtbN publica o 9.0 como "latest" (atualiza com correcoes): quando o hash mudar, conferir e atualizar aqui.
-ffmpeg.zip|https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip|10d786d8fbac2c4e78fe3f598bab64ecb78808d373effd41e04263b3e984e6aa
+ffmpeg.zip|https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip|3cfc8bfc41d2a01b6c98be8a37e212048e16dd3e71b869be48e214a74ee2bde1

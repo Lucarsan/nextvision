@@ -17,9 +17,12 @@ $script:StatusFile = Join-Path $script:DataDir 'status.json'
 $script:PilotStateFile = Join-Path $script:DataDir 'piloto-desativado.json'
 $script:ReportFile = Join-Path $script:DataDir 'relatorio-instalacao.txt'
 $script:RecordingsDir = Join-Path $script:DataDir 'gravacoes'
+# Backups da loja: arquivos .fpbak cifrados pela central (so a central abre). Ficam ao desinstalar.
+$script:BackupDir = Join-Path $script:DataDir 'backups'
+$script:BackupKeep = 30
 $script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
-$script:AgentVersion = '0.4.0'
+$script:AgentVersion = '0.5.0'
 $script:DefaultApi = 'https://app.ficoupronto.com'
 $script:Services = @(
   @{ Id = 'FicouPronto.MediaMTX'; Name = 'Ficou Pronto - Video local (MediaMTX)' },
@@ -30,7 +33,7 @@ $script:Services = @(
 function Get-FpPaths {
   return [pscustomobject]@{ Install = $script:InstallDir; Bin = $script:BinDir; Data = $script:DataDir; Secrets = $script:SecretDir
     Services = $script:ServiceDir; Logs = $script:LogDir; Config = $script:ConfigFile; Status = $script:StatusFile; Report = $script:ReportFile
-    PilotState = $script:PilotStateFile; Recordings = $script:RecordingsDir; Ffmpeg = (Join-Path $script:BinDir 'ffmpeg.exe'); MediaMtx = (Join-Path $script:BinDir 'mediamtx.exe')
+    PilotState = $script:PilotStateFile; Recordings = $script:RecordingsDir; Backups = $script:BackupDir; Ffmpeg = (Join-Path $script:BinDir 'ffmpeg.exe'); MediaMtx = (Join-Path $script:BinDir 'mediamtx.exe')
     Cloudflared = (Join-Path $script:BinDir 'cloudflared.exe'); WinSW = (Join-Path $script:BinDir 'WinSW-x64.exe'); Version = $script:AgentVersion }
 }
 
@@ -53,10 +56,12 @@ function Set-FpPrivateAcl([string]$Path) {
 }
 
 function Initialize-FpDirectories {
-  foreach ($d in @($script:DataDir, $script:SecretDir, $script:ServiceDir, $script:LogDir, $script:RecordingsDir)) { [IO.Directory]::CreateDirectory($d) | Out-Null }
+  foreach ($d in @($script:DataDir, $script:SecretDir, $script:ServiceDir, $script:LogDir, $script:RecordingsDir, $script:BackupDir)) { [IO.Directory]::CreateDirectory($d) | Out-Null }
   Set-FpPrivateAcl $script:SecretDir
   # Videos dos clientes: so SYSTEM (MediaMTX) e Administradores.
   Set-FpPrivateAcl $script:RecordingsDir
+  # Backups: so SYSTEM e Administradores (e, de qualquer forma, cifrados pela central).
+  Set-FpPrivateAcl $script:BackupDir
 }
 
 function Protect-FpBytes([byte[]]$Bytes) {
@@ -299,6 +304,45 @@ function Sync-FpRecordings($Config, [string]$Token, [hashtable]$Recording) {
   $active = @($Recording.Keys | Where-Object { $Recording[$_] }).Count
   if ($failed.Count) { return @{ state = 'degraded'; detail = 'falha ao gravar: ' + ($failed -join ', ') } }
   return @{ state = 'ok'; detail = $(if ($active) { 'gravando ' + $active + ' camera(s)' } else { 'sem atendimento em andamento' }) }
+}
+
+# ---------- Backup da loja ----------
+# Uma vez por dia baixa da central o backup cifrado da loja (.fpbak) e guarda os 30 mais recentes.
+# O arquivo e ilegivel fora da central; aqui so conferimos o formato, o tamanho e o SHA-256.
+function Get-FpBackupFiles { if (-not [IO.Directory]::Exists($script:BackupDir)) { return @() }; return @(Get-ChildItem -LiteralPath $script:BackupDir -Filter '*.fpbak' -File | Sort-Object LastWriteTimeUtc -Descending) }
+function Get-FpBackupStatus {
+  $last = Get-FpBackupFiles | Select-Object -First 1
+  if (-not $last) { return @{ state = 'unknown'; detail = 'nenhum backup ainda' } }
+  $age = ([datetime]::UtcNow - $last.LastWriteTimeUtc).TotalHours
+  $when = $last.LastWriteTime.ToString('dd/MM HH:mm')
+  return @{ state = $(if ($age -le 36) { 'ok' } else { 'degraded' }); detail = ('ultimo em ' + $when + ' (' + @(Get-FpBackupFiles).Count + ' guardados)') }
+}
+function Sync-FpBackup($Config, [string]$Token, [int]$EveryHours = 24) {
+  $last = Get-FpBackupFiles | Select-Object -First 1
+  if ($last -and ([datetime]::UtcNow - $last.LastWriteTimeUtc).TotalHours -lt $EveryHours) { return (Get-FpBackupStatus) }
+  [IO.Directory]::CreateDirectory($script:BackupDir) | Out-Null
+  $tmp = Join-Path $script:BackupDir ('baixando-' + [guid]::NewGuid().ToString('N') + '.tmp')
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  try {
+    $headers = @{ 'User-Agent' = 'FicouPronto-Agent/' + $script:AgentVersion; 'Authorization' = 'Bearer ' + $Token }
+    try { $r = Invoke-WebRequest -Uri ($Config.api_base.TrimEnd('/') + '/api/connect/backup') -Headers $headers -OutFile $tmp -PassThru -TimeoutSec 300 -UseBasicParsing }
+    catch {
+      $code = 0; $ex = $_.Exception
+      if ($ex.PSObject.Properties['Response'] -and $null -ne $ex.Response) { try { $code = [int]$ex.Response.StatusCode } catch { $code = 0 } }
+      if ($code -eq 429) { return (Get-FpBackupStatus) }
+      $s = Get-FpBackupStatus; $s.state = 'degraded'; $s.detail = ('falha ao baixar backup (' + $(if ($code) { 'erro ' + $code } else { 'sem conexao' }) + '); ' + $s.detail); return $s
+    }
+    $id = [string]$r.Headers['X-Backup-Id']; $sum = ([string]$r.Headers['X-Backup-Sha256']).ToLower()
+    $bytes = [IO.File]::ReadAllBytes($tmp)
+    $magic = if ($bytes.Length -ge 6) { [Text.Encoding]::ASCII.GetString($bytes, 0, 6) } else { '' }
+    $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLower()
+    if ($magic -ne "FPBK1`n" -or $sha -ne $sum -or -not $id) { $s = Get-FpBackupStatus; $s.state = 'degraded'; $s.detail = 'backup recebido incompleto; ' + $s.detail; return $s }
+    $name = 'ficoupronto-' + [datetime]::Now.ToString('yyyyMMdd-HHmmss') + '.fpbak'
+    [IO.File]::Move($tmp, (Join-Path $script:BackupDir $name))
+    @(Get-FpBackupFiles | Select-Object -Skip $script:BackupKeep) | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    [void](Invoke-FpApi -Base $Config.api_base -Method POST -Path ('/api/connect/backup/' + $id + '/saved') -Body @{ bytes = $bytes.Length; sha256 = $sha } -Token $Token -TimeoutSec 15)
+    return (Get-FpBackupStatus)
+  } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
 
 function Write-FpTunnelToken([string]$Token) {

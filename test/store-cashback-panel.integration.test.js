@@ -76,7 +76,7 @@ test('painel do caixa usa cashback e avisa vencimento', {
     assert.match(await page.locator('#fsTab').innerText(), /Maria Souza[\s\S]*R\$\s2,35 vence em 5 dias[\s\S]*aviso de 5 dias/);
     await page.screenshot(shot('cashback-avisos'));
     await page.locator('[data-fs-cb]').click();
-    await page.waitForSelector('text=Avisado ✓');
+    await page.waitForSelector('.fs-ok:has-text("Avisado")');
     const reminder = new URL((await page.evaluate(() => window.__opened))[1]).searchParams.get("text");
     assert.match(reminder, /^Olá, Maria! Você tem R\$\s2,35 de cashback na Loja de teste que vence em 5 dias/);
     await page.locator('#fsCbAll summary').click();

@@ -136,7 +136,7 @@ async function overview(){
   :['Tudo certo: todas as lojas funcionando e em dia',rows.length+' loja(s) acompanhadas','ok'];
  const kpi=(label,value,note,kind='')=>'<div class="ct-kpi"><span>'+safe(label)+'</span><strong>'+safe(value)+'</strong><em class="'+kind+'">'+safe(note)+'</em></div>';
  const list=(filter==='action'?needing:health);
- render('<section class="ct-answer '+answer[2]+'"><div class="ct-answer-icon" aria-hidden="true">'+(answer[2]==='ok'?'✓':'!')+'</div><div><strong>'+safe(answer[0])+'</strong><span>'+safe(answer[1])+'</span></div></section>'
+ render('<section class="ct-answer '+answer[2]+'"><div class="ct-answer-icon" aria-hidden="true">'+(answer[2]==='ok'?FPIcon('check'):FPIcon('alert'))+'</div><div><strong>'+safe(answer[0])+'</strong><span>'+safe(answer[1])+'</span></div></section>'
  +'<section class="ct-card ct-kpis">'
  +kpi('Lojas',rows.length,rows.filter(s=>s.status==='trial').length+' em teste')
  +kpi('Câmeras instaladas',camsTotal+'/'+camsPlan,'do total contratado')
@@ -172,7 +172,7 @@ const ticketStatus={open:['warn','Aberto'],in_progress:['muted','Em andamento'],
 async function supportPage(){
  const rows=await api('/master/support');
  const open=rows.filter(t=>t.status!=='resolved');
- render('<section class="ct-answer '+(open.length?'warn':'ok')+'"><div class="ct-answer-icon" aria-hidden="true">'+(open.length?'!':'✓')+'</div><div><strong>'+(open.length?open.length+' chamado'+(open.length>1?'s':'')+' aguardando':'Nenhum chamado aberto')+'</strong><span>'+rows.length+' no total</span></div></section>'
+ render('<section class="ct-answer '+(open.length?'warn':'ok')+'"><div class="ct-answer-icon" aria-hidden="true">'+(open.length?FPIcon('alert'):FPIcon('check'))+'</div><div><strong>'+(open.length?open.length+' chamado'+(open.length>1?'s':'')+' aguardando':'Nenhum chamado aberto')+'</strong><span>'+rows.length+' no total</span></div></section>'
  +'<section class="ct-card"><div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>#</th><th>Loja</th><th>Assunto</th><th>Categoria</th><th>Aberto</th><th>Situação</th><th></th></tr></thead><tbody>'
  +(rows.length?rows.map(t=>'<tr><td>'+t.number+'</td><td><div class="ct-store"><strong>'+safe(t.store)+'</strong><span>'+safe(t.author||'')+(t.contact_phone?' · '+safe(t.contact_phone):'')+'</span></div></td><td><strong>'+safe(t.subject)+'</strong><div class="ct-muted" style="max-width:420px;white-space:pre-wrap">'+safe(t.description)+'</div>'+(t.central_note?'<div class="ct-note">Resposta: '+safe(t.central_note)+'</div>':'')+'</td><td>'+safe(ticketCat[t.category]||t.category)+'</td><td>'+safe(ago(t.created_at))+'</td><td>'+chip(...ticketStatus[t.status])+'</td><td><button type="button" class="ct-link" data-ticket="'+safe(t.id)+'">Atualizar</button></td></tr>').join(''):'<tr><td colspan="7" class="ct-empty">Nenhum chamado ainda.</td></tr>')
  +'</tbody></table></div></section>');

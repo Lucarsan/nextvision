@@ -255,7 +255,7 @@ function openDialog(html, orderId = '') {
   const dialog = $('editorDialog'); dialog.innerHTML = html; dialog.dataset.orderId = orderId;
   if (!dialog.open) dialog.showModal();
 }
-const dialogHeader = title => `<div class="nv-heading"><h2 id="dialogTitle">${title}</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">✕</button></div>`;
+const dialogHeader = title => `<div class="nv-heading"><h2 id="dialogTitle">${title}</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">${FPIcon('x')}</button></div>`;
 async function editOrder(id) {
   const o = cachedOrders.find(row => row.id === id); if (!o) return;
   const customers = await api('/customers');
@@ -532,7 +532,7 @@ async function loadQrCard(card) {
     + (d.has_whatsapp ? '' : '<p class="nv-help" style="color:#b42318">Cadastre o WhatsApp da loja em Perfil → Endereço e contato para o QR funcionar.</p>')
     + '<div class="fp-qr-wrap"><img class="fp-qr-img" src="' + safe(d.qr_url) + '" alt="QR code de atendimento da loja" width="180" height="180"><div class="fp-qr-side">'
     + '<label class="nv-field">Link do QR<input id="qrLink" readonly value="' + safe(d.url) + '"></label>'
-    + '<div class="nv-row"><button type="button" class="nv-button" id="qrPrint">🖨 Imprimir cartaz</button><button type="button" class="nv-button secondary" id="qrCopy">Copiar link</button><a class="nv-button secondary" style="text-decoration:none" target="_blank" rel="noopener" href="' + safe(d.url) + '">Testar</a></div>'
+    + '<div class="nv-row"><button type="button" class="nv-button" id="qrPrint">' + FPIcon('printer') + 'Imprimir cartaz</button><button type="button" class="nv-button secondary" id="qrCopy">Copiar link</button><a class="nv-button secondary" style="text-decoration:none" target="_blank" rel="noopener" href="' + safe(d.url) + '">Testar</a></div>'
     + '<p class="nv-help">' + (d.new_last_24h ? '<b>' + d.new_last_24h + '</b> cliente(s) novo(s) pelo QR nas últimas 24 h.' : 'Nenhum cliente novo pelo QR nas últimas 24 h.') + '</p></div></div>'
     + '<form id="qrForm"><label class="nv-field">Mensagem que o cliente envia<textarea name="qr_message" rows="2" maxlength="500" placeholder="' + safe(d.default_message) + '">' + safe(d.qr_message || d.default_message) + '</textarea></label><small class="nv-help">Use {nome} (primeiro nome do cliente) e {loja}. Evite emojis: o WhatsApp do computador pode mostrá-los como "?".</small><div class="nv-row" style="margin-top:8px"><button class="nv-button">Salvar mensagem</button></div><p role="status" class="nv-help" id="qrStatus"></p></form>';
   $('qrCopy').onclick = async () => { try { await navigator.clipboard.writeText(d.url); feedback('Link copiado.'); } catch { $('qrLink').select(); } };
@@ -551,7 +551,7 @@ async function loadReportsCard(card) {
     + '<div class="nv-row" style="margin-top:8px"><button class="nv-button">Salvar</button></div><p role="status" class="nv-help" id="reportStatus"></p></form>'
     + '<h3 style="margin:16px 0 6px">Ver ou enviar agora</h3><div class="nv-row">'
     + ['daily', 'weekly', 'monthly'].map(k => '<button type="button" class="nv-button secondary" data-rep-view="' + k + '">Ver ' + { daily: 'hoje', weekly: 'semana', monthly: 'mês' }[k] + '</button>').join('')
-    + '<button type="button" class="nv-button secondary" id="reportSendNow">✉ Enviar o de hoje agora</button></div>'
+    + '<button type="button" class="nv-button secondary" id="reportSendNow">' + FPIcon('send') + 'Enviar o de hoje agora</button></div>'
     + (runs ? '<h3 style="margin:16px 0 6px">Últimos envios</h3><ul class="nv-help">' + runs + '</ul>' : '');
   $('reportForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { await api('/store/reports/settings', 'PATCH', { report_email: f.elements.report_email.value.trim(), report_daily: f.elements.report_daily.checked, report_weekly: f.elements.report_weekly.checked, report_monthly: f.elements.report_monthly.checked }); $('reportStatus').textContent = 'Salvo.'; } catch (error) { $('reportStatus').textContent = error.message; } };
   card.querySelectorAll('[data-rep-view]').forEach(b => b.onclick = async () => {
@@ -604,7 +604,7 @@ async function loadEditor(view, box, version) {
  const editorHtml=()=>{if(selStep>=current.steps.length)selStep=current.steps.length-1;const st=current.steps[selStep]||{camera:''};
   return '<form id="procEditor" class="fp-proc-cols">'
   +'<div class="fp-col fp-col-steps"><div class="fp-col-head">Etapas</div><label class="nv-field">Nome do processo<input name="name" required maxlength="120" value="'+safe(current.name)+'" placeholder="Ex.: Troca de tela"></label>'
-  +'<ol class="fp-steps3">'+current.steps.map((x,i)=>'<li class="'+(i===selStep?'active':'')+'" data-step-pick="'+i+'"><span class="fp-step-n">'+(i+1)+'</span><input aria-label="Nome da etapa '+(i+1)+'" data-step-name="'+i+'" required maxlength="120" value="'+safe(x.name)+'" placeholder="Nome da etapa"><span class="fp-step-cam">'+safe(camLabel(x.camera))+'</span><span class="fp-step-tools"><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="-1" aria-label="Subir etapa" '+(i===0?'disabled':'')+'>↑</button><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="1" aria-label="Descer etapa" '+(i===current.steps.length-1?'disabled':'')+'>↓</button><button type="button" class="fp-icon" data-step-del="'+i+'" aria-label="Remover etapa" '+(current.steps.length===1?'disabled':'')+'>✕</button></span></li>').join('')+'</ol>'
+  +'<ol class="fp-steps3">'+current.steps.map((x,i)=>'<li class="'+(i===selStep?'active':'')+'" data-step-pick="'+i+'"><span class="fp-step-n">'+(i+1)+'</span><input aria-label="Nome da etapa '+(i+1)+'" data-step-name="'+i+'" required maxlength="120" value="'+safe(x.name)+'" placeholder="Nome da etapa"><span class="fp-step-cam">'+safe(camLabel(x.camera))+'</span><span class="fp-step-tools"><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="-1" aria-label="Subir etapa" '+(i===0?'disabled':'')+'>'+FPIcon('up')+'</button><button type="button" class="fp-icon" data-step-move="'+i+'" data-dir="1" aria-label="Descer etapa" '+(i===current.steps.length-1?'disabled':'')+'>'+FPIcon('down')+'</button><button type="button" class="fp-icon" data-step-del="'+i+'" aria-label="Remover etapa" '+(current.steps.length===1?'disabled':'')+'>'+FPIcon('x')+'</button></span></li>').join('')+'</ol>'
   +'<button type="button" class="nv-button secondary" id="addStep" '+(current.steps.length>=30?'disabled':'')+'>+ Adicionar etapa</button></div>'
   +'<div class="fp-col fp-col-cams"><div class="fp-col-head">Câmera da etapa '+(selStep+1)+(st.name?' · '+safe(cap(st.name)):'')+'</div>'
   +'<div class="fp-cam-list" role="radiogroup" aria-label="Câmera da etapa">'

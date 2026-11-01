@@ -27,13 +27,13 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     // Olho: valores do caixa começam escondidos; mostrar/esconder fica salvo no navegador.
     const kpiColor = () => page.locator('.fs-kpis b').first().evaluate(el => getComputedStyle(el).color);
     assert.equal(await kpiColor(), 'rgba(0, 0, 0, 0)', 'valores escondidos por padrão');
-    await page.getByRole('button', { name: '👁 Mostrar valores' }).click();
+    await page.getByRole('button', { name: 'Mostrar valores' }).click();
     assert.notEqual(await kpiColor(), 'rgba(0, 0, 0, 0)');
     await page.locator('.nv-sidebar [data-view="messages"]').click();
     await page.locator('.nv-sidebar [data-view="cash"]').click();
     await page.waitForSelector('#fsSale');
     assert.notEqual(await kpiColor(), 'rgba(0, 0, 0, 0)', 'a escolha continua ao voltar para o caixa');
-    await page.getByRole('button', { name: '🙈 Esconder valores' }).click();
+    await page.getByRole('button', { name: 'Esconder valores' }).click();
     assert.equal(await kpiColor(), 'rgba(0, 0, 0, 0)');
 
     // Leitura sem clicar em nada: o produto entra na venda; bipar de novo soma a quantidade.
@@ -85,7 +85,7 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     const cash = await f.api('/store/cash');
     assert.equal(cash.sales[0].total_cents, 9500);
 
-    // Comprovante: ícone 🧾 na venda da lista (troco desta sessão aparece).
+    // Comprovante: ícone de recibo na venda da lista (troco desta sessão aparece).
     await page.getByRole('button', { name: 'Imprimir comprovante da venda 1' }).click();
     await page.waitForFunction(() => /Venda nº 1/.test(window.FPSales.lastReceiptHtml || ''));
     const receipt = await page.evaluate(() => window.FPSales.lastReceiptHtml);

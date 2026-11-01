@@ -213,6 +213,10 @@ test('QR code de atendimento cadastra cliente novo e abre o WhatsApp da loja', {
     assert.ok(list.some(c => c.name === 'João Lima' && c.phone === '85977771111'));
 
     assert.equal((await request(pub('/contact'), { method: 'POST', token: null, body: { name: 'X', phone: '123' } })).status, 400);
+    // Nome sem letras ou WhatsApp sem DDD válido não passam (a tela também trava o botão).
+    // (a rota aceita 8 envios por 10 min; por isso só dois casos aqui)
+    for (const body of [{ name: '1234', phone: '85988887777' }, { name: 'Maria', phone: '00988887777' }])
+      assert.equal((await request(pub('/contact'), { method: 'POST', token: null, body })).status, 400, JSON.stringify(body));
     assert.equal((await request('/public/stores/nao-existe/contact', { token: null })).status, 404);
 
     // Painel: link, prévia e mensagem personalizada.

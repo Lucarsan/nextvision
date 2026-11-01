@@ -42,12 +42,42 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     return new Map(r.rows.map(p => [p.customer_id, shape(p)]));
   }
 
+  // ---------- Cashback ----------
+  // Saldo = lotes não estornados, com sobra e ainda dentro da validade (último dia válido = expires_on, no fuso da loja).
+  // Datas saem como texto 'AAAA-MM-DD' para não mudarem de dia ao virar JSON.
+  const CB_ACTIVE = `reversed_at IS NULL AND remaining_cents>0 AND expires_on>=(now() AT TIME ZONE '${TZ.replace(/'/g, '')}')::date`;
+  const CB_CONFIG = 'cashback_enabled,cashback_percent,cashback_max_use_percent,cashback_valid_days,cashback_min_sale_cents,cashback_rules,cashback_reminder_message';
+  const cbShape = r => ({ balance_cents: r?.balance_cents || 0, next_expires_on: r?.next_on || null, next_expiring_cents: r?.next_cents || 0 });
+  async function cashbackFor(tenant, ids, client = { query: q }) {
+    if (!ids.length) return new Map();
+    const r = await client.query(`WITH l AS (SELECT customer_id,remaining_cents,expires_on FROM cashback_lots WHERE tenant_id=$1 AND customer_id=ANY($2::uuid[]) AND ${CB_ACTIVE}),
+        n AS (SELECT customer_id,min(expires_on) next_on FROM l GROUP BY 1)
+      SELECT l.customer_id,sum(l.remaining_cents)::int balance_cents,to_char(n.next_on,'YYYY-MM-DD') next_on,
+        (sum(l.remaining_cents) FILTER (WHERE l.expires_on=n.next_on))::int next_cents
+      FROM l JOIN n USING (customer_id) GROUP BY l.customer_id,n.next_on`, [tenant, ids]);
+    const by = new Map(r.rows.map(x => [x.customer_id, x]));
+    return new Map(ids.map(id => [id, cbShape(by.get(id))]));
+  }
+  // Percentual guardado como numeric(5,2): calcula em centésimos de ponto para não errar por arredondamento de ponto flutuante.
+  const cbEarn = (paid, percent) => Math.floor(paid * Math.round(Number(percent) * 100) / 10000);
+  const cbAllowed = (total, balance, maxPercent) => Math.max(0, Math.min(balance, Math.floor(total * maxPercent / 100), total - 1));
+  const money = c => 'R$ ' + (c / 100).toFixed(2).replace('.', ',');
+  // Distribui um abatimento entre os itens, proporcional ao valor de cada um, sem deixar item negativo.
+  function spread(items, amount) {
+    const base = items.reduce((a, x) => a + x.total_cents, 0); let left = amount;
+    if (!amount || !base) return;
+    items.forEach((x, i) => { const cut = Math.min(left, x.total_cents, i === items.length - 1 ? left : Math.round(amount * x.total_cents / base)); x.total_cents -= cut; left -= cut; });
+    for (const x of items) { if (!left) break; const cut = Math.min(left, x.total_cents); x.total_cents -= cut; left -= cut; }
+  }
+
   async function cashSummary(tenant, sessionId, client = { query: q }) {
     const totals = await client.query(`SELECT payment_method,count(*)::int n,coalesce(sum(total_cents),0)::bigint total
       FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY payment_method`, [sessionId, tenant]);
     const moves = await client.query(`SELECT kind,method,count(*)::int n,coalesce(sum(amount_cents),0)::bigint total FROM cash_movements
       WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY kind,method`, [sessionId, tenant]);
     const s = await client.query('SELECT opening_cents FROM cash_sessions WHERE id=$1', [sessionId]);
+    const cb = (await client.query(`SELECT coalesce(sum(cashback_used_cents),0)::bigint used,coalesce(sum(cashback_earned_cents),0)::bigint earned
+      FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL`, [sessionId, tenant])).rows[0];
     const by = Object.fromEntries(totals.rows.map(r => [r.payment_method, { count: r.n, total_cents: Number(r.total) }]));
     const sum = kind => moves.rows.filter(r => r.kind === kind).reduce((a, r) => a + Number(r.total), 0);
     const expensesBy = Object.fromEntries(moves.rows.filter(r => r.kind === 'expense').map(r => [r.method, { count: r.n, total_cents: Number(r.total) }]));
@@ -63,12 +93,13 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       expenses_total_cents: expenses,
       balance_cents: salesTotal - expenses,
       opening_cents: opening, deposits_cents: sum('deposit'), withdrawals_cents: sum('withdrawal'),
+      cashback_used_cents: Number(cb.used), cashback_earned_cents: Number(cb.earned),
       expected_cash_cents: opening + (by.cash?.total_cents || 0) + sum('deposit') - sum('withdrawal') - (expensesBy.cash?.total_cents || 0)
     };
   }
 
   async function sessionDetail(tenant, sessionId) {
-    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
+    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
         x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,COALESCE(sl.name,u.name) seller_name,
         COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents,
             'service',i.service,'device_model',i.device_model,'supplier_name',i.supplier_name,'unit_cost_cents',i.unit_cost_cents,'warranty_days',i.warranty_days) ORDER BY i.position)
@@ -89,11 +120,27 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // ---------- Configuração ----------
   app.get('/api/store/sales/config', ...staff, route(async (req, res) => {
     const r = await q(`SELECT sales_enabled,google_review_url,loyalty_enabled,loyalty_target,loyalty_reward,loyalty_rules,
-      loyalty_min_sale_cents,status_message,offer_message,name,slug FROM tenants WHERE id=$1`, [tid(req)]);
+      loyalty_min_sale_cents,status_message,offer_message,name,slug,${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)]);
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
-    res.json({ enabled: true, timezone: TZ, role: req.user.role, access_level: req.user.access_level, ...rest });
+    res.json({ enabled: true, timezone: TZ, role: req.user.role, access_level: req.user.access_level, ...rest, cashback_percent: Number(rest.cashback_percent) });
+  }));
+  // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
+  app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {
+    const v = valid(z.object({
+      cashback_enabled: z.boolean().optional(),
+      cashback_percent: z.number().gt(0).max(50).multipleOf(0.01).optional(),
+      cashback_max_use_percent: z.number().int().min(1).max(100).optional(),
+      cashback_valid_days: z.number().int().min(7).max(730).optional(),
+      cashback_min_sale_cents: cents.optional(),
+      cashback_rules: z.string().trim().max(400).optional(),
+      cashback_reminder_message: z.string().trim().max(1000).optional()
+    }).strict(), req, res); if (!v) return;
+    const keys = Object.keys(v); if (!keys.length) return bad(res, 400, 'Nada para salvar');
+    const r = await q(`UPDATE tenants SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1} RETURNING ${CB_CONFIG}`, [...keys.map(k => v[k]), tid(req)]);
+    await audit(req, 'update', 'cashback_settings', tid(req));
+    res.json({ ...r.rows[0], cashback_percent: Number(r.rows[0].cashback_percent) });
   }));
   app.patch('/api/store/sales/config', ...owner, route(async (req, res) => {
     const v = valid(z.object({
@@ -202,7 +249,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         (fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR ($3<>'' AND length($3)>=4 AND regexp_replace(coalesce(phone,''),'\\D','','g') LIKE '%'||$3||'%'))
       ORDER BY (fp_fold(name) LIKE fp_fold($2)||'%') DESC,name LIMIT 12`, [tid(req), term, digits]);
     const progress = await progressFor(tid(req), r.rows.map(x => x.id));
-    res.json(r.rows.map(x => ({ ...x, loyalty: progress.get(x.id) })));
+    const cashback = await cashbackFor(tid(req), r.rows.map(x => x.id));
+    res.json(r.rows.map(x => ({ ...x, loyalty: progress.get(x.id), cashback: cashback.get(x.id) })));
   }));
 
   app.get('/api/store/sales/customers/:id', ...guard, route(async (req, res) => {
@@ -214,7 +262,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       AND NOT EXISTS(SELECT 1 FROM sales s WHERE s.order_id=o.id AND s.canceled_at IS NULL) ORDER BY o.created_at DESC LIMIT 8`, [tid(req), req.params.id]);
     const recent = await q(`SELECT sale_number,total_cents,payment_method,description,created_at FROM sales WHERE tenant_id=$1 AND customer_id=$2 AND canceled_at IS NULL ORDER BY created_at DESC LIMIT 5`, [tid(req), req.params.id]);
     const progress = await progressFor(tid(req), [req.params.id]);
-    res.json({ ...c.rows[0], loyalty: progress.get(req.params.id), orders: orders.rows, recent_sales: recent.rows });
+    const cashback = (await cashbackFor(tid(req), [req.params.id])).get(req.params.id);
+    res.json({ ...c.rows[0], loyalty: progress.get(req.params.id), cashback, orders: orders.rows, recent_sales: recent.rows });
   }));
 
   app.patch('/api/store/sales/customers/:id/offers', ...guard, route(async (req, res) => {
@@ -527,8 +576,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       seller_id: uuid.optional(),
       payment_method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']),
       description: z.string().trim().max(300).default(''),
-      order_id: uuid.optional()
+      order_id: uuid.optional(),
+      // Saldo de cashback que o cliente quis usar nesta venda (abate do total; o resto é pago na forma escolhida).
+      cashback_use_cents: cents.optional()
     }).strict(), req, res); if (!v) return;
+    if (v.cashback_use_cents && !v.customer_id) return bad(res, 400, 'Cashback só pode ser usado por cliente já cadastrado');
     if ([v.customer_id, v.new_customer, v.anonymous || undefined].filter(Boolean).length !== 1) return bad(res, 400, 'Escolha o cliente da venda');
     if (v.order_id && !v.customer_id) return bad(res, 400, 'Pedido exige cliente');
     if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
@@ -605,9 +657,39 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (!description) description = auto.slice(0, 300);
         else if (items.some(x => x.service)) description = (auto + ' · ' + description).slice(0, 300);
       }
+      // Cashback usado: confere saldo e limite por compra, abate do total (e de cada item, como o desconto).
+      const cbCfg = (await c.query(`SELECT ${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)])).rows[0];
+      let cbUsed = 0, cbLots = [];
+      if (v.cashback_use_cents) {
+        if (!cbCfg.cashback_enabled) { await c.query('ROLLBACK'); return bad(res, 409, 'O cashback está desligado nas Configurações'); }
+        cbLots = (await c.query(`SELECT id,remaining_cents FROM cashback_lots WHERE tenant_id=$1 AND customer_id=$2 AND ${CB_ACTIVE}
+          ORDER BY expires_on,created_at,id FOR UPDATE`, [tid(req), customerId])).rows;
+        const allowed = cbAllowed(total, cbLots.reduce((a, l) => a + l.remaining_cents, 0), cbCfg.cashback_max_use_percent);
+        if (v.cashback_use_cents > allowed) { await c.query('ROLLBACK'); return bad(res, 400, allowed ? `O cliente pode usar no máximo ${money(allowed)} de cashback nesta venda. Atualize a venda.` : 'O cliente não tem cashback disponível para esta venda. Atualize a venda.'); }
+        cbUsed = v.cashback_use_cents; total -= cbUsed; spread(items, cbUsed);
+      }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
-      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id, sellerId])).rows[0];
+      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
+      if (cbUsed) {
+        const use = (await c.query('INSERT INTO cashback_uses(tenant_id,customer_id,sale_id,amount_cents) VALUES($1,$2,$3,$4) RETURNING id', [tid(req), customerId, sale.id, cbUsed])).rows[0];
+        let left = cbUsed; // consome primeiro o que vence antes
+        for (const l of cbLots) {
+          if (!left) break; const take = Math.min(left, l.remaining_cents); left -= take;
+          await c.query('UPDATE cashback_lots SET remaining_cents=remaining_cents-$1 WHERE id=$2', [take, l.id]);
+          await c.query('INSERT INTO cashback_use_lots(use_id,lot_id,amount_cents) VALUES($1,$2,$3)', [use.id, l.id, take]);
+        }
+      }
+      // Cashback ganho: sobre o valor pago (já sem desconto e sem o cashback usado). Só vale a partir da próxima compra.
+      if (customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents) {
+        const earned = cbEarn(total, cbCfg.cashback_percent);
+        if (earned >= 1) {
+          await c.query(`INSERT INTO cashback_lots(tenant_id,customer_id,sale_id,amount_cents,remaining_cents,percent_snapshot,expires_on)
+            VALUES($1,$2,$3,$4,$4,$5,(now() AT TIME ZONE $6)::date+$7::int)`, [tid(req), customerId, sale.id, earned, cbCfg.cashback_percent, TZ, cbCfg.cashback_valid_days]);
+          await c.query('UPDATE sales SET cashback_earned_cents=$1 WHERE id=$2', [earned, sale.id]);
+          sale.cashback_earned_cents = earned;
+        }
+      }
       const cq = (sql, params) => c.query(sql, params);
       for (const x of items) {
         const vr = x.vid ? { id: x.vid } : null;
@@ -633,14 +715,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       await c.query('COMMIT');
       const progress = customerId ? (await progressFor(tid(req), [customerId])).get(customerId) : null;
       const customer = customerId ? (await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1', [customerId])).rows[0] : null;
-      res.status(201).json({ sale, customer, customer_created: created, loyalty_counted: counted, loyalty: progress });
+      const cashback = customerId ? (await cashbackFor(tid(req), [customerId])).get(customerId) : null;
+      res.status(201).json({ sale, customer, customer_created: created, loyalty_counted: counted, loyalty: progress,
+        cashback: cashback && { ...cashback, used_cents: sale.cashback_used_cents, earned_cents: sale.cashback_earned_cents } });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 
   // Comprovante de uma venda (impressora térmica 80 mm). Não é documento fiscal.
   app.get('/api/store/sales/:id/receipt', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
-    const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
+    const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
         c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,COALESCE(sl.name,u.name) seller_name,
         t.name store_name,t.city,t.state,t.whatsapp,
         COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,'') || CASE WHEN i.service AND i.device_model IS NOT NULL THEN ' · ' || i.device_model ELSE '' END,
@@ -651,7 +735,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!r.rowCount) return bad(res, 404, 'Venda não encontrada');
     const sale = r.rows[0];
     const loyalty = sale.customer_id && !sale.canceled_at ? (await progressFor(tid(req), [sale.customer_id])).get(sale.customer_id) : null;
-    res.set('Cache-Control', 'no-store'); res.json({ ...sale, timezone: TZ, generated_at: new Date().toISOString(), loyalty: loyalty?.enabled ? loyalty : null });
+    const cbOn = (await q('SELECT cashback_enabled FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.cashback_enabled;
+    const cashback = cbOn && sale.customer_id && !sale.canceled_at ? (await cashbackFor(tid(req), [sale.customer_id])).get(sale.customer_id) : null;
+    res.set('Cache-Control', 'no-store'); res.json({ ...sale, timezone: TZ, generated_at: new Date().toISOString(), loyalty: loyalty?.enabled ? loyalty : null, cashback });
   }));
 
   app.post('/api/store/sales/:id/cancel', ...full, route(async (req, res) => {
@@ -660,6 +746,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const c = await db.connect();
     try {
       await c.query('BEGIN');
+      await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]); // mesma fila das vendas (saldo de cashback)
       const s = await c.query(`SELECT x.id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open' FOR UPDATE OF x`, [req.params.id, tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto'); }
       await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [req.user.id, v.reason, req.params.id]);
@@ -674,9 +761,18 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         SELECT tenant_id,product_id,variant_id,'cancel',quantity,unit_cost_cents,sale_id,$2 FROM sale_items WHERE sale_id=$1 AND product_id IS NOT NULL`, [req.params.id, req.user.id]);
       const removed = await c.query('DELETE FROM loyalty_checkins WHERE sale_id=$1 AND redemption_id IS NULL', [req.params.id]);
       const kept = await c.query('SELECT 1 FROM loyalty_checkins WHERE sale_id=$1', [req.params.id]);
+      // Cashback: devolve aos lotes o que a venda usou e anula o que ela gerou. Se o cliente já gastou parte do
+      // que esta venda gerou, essa parte não volta (fica informada na resposta).
+      const use = (await c.query('UPDATE cashback_uses SET reversed_at=now() WHERE sale_id=$1 AND reversed_at IS NULL RETURNING id,amount_cents', [req.params.id])).rows[0];
+      if (use) await c.query(`UPDATE cashback_lots l SET remaining_cents=l.remaining_cents+u.amount_cents FROM cashback_use_lots u
+        WHERE u.use_id=$1 AND l.id=u.lot_id AND l.reversed_at IS NULL`, [use.id]);
+      const lot = (await c.query(`UPDATE cashback_lots n SET reversed_at=now(),remaining_cents=0 FROM cashback_lots o
+        WHERE n.id=o.id AND n.sale_id=$1 AND n.reversed_at IS NULL RETURNING o.amount_cents,o.remaining_cents`, [req.params.id])).rows[0];
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'cancel', 'sale', req.params.id]);
       await c.query('COMMIT');
-      res.json({ canceled: true, loyalty_removed: removed.rowCount > 0, loyalty_already_redeemed: kept.rowCount > 0 });
+      res.json({ canceled: true, loyalty_removed: removed.rowCount > 0, loyalty_already_redeemed: kept.rowCount > 0,
+        cashback_returned_cents: use?.amount_cents || 0, cashback_removed_cents: lot?.amount_cents || 0,
+        cashback_already_spent_cents: lot ? lot.amount_cents - lot.remaining_cents : 0 });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 
@@ -686,24 +782,27 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.get('/api/store/messages/status', ...guard, route(async (req, res) => {
     const day = dayField.safeParse(req.query.day).success ? req.query.day : null;
     const r = await q(`WITH buys AS (
-        SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description
+        SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents
           FROM sales x WHERE x.tenant_id=$1 AND x.customer_id IS NOT NULL AND x.canceled_at IS NULL
           AND (x.created_at AT TIME ZONE $3)::date=COALESCE($2::date,(now() AT TIME ZONE $3)::date)
         UNION ALL
-        SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name'
+        SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0
           FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
           AND (o.completed_at AT TIME ZONE $3)::date=COALESCE($2::date,(now() AT TIME ZONE $3)::date)
       )
       SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
-        json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at) ORDER BY b.at) purchases,
+        json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents) ORDER BY b.at) purchases,
+        sum(b.cashback_earned_cents)::int cashback_earned_cents,
         (SELECT max(m.created_at) FROM customer_messages m WHERE m.tenant_id=c.tenant_id AND m.customer_id=c.id AND m.kind='status') last_status_at
       FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1
       GROUP BY c.id ORDER BY max(b.at) DESC`, [tid(req), day, TZ]);
     const progress = await progressFor(tid(req), r.rows.map(x => x.id));
+    const cashback = await cashbackFor(tid(req), r.rows.map(x => x.id));
     res.set('Cache-Control', 'no-store');
     res.json({
       day: day || (await q(`SELECT to_char(now() AT TIME ZONE $1,'YYYY-MM-DD') d`, [TZ])).rows[0].d,
-      customers: r.rows.map(x => ({ ...x, loyalty: progress.get(x.id), sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) }))
+      customers: r.rows.map(({ cashback_earned_cents, ...x }) => ({ ...x, loyalty: progress.get(x.id), cashback: { ...cashback.get(x.id), earned_cents: cashback_earned_cents || 0 },
+        sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) }))
     });
   }));
 
@@ -722,9 +821,34 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.set('Cache-Control', 'no-store'); res.json(rows);
   }));
 
+  // Avisos de cashback perto de vencer: um aviso por etapa (faltando 15, 10, 5 e 1 dia) para o saldo que vence primeiro.
+  // A etapa é a menor entre 15/10/5/1 que ainda cobre os dias que faltam; se uma etapa passou sem aviso, só a atual aparece.
+  // all=1 lista também quem tem saldo mas ainda não está perto de vencer.
+  const CB_STAGES = [1, 5, 10, 15];
+  app.get('/api/store/messages/cashback', ...guard, route(async (req, res) => {
+    const all = req.query.all === '1';
+    const r = await q(`WITH l AS (SELECT customer_id,remaining_cents,expires_on FROM cashback_lots WHERE tenant_id=$1 AND ${CB_ACTIVE}),
+        n AS (SELECT customer_id,min(expires_on) next_on,sum(remaining_cents)::int balance FROM l GROUP BY 1),
+        t AS (SELECT (now() AT TIME ZONE $2)::date d)
+      SELECT c.id,c.name,c.phone,n.balance balance_cents,to_char(n.next_on,'YYYY-MM-DD') expires_on,(n.next_on-t.d)::int days_left,
+        (SELECT sum(remaining_cents)::int FROM l WHERE l.customer_id=n.customer_id AND l.expires_on=n.next_on) expiring_cents
+      FROM n CROSS JOIN t JOIN customers c ON c.id=n.customer_id AND c.tenant_id=$1 AND c.deleted_at IS NULL
+      WHERE $3 OR n.next_on-t.d<=15 ORDER BY n.next_on,c.name`, [tid(req), TZ, all]);
+    const sent = await q(`SELECT customer_id,campaign,max(created_at) at FROM customer_messages WHERE tenant_id=$1 AND kind='cashback' AND created_at>now()-interval '30 days' GROUP BY 1,2`, [tid(req)]);
+    const sentKey = new Map(sent.rows.map(x => [x.customer_id + '|' + x.campaign, x.at]));
+    const totals = (await q(`SELECT coalesce(sum(remaining_cents),0)::bigint balance,count(DISTINCT customer_id)::int customers FROM cashback_lots WHERE tenant_id=$1 AND ${CB_ACTIVE}`, [tid(req)])).rows[0];
+    const rows = r.rows.map(x => {
+      const stage = x.days_left <= 15 ? CB_STAGES.find(m => x.days_left <= m) : null;
+      const campaign = stage ? `cb:${x.expires_on}:${stage}` : null, at = campaign ? sentKey.get(x.id + '|' + campaign) : null;
+      return { ...x, stage, campaign, sent: !!at, sent_at: at || null };
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ total_balance_cents: Number(totals.balance), customers_with_balance: totals.customers, customers: rows });
+  }));
+
   app.post('/api/store/messages/sent', ...guard, route(async (req, res) => {
-    const v = valid(z.object({ customer_id: uuid, kind: z.enum(['status', 'offer']), campaign: z.string().trim().max(64).optional() }).strict(), req, res); if (!v) return;
-    if (v.kind === 'offer' && !v.campaign) return bad(res, 400, 'Oferta sem identificação');
+    const v = valid(z.object({ customer_id: uuid, kind: z.enum(['status', 'offer', 'cashback']), campaign: z.string().trim().max(64).optional() }).strict(), req, res); if (!v) return;
+    if (v.kind !== 'status' && !v.campaign) return bad(res, 400, 'Mensagem sem identificação');
     const r = await q(`INSERT INTO customer_messages(tenant_id,customer_id,kind,campaign,created_by)
       SELECT $1,c.id,$3,$4,$5 FROM customers c WHERE c.id=$2 AND c.tenant_id=$1 RETURNING id,created_at`, [tid(req), v.customer_id, v.kind, v.campaign || null, req.user.id]);
     if (!r.rowCount) return bad(res, 404, 'Cliente não encontrado');

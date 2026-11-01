@@ -21,7 +21,8 @@
   const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
   const MOVE_LABEL = { expense: 'Saída', withdrawal: 'Sangria', deposit: 'Suprimento' };
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
-  const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
+  const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\n{cashback}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
+  const DEFAULT_CB_REMINDER = 'Olá, {cliente}! Você tem {valor} de cashback na {loja} que vence {quando}. Aproveite para usar na sua próxima compra!\n\n{regras}';
   let config = null, saleCustomer = null, lastSale = null, quickItems = null, quickCart = [];
   const basic = () => config?.access_level === 'basic';
   let cart = []; // [{ id, name, barcode, price_cents, quantity }] — produtos lidos pelo leitor na venda em montagem
@@ -57,13 +58,45 @@
     if (l.complete) return `Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
     return `Cartão fidelidade: ${l.checkins} de ${l.target} compras. ${l.remaining === 1 ? 'Falta 1 compra' : 'Faltam ' + l.remaining + ' compras'} para ganhar: ${l.reward}.` + rules;
   }
+  // ---------------- Cashback ----------------
+  const ymdShort = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
+  const cbOn = () => !!config?.cashback_enabled;
+  const daysText = d => d % 30 === 0 ? (d === 30 ? '1 mês' : d / 30 + ' meses') : d + ' dias';
+  const pctText = p => Number(p).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
+  // Mesmo cálculo do servidor: limite por compra, saldo disponível e pelo menos R$ 0,01 a pagar.
+  const cbAllowed = (total, balance) => Math.max(0, Math.min(balance || 0, Math.floor(total * (config?.cashback_max_use_percent || 0) / 100), total - 1));
+  function cashbackRules() {
+    if (!cbOn()) return '';
+    const min = config.cashback_min_sale_cents ? ` Vale para compras a partir de ${brl(config.cashback_min_sale_cents)}.` : '';
+    return `Como funciona: ${pctText(config.cashback_percent)} do valor de cada compra volta para você em cashback, válido por ${daysText(config.cashback_valid_days)}. Ele pode pagar até ${config.cashback_max_use_percent}% de uma nova compra.${min}` + (config.cashback_rules ? ' ' + config.cashback_rules : '');
+  }
+  // Texto do cashback na mensagem do dia: quanto ganhou hoje, saldo em reais e até quando vale.
+  function cashbackText(cb) {
+    if (!cbOn() || !cb) return '';
+    const earned = cb.earned_cents || 0, bal = cb.balance_cents || 0, lines = [];
+    if (earned > 0) lines.push(`Você ganhou ${brl(earned)} de cashback nesta compra.`);
+    if (bal > 0) {
+      const when = cb.next_expires_on ? (cb.next_expiring_cents < bal ? ` (${brl(cb.next_expiring_cents)} vence em ${ymdShort(cb.next_expires_on)})` : `, válido até ${ymdShort(cb.next_expires_on)}`) : '';
+      lines.push(`Seu saldo de cashback é ${brl(bal)} para usar em compras aqui na loja${when}.`);
+    }
+    if (!lines.length) return '';
+    return lines.join(' ') + '\n' + cashbackRules();
+  }
+  const cbBadge = cb => cbOn() && cb?.balance_cents > 0 ? `<span class="fs-cb-badge" title="Saldo de cashback">💰 ${brl(cb.balance_cents)}</span>` : '';
+  const cbWhen = r => r.days_left <= 0 ? 'hoje' : r.days_left === 1 ? 'amanhã' : `em ${r.days_left} dias (${ymdShort(r.expires_on)})`;
+  const reminderMessage = r => render(config.cashback_reminder_message || DEFAULT_CB_REMINDER, {
+    cliente: greetName(r.name) || 'tudo bem', loja: config.name || 'loja', valor: brl(r.expiring_cents), saldo: brl(r.balance_cents),
+    quando: cbWhen(r), vence: ymdShort(r.expires_on), dias: r.days_left, regras: cashbackRules()
+  });
+
   function render(template, values) {
     let lines = template.split('\n');
     if (!values.avaliacao) lines = lines.filter(line => !line.includes('{avaliacao}'));
     return lines.join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
   }
-  const statusMessage = c => render(config.status_message || DEFAULT_STATUS, {
-    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty), avaliacao: config.google_review_url || '',
+  const statusTemplate = () => { const t = config.status_message || DEFAULT_STATUS; return t.includes('{cashback}') ? t : t.includes('{fidelidade}') ? t.replace('{fidelidade}', '{fidelidade}\n\n{cashback}') : t + '\n\n{cashback}'; };
+  const statusMessage = c => render(statusTemplate(), {
+    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
     compras: c.loyalty?.checkins ?? '', meta: c.loyalty?.target ?? '', faltam: c.loyalty?.remaining ?? '', premio: c.loyalty?.reward ?? '', regras: config.loyalty_rules || ''
   });
   const offerMessage = (c, text) => `Olá, ${greetName(c.name) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;
@@ -98,7 +131,7 @@
     const s = data.session, sum = data.summary;
     const methods = Object.entries(sum.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('') || '<span class="nv-help">Nenhuma venda ainda.</span>';
     const saleRow = x => { const svc = (x.items || []).find(i => i.service);
-      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">🔧 Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
+      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">🔧 Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
         <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
@@ -122,6 +155,7 @@
           <div id="fsSvc" data-only="service"></div>
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
+          <div id="fsCbBox" aria-live="polite"></div>
           <div class="fs-quick" id="fsQuick" data-only="product"></div>
           <div class="fs-row" data-only="product"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00"></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
@@ -135,7 +169,8 @@
     const sf = $('fsSale');
     const updChange = () => {
       const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
-      const out = $('fsChangeOut'), total = currentTotal(), got = parseMoney(sf.elements.received.value);
+      drawCashbackBox();
+      const out = $('fsChangeOut'), total = payable(), got = parseMoney(sf.elements.received.value);
       if (!cash || !Number.isFinite(got)) { out.textContent = ''; return; }
       if (!Number.isFinite(total) || total <= 0) { out.textContent = 'Informe o valor da venda.'; return; }
       const d = got - total;
@@ -161,7 +196,8 @@
     box.querySelectorAll('[data-fs-receipt]').forEach(b => b.onclick = () => printReceipt(b.dataset.fsReceipt));
     box.querySelectorAll('[data-fs-cancel]').forEach(b => b.onclick = async () => {
       const reason = prompt('Motivo do cancelamento (ex.: lançada em dobro):'); if (!reason || reason.trim().length < 3) return;
-      try { const r = await api(`/store/sales/${b.dataset.fsCancel}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda cancelada.' + (r.loyalty_already_redeemed ? ' A compra já tinha sido usada num prêmio e continua no histórico do cartão.' : '')); loadCash(box, alive); }
+      try { const r = await api(`/store/sales/${b.dataset.fsCancel}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda cancelada.' + (r.loyalty_already_redeemed ? ' A compra já tinha sido usada num prêmio e continua no histórico do cartão.' : '')
+        + (r.cashback_returned_cents ? ` Voltaram ${brl(r.cashback_returned_cents)} de cashback para o cliente.` : '') + (r.cashback_removed_cents ? ` Saiu o cashback de ${brl(r.cashback_removed_cents)} que a venda gerou${r.cashback_already_spent_cents ? ` (${brl(r.cashback_already_spent_cents)} já tinham sido usados pelo cliente)` : ''}.` : '')); loadCash(box, alive); }
       catch (err) { feedback(err.message, true); }
     });
   }
@@ -196,9 +232,9 @@
     const box = $('fsCustomerBox'); if (!box) return;
     if (saleCustomer?.id || saleCustomer?.anonymous) {
       const c = saleCustomer;
-      box.innerHTML = `<div class="fs-picked"><div><b>${c.anonymous ? 'Venda sem cliente' : esc(c.name)}</b>${c.phone ? ' · ' + esc(c.phone) : ''}${progressBar(c.loyalty)}</div><button type="button" class="nv-button secondary fs-small" id="fsChange">Trocar</button></div>`;
-      $('fsChange').onclick = () => { saleCustomer = null; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; };
-      return;
+      box.innerHTML = `<div class="fs-picked"><div><b>${c.anonymous ? 'Venda sem cliente' : esc(c.name)}</b>${c.phone ? ' · ' + esc(c.phone) : ''} ${cbBadge(c.cashback)}${progressBar(c.loyalty)}</div><button type="button" class="nv-button secondary fs-small" id="fsChange">Trocar</button></div>`;
+      $('fsChange').onclick = () => { saleCustomer = null; cbWanted = false; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; $('fsSale')?.dispatchEvent(new Event('input')); };
+      drawCashbackBox(); return;
     }
     if (saleCustomer?.isNew) {
       box.innerHTML = `<div class="fs-row"><input id="fsNewName" placeholder="Nome do cliente" maxlength="120"><input id="fsNewPhone" placeholder="WhatsApp (85 9…)" inputmode="tel" maxlength="30"></div><button type="button" class="nv-button secondary fs-small" id="fsBack">Buscar cliente cadastrado</button>`;
@@ -212,7 +248,7 @@
       if (term.length < 2) { out.innerHTML = ''; return; }
       try {
         const rows = await api('/store/sales/customers?q=' + encodeURIComponent(term));
-        out.innerHTML = rows.map(r => `<button type="button" data-fs-pick="${r.id}"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem telefone')}</small>${progressBar(r.loyalty)}</button>`).join('') || '<p class="nv-help">Nenhum cliente encontrado. Use "+ Cliente novo".</p>';
+        out.innerHTML = rows.map(r => `<button type="button" data-fs-pick="${r.id}"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem telefone')}</small> ${cbBadge(r.cashback)}${progressBar(r.loyalty)}</button>`).join('') || '<p class="nv-help">Nenhum cliente encontrado. Use "+ Cliente novo".</p>';
         out.querySelectorAll('[data-fs-pick]').forEach(b => b.onclick = () => pick(b.dataset.fsPick));
       } catch (err) { out.textContent = err.message; }
     }, 220); };
@@ -220,9 +256,29 @@
     $('fsAnon').onclick = () => { saleCustomer = { anonymous: true }; drawCustomerPicker(); };
   }
   async function pick(id) {
-    const c = await api('/store/sales/customers/' + id); saleCustomer = c; drawCustomerPicker();
+    const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker(); $('fsSale')?.dispatchEvent(new Event('input'));
     const box = $('fsOrderBox');
     box.innerHTML = c.orders.length ? `<label class="nv-field">É pagamento de um pedido de serviço? (opcional)<select id="fsOrder"><option value="">Não, venda avulsa</option>${c.orders.map(o => `<option value="${o.id}">Pedido ${esc(o.order_number || '')} · ${esc(o.details?.model || o.details?.brand || o.process || '')} · ${o.status === 'completed' ? 'finalizado' : 'em andamento'} · ${dmy(o.created_at)}</option>`).join('')}</select><small>Pedido de serviço já conta no cartão quando é finalizado; a venda dele não conta de novo.</small></label>` : '';
+  }
+
+  // ---------------- Cashback na venda ----------------
+  // Cliente com saldo: o operador pergunta se quer usar. Marcado, abate até o limite por compra
+  // e o cliente paga só a diferença. O que sobrar continua acumulado.
+  let cbWanted = false;
+  const cbBalance = () => cbOn() && saleCustomer?.id ? saleCustomer.cashback?.balance_cents || 0 : 0;
+  const cbUse = () => { const t = currentTotal(); return cbWanted && Number.isFinite(t) && t > 0 ? cbAllowed(t, cbBalance()) : 0; };
+  const payable = () => { const t = currentTotal(); return Number.isFinite(t) ? t - cbUse() : t; };
+  function drawCashbackBox() {
+    const box = $('fsCbBox'); if (!box) return;
+    const bal = cbBalance(); if (!bal) { box.innerHTML = ''; box.dataset.html = ''; return; }
+    const cb = saleCustomer.cashback, t = currentTotal(), can = Number.isFinite(t) && t > 0 ? cbAllowed(t, bal) : 0, use = cbUse();
+    const when = cb.next_expires_on ? `${cb.next_expiring_cents < bal ? brl(cb.next_expiring_cents) + ' vence em' : 'Vale até'} ${ymdShort(cb.next_expires_on)}` : '';
+    const html = `<div class="fs-cb"><div><b>💰 Cashback disponível: ${brl(bal)}</b><small>${when}</small></div>
+      <label class="fs-check"><input type="checkbox" id="fsCbUse" ${cbWanted ? 'checked' : ''} ${can ? '' : 'disabled'}> ${can ? `Usar cashback nesta venda: <b>− ${brl(can)}</b>` : 'Informe o valor da venda para usar o cashback'}</label>
+      ${use ? `<div class="fs-cb-pay">A pagar: <b>${brl(t - use)}</b> <small>(${brl(t)} − ${brl(use)} de cashback${bal - use > 0 ? ` · fica ${brl(bal - use)} de saldo` : ''})</small></div>` : can && can < bal ? `<small class="nv-help">Limite: até ${config.cashback_max_use_percent}% do valor da compra.</small>` : ''}</div>`;
+    if (box.dataset.html === html) return; // evita redesenhar (e perder o foco) a cada tecla
+    box.dataset.html = html; box.innerHTML = html;
+    const cbx = $('fsCbUse'); if (cbx) cbx.onchange = () => { cbWanted = cbx.checked; $('fsSale')?.dispatchEvent(new Event('input')); };
   }
 
   // ---------------- Itens frequentes ----------------
@@ -334,7 +390,8 @@
     if (service) { const err = serviceError(); if (err) { status.textContent = err; return; } }
     if (!Number.isFinite(total) || total <= 0) { status.textContent = service ? 'Informe o preço de venda do serviço.' : 'Informe o valor da venda.'; return; }
     const received = f.elements.method.value === 'cash' && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
-    if (received != null && (!Number.isFinite(received) || received < total)) { status.textContent = 'O valor recebido é menor que o valor da venda.'; return; }
+    const toPay = payable();
+    if (received != null && (!Number.isFinite(received) || received < toPay)) { status.textContent = 'O valor recebido é menor que o valor a pagar.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     const body = service ? serviceBody(f.elements.method.value)
       : cart.length
@@ -345,12 +402,12 @@
     const noPrice = quickCart.find(x => x.unit == null);
     if (!service && !cart.length && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
     const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
-    if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; }
+    if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0) body.cashback_use_cents = use; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${service ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrado${service ? '' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -361,10 +418,11 @@
     const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
     if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
     const note = s.loyalty?.enabled ? (s.loyalty_counted ? 'Somou 1 compra no cartão.' : s.sale.order_id ? 'Pagamento de pedido: conta no cartão quando o pedido é finalizado.' : 'Abaixo do valor mínimo: não somou no cartão.') : '';
-    box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${esc(c.name)}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${progressBar(s.loyalty)}</div>
+    const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
+    box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${esc(c.name)}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">💰 ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
       <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
     wireReceipt();
-    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
+    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
   }
 
@@ -1244,10 +1302,12 @@
       ${r.order_number ? `<div>Pedido nº ${esc(r.order_number)}</div>` : ''}
       <div class="hr"></div>${items}<div class="hr"></div>
       ${r.discount_cents ? `<div class="row small"><span>Desconto concedido (já nos valores acima)</span><span>${brl(r.discount_cents)}</span></div>` : ''}
-      <div class="row tot"><span>TOTAL</span><span>${brl(r.total_cents)}</span></div>
+      ${r.cashback_used_cents ? `<div class="row small"><span>Cashback usado (já nos valores acima)</span><span>− ${brl(r.cashback_used_cents)}</span></div>` : ''}
+      <div class="row tot"><span>${r.cashback_used_cents ? 'TOTAL PAGO' : 'TOTAL'}</span><span>${brl(r.total_cents)}</span></div>
       <div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>
       ${extra.received_cents != null ? `<div class="row"><span>Valor recebido</span><span>${brl(extra.received_cents)}</span></div><div class="row"><span>Troco</span><span>${brl(extra.change_cents)}</span></div>` : ''}
       ${l ? `<div class="hr"></div><div class="c">${l.complete ? `Cartão fidelidade completo! Prêmio: ${esc(l.reward)}` : `Cartão fidelidade: ${l.checkins} de ${l.target}. Faltam ${l.remaining} para ganhar: ${esc(l.reward)}`}</div>` : ''}
+      ${r.cashback && (r.cashback_earned_cents || r.cashback.balance_cents) ? `<div class="hr"></div><div class="c">${r.cashback_earned_cents ? `Cashback ganho nesta compra: <b>${brl(r.cashback_earned_cents)}</b><br>` : ''}Saldo de cashback: <b>${brl(r.cashback.balance_cents)}</b>${r.cashback.next_expires_on ? `<br><span class="small">${r.cashback.next_expiring_cents < r.cashback.balance_cents ? brl(r.cashback.next_expiring_cents) + ' vence em' : 'Válido até'} ${ymdShort(r.cashback.next_expires_on)}</span>` : ''}</div>` : ''}
       <div class="hr"></div><div class="c">Obrigado pela preferência!</div>
       <div class="c small">Não é documento fiscal${reprint ? ` · Reimpressão ${now}` : ''}</div>
     </body></html>`;
@@ -1298,6 +1358,7 @@
       ${(sum.by_seller || []).length ? `<h2>Por vendedor</h2>${table(['Vendedor', '<span class="n">Vendas</span>', '<span class="n">Total</span>'], sum.by_seller.map(v => `<tr><td>${esc(v.name)}</td><td class="n">${v.count}</td><td class="n">${brl(v.total_cents)}</td></tr>`), '')}` : ''}
       <h2>Por forma de pagamento</h2>
       ${table(['Forma', '<span class="n">Entradas</span>', '<span class="n">Saídas</span>', '<span class="n">Saldo</span>'], [...keys.map(k => `<tr><td>${METHODS[k]}</td><td class="n">${brl(sum.by_method[k]?.total_cents || 0)}</td><td class="n">${brl(sum.expenses_by_method[k]?.total_cents || 0)}</td><td class="n">${brl((sum.by_method[k]?.total_cents || 0) - (sum.expenses_by_method[k]?.total_cents || 0))}</td></tr>`), `<tr class="tot"><td>Total</td><td class="n">${brl(sum.sales_total_cents)}</td><td class="n">${brl(sum.expenses_total_cents)}</td><td class="n">${brl(sum.balance_cents)}</td></tr>`], 'Nenhum lançamento.')}
+      ${sum.cashback_used_cents || sum.cashback_earned_cents ? `<p>Cashback: clientes usaram <b>${brl(sum.cashback_used_cents)}</b> (já descontado das entradas) · gerado para os clientes <b>${brl(sum.cashback_earned_cents)}</b></p>` : ''}
       <h2>Gaveta (dinheiro)</h2>
       <table><tbody><tr><td>Troco inicial</td><td class="n">${brl(sum.opening_cents)}</td></tr><tr><td>+ Vendas em dinheiro</td><td class="n">${brl(sum.by_method.cash?.total_cents || 0)}</td></tr><tr><td>+ Suprimentos</td><td class="n">${brl(sum.deposits_cents)}</td></tr><tr><td>− Sangrias</td><td class="n">${brl(sum.withdrawals_cents)}</td></tr><tr><td>− Saídas em dinheiro</td><td class="n">${brl(sum.expenses_by_method.cash?.total_cents || 0)}</td></tr>
         <tr class="tot"><td>Esperado na gaveta</td><td class="n">${brl(s.status === 'closed' ? s.expected_cash_cents : sum.expected_cash_cents)}</td></tr>
@@ -1323,11 +1384,12 @@
   // ---------------- Mensagens ----------------
   let msgTab = 'status', statusDay = '';
   async function loadMessages(box, alive) {
-    box.innerHTML = `<section class="nv-card"><div class="fs-tabs" role="tablist">${[['status', 'Status do dia'], ['offers', 'Ofertas'], ['config', 'Configurar']].map(([k, v]) => `<button type="button" role="tab" aria-selected="${msgTab === k}" data-fs-tab="${k}">${v}</button>`).join('')}</div><div id="fsTab"></div></section>`;
+    box.innerHTML = `<section class="nv-card"><div class="fs-tabs" role="tablist">${[['status', 'Status do dia'], ['cashback', 'Cashback'], ['offers', 'Ofertas'], ['config', 'Configurar']].map(([k, v]) => `<button type="button" role="tab" aria-selected="${msgTab === k}" data-fs-tab="${k}">${v}</button>`).join('')}</div><div id="fsTab"></div></section>`;
     box.querySelectorAll('[data-fs-tab]').forEach(b => b.onclick = () => { msgTab = b.dataset.fsTab; loadMessages(box, alive); });
     const tab = $('fsTab');
     if (msgTab === 'status') return statusTab(tab, alive);
     if (msgTab === 'offers') return offersTab(tab, alive);
+    if (msgTab === 'cashback') return cashbackTab(tab, alive);
     return configTab(tab, alive);
   }
 
@@ -1339,8 +1401,8 @@
     tab.innerHTML = `<div class="fs-row fs-daybar"><label class="nv-field">Compras do dia<input type="date" id="fsDay" value="${data.day}"></label><button type="button" class="nv-button secondary fs-small" id="fsToday">Hoje</button><button type="button" class="nv-button secondary fs-small" id="fsYesterday">Ontem</button>
       <span class="fs-grow"></span><b>${sent} de ${rows.length} enviados</b>${rows.length > sent ? '<button type="button" class="nv-button fp-whats" id="fsNext">Enviar próximo</button>' : ''}</div>
       ${!config.google_review_url ? '<p class="nv-help fs-warn">Cadastre o link de avaliação do Google em "Configurar" para ele entrar na mensagem.</p>' : ''}
-      <p class="nv-help">Clientes que compraram no dia (caixa e pedidos finalizados). "Enviar" abre o WhatsApp com a mensagem pronta: obrigado, cartão fidelidade e pedido de avaliação.</p>
-      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}" data-fs-row="${r.id}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small><br><small>${r.purchases.map(p => p.kind === 'sale' ? `venda #${esc(p.ref)} ${brl(p.total_cents)}` : `pedido ${esc(p.ref)} finalizado`).join(' · ')}</small>${progressBar(r.loyalty)}
+      <p class="nv-help">Clientes que compraram no dia (caixa e pedidos finalizados). "Enviar" abre o WhatsApp com a mensagem pronta: obrigado, cartão fidelidade${cbOn() ? ', cashback (ganho e saldo em reais)' : ''} e pedido de avaliação.</p>
+      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}" data-fs-row="${r.id}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small> ${cbBadge(r.cashback)}<br><small>${r.purchases.map(p => p.kind === 'sale' ? `venda #${esc(p.ref)} ${brl(p.total_cents)}` : `pedido ${esc(p.ref)} finalizado`).join(' · ')}</small>${progressBar(r.loyalty)}
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(statusMessage(r))}</pre></details></div>
         <div class="fs-actions">${r.sent ? `<span class="fs-ok">Enviado ✓</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`).join('') || '<p class="nv-help">Nenhuma compra com cliente identificado neste dia.</p>'}</div>`;
     $('fsDay').onchange = e => { statusDay = e.target.value; statusTab(tab, alive); };
@@ -1353,6 +1415,38 @@
     tab.querySelectorAll('[data-fs-send]').forEach(b => b.onclick = () => send(b.dataset.fsSend));
     tab.querySelectorAll('[data-fs-redeem]').forEach(b => b.onclick = async () => { const r = rows.find(x => x.id === b.dataset.fsRedeem); try { if (await redeem(r.id, r.name)) statusTab(tab, alive); } catch (err) { feedback(err.message, true); } });
     if ($('fsNext')) $('fsNext').onclick = () => { const next = rows.find(r => !r.sent && waPhone(r.phone)); if (next) send(next.id); else feedback('Os clientes restantes não têm WhatsApp cadastrado.', true); };
+  }
+
+  // Avisos de cashback perto de vencer: faltando 15, 10, 5 e 1 dia, um aviso por etapa.
+  async function cashbackTab(tab, alive) {
+    if (!cbOn()) {
+      tab.innerHTML = `<p class="nv-help fs-warn">O cashback está desligado. ${config.role === 'owner' ? 'Ligue e defina as regras em "Configurar".' : 'Peça ao responsável pela loja para ligar em "Configurar".'}</p>`;
+      return;
+    }
+    const data = await api('/store/messages/cashback'); if (!alive()) return;
+    const rows = data.customers, pending = rows.filter(r => !r.sent && waPhone(r.phone));
+    const row = r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small><br>
+        <small><b class="${r.days_left <= 1 ? 'fs-neg' : ''}">${brl(r.expiring_cents)} vence ${cbWhen(r)}</b>${r.expiring_cents < r.balance_cents ? ` · saldo total ${brl(r.balance_cents)}` : ''} · aviso de ${r.stage === 1 ? '1 dia' : r.stage + ' dias'}${r.sent ? ` · avisado ${dmy(r.sent_at)} ${hhmm(r.sent_at)}` : ''}</small>
+        <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(reminderMessage(r))}</pre></details></div>
+        <div class="fs-actions">${r.sent ? '<span class="fs-ok">Avisado ✓</span>' : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-cb="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}</div></div>`;
+    tab.innerHTML = `<div class="fs-row fs-daybar"><div><small class="nv-help">Saldo em aberto na loja</small><br><b>${brl(data.total_balance_cents)}</b> <small>· ${data.customers_with_balance} cliente(s)</small></div>
+        <span class="fs-grow"></span><b>${rows.length - rows.filter(r => !r.sent).length} de ${rows.length} avisados</b>${pending.length ? '<button type="button" class="nv-button fp-whats" id="fsCbNext">Enviar próximo</button>' : ''}</div>
+      <p class="nv-help">Clientes com cashback vencendo nos próximos 15 dias. O aviso aparece quando faltam 15, 10, 5 e 1 dia (uma vez em cada etapa). "Enviar" abre o WhatsApp com o valor, a data e as regras.</p>
+      <div class="nv-list">${rows.map(row).join('') || '<p class="nv-help">Nenhum cashback vencendo nos próximos 15 dias.</p>'}</div>
+      <details class="fs-cb-all" id="fsCbAll"><summary>Todos os clientes com saldo (${data.customers_with_balance})</summary><div id="fsCbAllList"><p class="nv-help">Carregando…</p></div></details>`;
+    const send = async id => {
+      const r = rows.find(x => x.id === id); if (!r) return;
+      try { await sendWhats(r.phone, reminderMessage(r), { customer_id: r.id, kind: 'cashback', campaign: r.campaign }); cashbackTab(tab, alive); } catch (err) { feedback(err.message, true); }
+    };
+    tab.querySelectorAll('[data-fs-cb]').forEach(b => b.onclick = () => send(b.dataset.fsCb));
+    if ($('fsCbNext')) $('fsCbNext').onclick = () => { const next = rows.find(r => !r.sent && waPhone(r.phone)); if (next) send(next.id); };
+    $('fsCbAll').ontoggle = async e => {
+      if (!e.target.open) return;
+      try {
+        const all = await api('/store/messages/cashback?all=1'); const out = $('fsCbAllList'); if (!out) return;
+        out.innerHTML = `<div class="fs-table"><table><thead><tr><th>Cliente</th><th>Saldo</th><th>Vence primeiro</th></tr></thead><tbody>${all.customers.map(r => `<tr><td>${esc(r.name)}<br><small>${esc(r.phone || 'sem WhatsApp')}</small></td><td><b>${brl(r.balance_cents)}</b></td><td>${brl(r.expiring_cents)} em ${ymdShort(r.expires_on)} <small>(${r.days_left} dia${r.days_left === 1 ? '' : 's'})</small></td></tr>`).join('') || '<tr><td colspan="3">Nenhum cliente com saldo.</td></tr>'}</tbody></table></div>`;
+      } catch (err) { feedback(err.message, true); }
+    };
   }
 
   const campaignKey = text => { let h = 0; for (const ch of text) h = (h * 31 + ch.codePointAt(0)) >>> 0; return 'of-' + h.toString(36); };
@@ -1392,13 +1486,28 @@
         <div class="fs-row"><label class="nv-field">Compras para ganhar<input type="number" min="2" max="100" name="loyalty_target" ${dis} value="${loyalty.loyalty_target}"></label><label class="nv-field fs-grow">Prêmio<input name="loyalty_reward" maxlength="240" ${dis} value="${esc(loyalty.loyalty_reward)}"></label></div>
         <div class="fs-row"><label class="nv-field">Valor mínimo da venda para contar<input name="min" inputmode="decimal" ${dis} value="${config.loyalty_min_sale_cents ? (config.loyalty_min_sale_cents / 100).toFixed(2).replace('.', ',') : ''}" placeholder="0,00"></label><label class="nv-field fs-grow">Regras de uso (vão na mensagem)<input name="loyalty_rules" maxlength="600" ${dis} value="${esc(config.loyalty_rules || '')}" placeholder="Ex.: Válido por 90 dias. Não cumulativo com outras promoções."></label></div>
         <small class="nv-help">Vendas do caixa e pedidos de serviço finalizados contam no mesmo cartão.</small></section>
+      <section class="nv-form-panel"><h3>Cashback</h3><label class="fs-check"><input type="checkbox" name="cashback_enabled" ${dis} ${config.cashback_enabled ? 'checked' : ''}> Cashback ligado</label>
+        <div class="fs-row"><label class="nv-field">% de volta em cada compra<input name="cashback_percent" inputmode="decimal" ${dis} value="${String(config.cashback_percent ?? 5).replace('.', ',')}"></label>
+          <label class="nv-field">Pode pagar até (% da compra)<input type="number" min="1" max="100" name="cashback_max_use_percent" ${dis} value="${config.cashback_max_use_percent ?? 30}"></label>
+          <label class="nv-field">Validade (dias)<input type="number" min="7" max="730" name="cashback_valid_days" ${dis} value="${config.cashback_valid_days ?? 90}"></label>
+          <label class="nv-field">Compra mínima para ganhar<input name="cashback_min" inputmode="decimal" ${dis} value="${config.cashback_min_sale_cents ? centsText(config.cashback_min_sale_cents) : ''}" placeholder="0,00"></label></div>
+        <label class="nv-field">Regras extras (vão na mensagem)<input name="cashback_rules" maxlength="400" ${dis} value="${esc(config.cashback_rules || '')}" placeholder="Ex.: Não vale para aparelhos novos."></label>
+        <small class="nv-help">O cashback é calculado sobre o valor pago (sem desconto e sem o cashback usado). Ele fica disponível a partir da próxima compra, é usado primeiro o que vence antes e, se a venda for cancelada, volta ao que era. 90 dias = 3 meses.</small>
+        <label class="nv-field">Mensagem de aviso de vencimento<textarea name="cashback_reminder_message" rows="4" maxlength="1000" ${dis}>${esc(config.cashback_reminder_message || DEFAULT_CB_REMINDER)}</textarea></label>
+        <small class="nv-help">Use {cliente}, {loja}, {valor} (o que vence), {saldo} (saldo total), {quando} (hoje, amanhã ou em X dias), {vence} (data), {dias}, {regras}.</small>
+        <h4>Prévia do aviso</h4><pre class="fs-pre" id="fsCbPreview"></pre></section>
       <section class="nv-form-panel"><h3>Mensagem de status</h3><label class="nv-field">Texto<textarea name="status_message" rows="6" maxlength="1000" ${dis}>${esc(config.status_message || DEFAULT_STATUS)}</textarea></label>
-        <small class="nv-help">Use {cliente}, {loja}, {fidelidade} (progresso e regras do cartão), {avaliacao} (link do Google; a linha some se não houver link), {compras}, {meta}, {faltam}, {premio}, {regras}. Evite emojis: o WhatsApp do computador costuma mostrá-los como "?".</small>
+        <small class="nv-help">Use {cliente}, {loja}, {fidelidade} (progresso e regras do cartão), {cashback} (ganho na compra, saldo em reais, validade e regras; se a mensagem não tiver, entra logo depois da fidelidade), {avaliacao} (link do Google; a linha some se não houver link), {compras}, {meta}, {faltam}, {premio}, {regras}. Evite emojis: o WhatsApp do computador costuma mostrá-los como "?".</small>
         <h4>Prévia</h4><pre class="fs-pre" id="fsPreview"></pre></section>
       ${owner ? '<button class="nv-button">Salvar</button>' : ''}<p role="status" class="nv-help" id="fsCfgStatus"></p></form>`;
     const f = $('fsCfg');
-    const preview = () => { const saved = { ...config }; config.status_message = f.elements.status_message.value; config.google_review_url = f.elements.google_review_url.value.trim(); config.loyalty_rules = f.elements.loyalty_rules.value.trim();
-      const target = Number(f.elements.loyalty_target.value) || 10; $('fsPreview').textContent = statusMessage({ name: 'Maria Silva', loyalty: { enabled: f.elements.loyalty_enabled.checked, checkins: Math.min(3, target - 1), target, remaining: target - Math.min(3, target - 1), reward: f.elements.loyalty_reward.value, complete: false } }); Object.assign(config, saved); };
+    const cbForm = () => ({ cashback_enabled: f.elements.cashback_enabled.checked, cashback_percent: parseMoney(f.elements.cashback_percent.value) / 100, cashback_max_use_percent: Number(f.elements.cashback_max_use_percent.value),
+      cashback_valid_days: Number(f.elements.cashback_valid_days.value), cashback_min_sale_cents: f.elements.cashback_min.value.trim() ? parseMoney(f.elements.cashback_min.value) : 0,
+      cashback_rules: f.elements.cashback_rules.value.trim(), cashback_reminder_message: f.elements.cashback_reminder_message.value.trim() });
+    const ahead = d => { const x = new Date(); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
+    const preview = () => { const saved = { ...config }; Object.assign(config, cbForm()); config.status_message = f.elements.status_message.value; config.google_review_url = f.elements.google_review_url.value.trim(); config.loyalty_rules = f.elements.loyalty_rules.value.trim();
+      $('fsCbPreview').textContent = config.cashback_enabled ? reminderMessage({ name: 'Maria Silva', expiring_cents: 450, balance_cents: 1250, days_left: 5, expires_on: ahead(5) }) : '(cashback desligado)';
+      const target = Number(f.elements.loyalty_target.value) || 10; $('fsPreview').textContent = statusMessage({ name: 'Maria Silva', cashback: { earned_cents: 500, balance_cents: 1250, next_expires_on: ahead(config.cashback_valid_days || 90), next_expiring_cents: 1250 }, loyalty: { enabled: f.elements.loyalty_enabled.checked, checkins: Math.min(3, target - 1), target, remaining: target - Math.min(3, target - 1), reward: f.elements.loyalty_reward.value, complete: false } }); Object.assign(config, saved); };
     f.oninput = preview; preview();
     f.onsubmit = async e => {
       e.preventDefault(); const st = $('fsCfgStatus');
@@ -1406,6 +1515,14 @@
       if (!Number.isFinite(min) || min < 0) { st.textContent = 'Valor mínimo inválido.'; return; }
       try {
         await api('/store/loyalty', 'PATCH', { loyalty_enabled: f.elements.loyalty_enabled.checked, loyalty_target: Number(f.elements.loyalty_target.value), loyalty_reward: f.elements.loyalty_reward.value.trim() });
+        const cb = cbForm();
+        if (!(cb.cashback_percent > 0 && cb.cashback_percent <= 50)) { st.textContent = 'Cashback: o percentual deve ficar entre 0,01% e 50%.'; return; }
+        if (!(cb.cashback_max_use_percent >= 1 && cb.cashback_max_use_percent <= 100)) { st.textContent = 'Cashback: o limite de uso deve ficar entre 1% e 100%.'; return; }
+        if (!(cb.cashback_valid_days >= 7 && cb.cashback_valid_days <= 730)) { st.textContent = 'Cashback: a validade deve ficar entre 7 e 730 dias.'; return; }
+        if (!Number.isFinite(cb.cashback_min_sale_cents) || cb.cashback_min_sale_cents < 0) { st.textContent = 'Cashback: compra mínima inválida.'; return; }
+        if (cb.cashback_reminder_message === DEFAULT_CB_REMINDER) cb.cashback_reminder_message = '';
+        cb.cashback_percent = Math.round(cb.cashback_percent * 100) / 100;
+        Object.assign(config, await api('/store/sales/cashback', 'PATCH', cb));
         const status = f.elements.status_message.value.trim();
         const r = await api('/store/sales/config', 'PATCH', { google_review_url: f.elements.google_review_url.value.trim(), loyalty_rules: f.elements.loyalty_rules.value.trim(), loyalty_min_sale_cents: min, status_message: status === DEFAULT_STATUS ? '' : status });
         Object.assign(config, r, { loyalty_enabled: f.elements.loyalty_enabled.checked }); st.textContent = 'Salvo.';
@@ -1446,6 +1563,8 @@
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
   .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
+  .fs-cb{border:1px solid #f0c36d;background:#fff8e6;border-radius:12px;padding:10px 12px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-cb>div:first-child{display:flex;flex-direction:column}.fs-cb small{color:var(--nv-muted)}.fs-cb .fs-check{margin:0;font-size:14px}.fs-cb-pay{font-size:15px}.fs-cb-pay b{font-size:18px}
+  .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
 

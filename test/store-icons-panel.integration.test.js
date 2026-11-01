@@ -36,7 +36,7 @@ test('painel da loja sem emojis: menu, caixa, estoque e mensagens usam ícones S
     await clean('caixa'); await page.screenshot(shot('icones-caixa'));
     await page.getByRole('button', { name: 'Serviço', exact: true }).click(); await clean('caixa serviço');
 
-    await page.getByRole('button', { name: 'Estoque' }).click();
+    await page.locator('#fsProducts').click();
     for (const tab of ['Entrada rápida', 'Peças', 'Fornecedores', 'Gerar códigos', 'Reposição']) {
       await page.getByRole('tab', { name: tab }).click(); await page.waitForTimeout(150); await clean('estoque ' + tab);
       assert.ok(await page.getByRole('tab', { name: tab }).locator('svg').count(), `aba ${tab} com ícone`);

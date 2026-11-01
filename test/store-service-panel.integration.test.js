@@ -78,7 +78,7 @@ test('caixa registra serviço com peça, fornecedor e aparelho sugeridos', {
     await page.waitForFunction(() => document.querySelectorAll('.fs-tag-svc').length === 2);
 
     // Estoque: aba Peças mostra a tela com 1 unidade e "repor 1".
-    await page.getByRole('button', { name: 'Estoque' }).click();
+    await page.locator('#fsProducts').click();
     await page.getByRole('tab', { name: 'Peças' }).click();
     await page.waitForSelector('#fsPartList .fs-sale');
     const parts = await page.locator('#fsPartList').innerText();

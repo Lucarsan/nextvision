@@ -638,11 +638,12 @@
       if (!list.isConnected) return;
       list.innerHTML = rows.map(p => `<div class="fs-sale fs-prod"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? 'Fornecedor: ' + esc(p.supplier_name) : 'sem fornecedor'} · custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.price_cents > 0 ? ' · serviço ' + brl(p.price_cents) : ''}</small><br>
           <small>Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></div>`).join('')
+        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-p-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></div>`).join('')
         || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : 'Nenhuma peça cadastrada ainda. Ex.: Tela Galaxy A12, do fornecedor João, custo R$ 80, 3 na loja.'}</p>`;
       const byId = id => rows.find(p => p.id === id);
       list.querySelectorAll('[data-p-edit]').forEach(b => b.onclick = () => partDialog(byId(b.dataset.pEdit), reopen));
       list.querySelectorAll('[data-p-stock]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pStock); stockDialog({ ...p, name: partLabel(p) }, reopen); });
+      list.querySelectorAll('[data-p-hist]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pHist); logFilter = { product_id: p.id, name: partLabel(p) }; productsDialog('', 'log'); });
       list.querySelectorAll('[data-p-del]').forEach(b => b.onclick = async () => {
         const p = byId(b.dataset.pDel); if (!confirm(`Excluir a peça "${partLabel(p)}"? Serviços antigos continuam com ela no histórico.`)) return;
         try { await api('/store/products/' + p.id, 'DELETE'); if (svc.part?.id === p.id) svc.part = null; draw(); } catch (err) { feedback(err.message, true); }
@@ -877,30 +878,155 @@
     while (x < bits.length) { if (bits[x] === '1') { let e = x; while (bits[e] === '1') e++; rects += `<rect x="${x + quiet}" y="0" width="${e - x}" height="${height}"/>`; x = e; } else x++; }
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${height}" preserveAspectRatio="none" shape-rendering="crispEdges" class="bc">${rects}</svg>`;
   }
-  // Imprime etiquetas: folha A4 (3 colunas) ou impressora de etiquetas (uma por página, 50×30 mm).
-  function printLabels(p, count) {
-    if (!p.barcode) { feedback('Este produto não tem código de barras.', true); return; }
-    const n = Math.max(1, Math.min(500, count | 0));
-    const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir as etiquetas.', true); return; }
-    const label = `<div class="lb"><div class="nm">${esc(p.name)}</div><div class="pr">${brl(p.price_cents)}</div>${barcodeSvg(p.barcode)}<div class="cd">${esc(p.barcode)}</div></div>`;
-    w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Etiquetas · ${esc(p.name)}</title><style id="pg"></style><style>
+  // Imprime etiquetas de um ou vários produtos na mesma página: folha A4 (3 colunas) ou impressora de etiquetas
+  // (uma por página, 50×30 mm). Na A4 dá para pular as posições já usadas de uma folha aproveitada.
+  // items: [{ p: produto, n: quantidade }]
+  function printLabelSheet(items, title) {
+    items = items.filter(x => x.p?.barcode && x.n > 0).map(x => ({ p: x.p, n: Math.max(1, Math.min(500, x.n | 0)) }));
+    if (!items.length) { feedback('Nenhuma etiqueta para imprimir (produto sem código de barras?).', true); return false; }
+    const total = items.reduce((a, x) => a + x.n, 0);
+    if (total > 1500) { feedback('No máximo 1.500 etiquetas por vez.', true); return false; }
+    const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir as etiquetas.', true); return false; }
+    const label = p => `<div class="lb"><div class="nm">${esc(p.name)}</div><div class="pr">${brl(p.price_cents)}</div>${barcodeSvg(p.barcode)}<div class="cd">${esc(p.barcode)}</div></div>`;
+    const labels = items.map(x => label(x.p).repeat(x.n)).join('');
+    const name = title || (items.length === 1 ? items[0].p.name : `${items.length} produtos`);
+    w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Etiquetas · ${esc(name)}</title><style id="pg"></style><style>
       *{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff}
-      .bar{padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #ddd;font-size:14px}.bar button{font:inherit;padding:8px 14px;cursor:pointer}
+      .bar{padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #ddd;font-size:14px}.bar button{font:inherit;padding:8px 14px;cursor:pointer}.bar input[type=number]{width:60px;font:inherit;padding:4px}
       .lb{display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;text-align:center;break-inside:avoid;page-break-inside:avoid}
       .nm{font-size:10pt;font-weight:700;line-height:1.15;max-height:2.3em;overflow:hidden;width:100%}.pr{font-size:13pt;font-weight:700;margin:1mm 0}.bc{width:100%;height:12mm;fill:#000}.cd{font-size:8pt;letter-spacing:.5px}
-      body.a4 .sheet{display:grid;grid-template-columns:repeat(3,1fr);gap:0}body.a4 .lb{height:33.9mm;padding:2mm 4mm;border:1px dashed #ccc}
-      body.th .lb{width:50mm;height:30mm;padding:1.5mm 2mm;page-break-after:always}body.th .bc{height:10mm}
-      @media print{.bar{display:none}body.a4 .lb{border-color:transparent}}
-    </style></head><body class="a4"><div class="bar"><b>${n} etiqueta(s) · ${esc(p.name)}</b>
+      body.a4 .sheet{display:grid;grid-template-columns:repeat(3,1fr);gap:0}body.a4 .lb{height:33.9mm;padding:2mm 4mm;border:1px dashed #ccc}body.a4 .skip{height:33.9mm;border:1px dashed #eee;background:repeating-linear-gradient(45deg,#fafafa 0 6px,#f0f0f0 6px 12px)}
+      body.th .lb{width:50mm;height:30mm;padding:1.5mm 2mm;page-break-after:always}body.th .bc{height:10mm}body.th .skip,body.th .askip{display:none}
+      @media print{.bar{display:none}body.a4 .lb{border-color:transparent}body.a4 .skip{border-color:transparent;background:none}}
+    </style></head><body class="a4"><div class="bar"><b>${total} etiqueta(s) · ${esc(name)}</b>
       <label><input type="radio" name="fmt" value="a4" checked> Folha A4 (3 por linha)</label><label><input type="radio" name="fmt" value="th"> Impressora de etiquetas 50×30 mm</label>
-      <button onclick="print()">Imprimir</button></div><div class="sheet">${label.repeat(n)}</div>
-      <script>const pg=document.getElementById('pg');const set=v=>{document.body.className=v;pg.textContent=v==='th'?'@page{size:50mm 30mm;margin:0}':'@page{size:A4;margin:10mm 7mm}'};document.querySelectorAll('[name=fmt]').forEach(r=>r.onchange=()=>set(r.value));set('a4');<\/script></body></html>`);
+      <label class="askip">Pular <input type="number" id="skip" min="0" max="80" value="0"> posições já usadas da folha</label>
+      <button onclick="print()">Imprimir</button></div><div class="sheet"><span id="skips" style="display:contents"></span>${labels}</div>
+      <script>const pg=document.getElementById('pg');const set=v=>{document.body.className=v;pg.textContent=v==='th'?'@page{size:50mm 30mm;margin:0}':'@page{size:A4;margin:10mm 7mm}'};document.querySelectorAll('[name=fmt]').forEach(r=>r.onchange=()=>set(r.value));set('a4');
+      const sk=document.getElementById('skip');sk.oninput=()=>{const n=Math.max(0,Math.min(80,parseInt(sk.value,10)||0));document.getElementById('skips').innerHTML='<div class="skip"></div>'.repeat(n)};<\/script></body></html>`);
     w.document.close();
+    return true;
+  }
+  const printLabels = (p, count) => printLabelSheet([{ p, n: count }]);
+  const queueLabels = async (p, n) => {
+    try { await api('/store/labels', 'POST', { product_id: p.id, add: n }); feedback(`${n} etiqueta(s) de ${p.name} na fila. Imprima pela aba "Etiquetas".`); return true; }
+    catch (err) { feedback(err.message, true); return false; }
+  };
+  // Escolha de etiquetas ao cadastrar ou dar entrada: nenhuma, 1 só (produto fixo na loja) ou uma por unidade;
+  // e imprimir agora ou juntar na fila (para não gastar uma folha só com este produto). A escolha fica lembrada.
+  const LAB_KEY = 'fp_label_choice';
+  const savedLab = () => { try { return JSON.parse(localStorage.getItem(LAB_KEY) || 'null'); } catch { return null; } };
+  function labelChoiceHtml(defaultHow = 'none') {
+    const s = savedLab(), how = s?.how || defaultHow, queue = !!s?.queue;
+    const opt = (v, t) => `<label><input type="radio" name="lab_how" value="${v}"${how === v ? ' checked' : ''}> ${t}</label>`;
+    return `<fieldset class="fs-labchoice"><legend>Etiquetas</legend>${opt('none', 'Não imprimir')}${opt('one', '1 etiqueta só <small>(o produto fica fixo na loja com o código; vende pela quantidade)</small>')}${opt('each', '1 etiqueta por unidade')}
+      <label class="fs-check fs-labqueue"><input type="checkbox" name="lab_queue"${queue ? ' checked' : ''}> Juntar na fila e imprimir depois com outros produtos <small>(aba "Etiquetas")</small></label></fieldset>`;
+  }
+  // Depois de salvar: imprime ou põe na fila conforme a escolha. n = unidades que chegaram.
+  async function applyLabelChoice(form, p, n) {
+    const how = form.querySelector('[name=lab_how]:checked')?.value || 'none', queue = !!form.querySelector('[name=lab_queue]')?.checked;
+    try { localStorage.setItem(LAB_KEY, JSON.stringify({ how, queue })); } catch {}
+    if (how === 'none' || !p?.barcode) return;
+    const qty = how === 'one' ? 1 : Math.max(0, n | 0); if (!qty) return;
+    if (queue) await queueLabels(p, qty); else printLabels(p, qty);
   }
   function labelsDialog(p, defaultQty, title) {
-    openDialog(`${header(title || 'Imprimir etiquetas')}<form id="fsLab"><p class="nv-help"><b>${esc(p.name)}</b> · ${brl(p.price_cents)} · código ${esc(p.barcode)}</p>
-      <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label><button class="nv-button">${FPIcon('tag')}Abrir etiquetas para imprimir</button></form>`);
-    $('fsLab').onsubmit = e => { e.preventDefault(); printLabels(p, Number(e.currentTarget.elements.n.value) || 1); };
+    openDialog(`${header(title || 'Imprimir etiquetas')}<form id="fsLab"><p class="nv-help"><b>${esc(p.name)}</b> · ${brl(p.price_cents)} · código ${esc(p.barcode)}${p.stock_qty != null ? ` · estoque ${p.stock_qty}` : ''}</p>
+      <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label>
+      <p class="nv-help">Vários produtos iguais com o mesmo código? Uma etiqueta basta: deixe o produto fixo na loja e venda pela quantidade.</p>
+      <div class="fs-row"><button class="nv-button">${FPIcon('printer')}Imprimir agora</button><button type="button" class="nv-button secondary" id="fsLabQueue">${FPIcon('tag')}Pôr na fila (imprimir junto com outros)</button></div></form>`);
+    const qty = () => Math.max(1, Math.min(500, Number($('fsLab').elements.n.value) || 1));
+    $('fsLab').onsubmit = e => { e.preventDefault(); printLabels(p, qty()); };
+    $('fsLabQueue').onclick = async () => { if (await queueLabels(p, qty())) $('editorDialog').close(); };
+  }
+
+  // Fila de etiquetas: escolhe produtos e quantidades e imprime tudo na mesma folha.
+  async function labelsTab(box) {
+    let rows = []; try { rows = await api('/store/labels'); } catch (err) { box.textContent = err.message; return; }
+    const sel = new Set(rows.map(r => r.id));
+    box.innerHTML = `<p class="nv-help">Junte etiquetas de vários produtos e imprima tudo numa folha só. Produtos entram aqui pela opção "Juntar na fila" ao cadastrar, pelo botão "Etiquetas" da lista ou bipando/buscando abaixo.</p>
+      <div class="fs-sugg"><label class="nv-field">Adicionar produto<input id="fsLbQ" placeholder="Bipe o código ou digite o nome" autocomplete="off" enterkeyhint="go"></label><div id="fsLbSug" class="fs-results fs-drop"></div></div>
+      <div id="fsLbList" class="nv-list"></div><div id="fsLbFoot"></div>`;
+    const list = $('fsLbList'), foot = $('fsLbFoot'), q = $('fsLbQ'), sug = $('fsLbSug');
+    const reload = async () => { try { rows = await api('/store/labels'); } catch (err) { feedback(err.message, true); return; } rows.forEach(r => { if (!known.has(r.id)) { sel.add(r.id); known.add(r.id); } }); draw(); };
+    const known = new Set(rows.map(r => r.id));
+    const setQty = async (r, n) => { try { const u = await api('/store/labels', 'POST', { product_id: r.id, qty: n }); Object.assign(r, u); } catch (err) { feedback(err.message, true); } };
+    const draw = () => {
+      if (!list.isConnected) return;
+      rows = rows.filter(r => r.labels_pending > 0);
+      list.innerHTML = rows.map(r => `<div class="fs-sale fs-lbrow" data-lb="${r.id}"><label class="fs-lbchk"><input type="checkbox" data-lb-sel${sel.has(r.id) ? ' checked' : ''} aria-label="Imprimir ${esc(r.name)}"></label>
+        <div class="fs-grow"><b>${esc(r.name)}</b><br><small>${brl(r.price_cents)} · ${esc(r.barcode)}${r.stock_qty != null ? ` · estoque ${r.stock_qty}` : ''}</small></div>
+        <span class="fs-qq"><button type="button" data-lb-q="-1" aria-label="Menos etiquetas de ${esc(r.name)}">−</button><input class="fs-qn" type="number" inputmode="numeric" min="1" max="500" value="${r.labels_pending}" aria-label="Etiquetas de ${esc(r.name)}"><button type="button" data-lb-q="1" aria-label="Mais etiquetas de ${esc(r.name)}">+</button></span>
+        <button type="button" class="fs-cart-del" data-lb-del aria-label="Tirar ${esc(r.name)} da fila">${FPIcon('x')}</button></div>`).join('') || '<p class="nv-help">A fila está vazia.</p>';
+      const chosen = rows.filter(r => sel.has(r.id)), n = chosen.reduce((a, r) => a + r.labels_pending, 0);
+      foot.innerHTML = rows.length ? `<div class="fs-row fs-lbfoot"><label class="fs-check fs-grow"><input type="checkbox" id="fsLbAll"${chosen.length === rows.length ? ' checked' : ''}> Todos</label>
+        <b>${n} etiqueta(s) de ${chosen.length} produto(s)${n ? ` · cerca de ${Math.ceil(n / 24)} folha(s) A4` : ''}</b><button type="button" class="nv-button" id="fsLbPrint"${n ? '' : ' disabled'}>${FPIcon('printer')}Imprimir selecionadas</button></div><div id="fsLbDone"></div>` : '';
+      list.querySelectorAll('[data-lb]').forEach(el => {
+        const r = rows.find(x => x.id === el.dataset.lb), inp = el.querySelector('.fs-qn');
+        el.querySelector('[data-lb-sel]').onchange = e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); draw(); };
+        el.querySelectorAll('[data-lb-q]').forEach(b => b.onclick = async () => { const v = Math.max(1, Math.min(500, r.labels_pending + Number(b.dataset.lbQ))); if (v !== r.labels_pending) { await setQty(r, v); draw(); } });
+        inp.onchange = async () => { const v = Math.max(1, Math.min(500, Number(inp.value) || 1)); await setQty(r, v); draw(); };
+        el.querySelector('[data-lb-del]').onclick = async () => { await setQty(r, 0); sel.delete(r.id); draw(); };
+      });
+      if ($('fsLbAll')) $('fsLbAll').onchange = e => { rows.forEach(r => e.target.checked ? sel.add(r.id) : sel.delete(r.id)); draw(); };
+      if ($('fsLbPrint')) $('fsLbPrint').onclick = () => {
+        const items = rows.filter(r => sel.has(r.id)); if (!printLabelSheet(items.map(r => ({ p: r, n: r.labels_pending })))) return;
+        $('fsLbDone').innerHTML = `<div class="fs-last"><div>As etiquetas abriram em outra janela. <b>Saíram certinho?</b></div><div class="fs-actions"><button type="button" class="nv-button" id="fsLbClear">Sim, tirar da fila</button><button type="button" class="nv-button secondary" id="fsLbKeep">Não, manter na fila</button></div></div>`;
+        $('fsLbClear').onclick = async () => { try { await api('/store/labels/printed', 'POST', { product_ids: items.map(r => r.id) }); feedback('Etiquetas impressas saíram da fila.'); items.forEach(r => { r.labels_pending = 0; sel.delete(r.id); }); draw(); } catch (err) { feedback(err.message, true); } };
+        $('fsLbKeep').onclick = () => { $('fsLbDone').innerHTML = ''; };
+      };
+    };
+    const add = async p => { if (!p.barcode) { feedback(`${p.name} não tem código de barras. Use "Gerar códigos" ou edite o produto.`, true); return; }
+      try { const u = await api('/store/labels', 'POST', { product_id: p.id, add: 1 }); beep(true); sel.add(u.id); known.add(u.id); q.value = ''; sug.innerHTML = ''; await reload(); q.focus(); } catch (err) { feedback(err.message, true); beep(false); } };
+    let timer, found = [];
+    const search = async () => { const t = q.value.trim(); if (t.length < 2) { sug.innerHTML = ''; return []; }
+      try { found = (await api('/store/products?q=' + encodeURIComponent(t))).filter(p => p.barcode).slice(0, 8); } catch { return []; }
+      if (q.value.trim() !== t) return found;
+      sug.innerHTML = found.map((p, i) => `<button type="button" data-lb-add="${i}"><b>${esc(p.name)}</b> <small>${brl(p.price_cents)} · ${esc(p.barcode)}</small></button>`).join('') || '<p class="nv-help">Nenhum produto com código de barras encontrado.</p>';
+      sug.querySelectorAll('[data-lb-add]').forEach(b => b.onclick = () => add(found[Number(b.dataset.lbAdd)])); return found; };
+    q.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 220); };
+    q.onkeydown = async e => { if (e.key !== 'Enter') return; e.preventDefault(); clearTimeout(timer); const t = q.value.trim(); if (!t) return;
+      if (looksLikeCode(t) && !/\s/.test(t)) { try { return add(await api('/store/products/barcode/' + encodeURIComponent(t))); } catch (err) { if (err.status !== 404) { feedback(err.message, true); return; } } }
+      const r = await search(); if (r.length === 1) add(r[0]); };
+    draw(); q.focus();
+  }
+
+  // Histórico (log) do estoque: toda entrada, venda, cancelamento, ajuste, correção, exclusão e reativação.
+  let logFilter = null; // { product_id, name } quando aberto pelo botão "Histórico" de um produto
+  const LOG_KIND = { entry: 'Entrada', sale: 'Venda', cancel: 'Venda cancelada', adjust: 'Ajuste', edit: 'Correção no cadastro', restore: 'Reativado', delete: 'Excluído' };
+  async function logTab(box) {
+    const today = new Date(), ymdLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const from0 = new Date(today); from0.setDate(from0.getDate() - 30);
+    box.innerHTML = `${logFilter ? `<p class="fs-picked"><span>Só o produto <b>${esc(logFilter.name)}</b></span><button type="button" class="nv-button secondary fs-small" id="fsLogAll">Ver todos</button></p>` : ''}
+      <form id="fsLogF" class="fs-row fs-logf" autocomplete="off">${logFilter ? '' : '<label class="nv-field fs-grow">Produto<input name="q" type="search" placeholder="Nome, modelo ou código"></label>'}
+        <label class="nv-field">Tipo<select name="kind"><option value="">Todos</option>${Object.entries(LOG_KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+        <label class="nv-field">De<input name="from" type="date" value="${logFilter ? '' : ymdLocal(from0)}"></label><label class="nv-field">Até<input name="to" type="date"></label></form>
+      <div class="fs-logwrap"><table class="fs-log"><thead><tr><th>Quando</th><th>Produto</th><th>Movimento</th><th class="n">Qtd.</th><th class="n">Estoque</th><th>Quem</th></tr></thead><tbody id="fsLogBody"></tbody></table></div>
+      <p class="nv-help" id="fsLogInfo"></p><button type="button" class="nv-button secondary" id="fsLogMore" hidden>Carregar mais</button>`;
+    if ($('fsLogAll')) $('fsLogAll').onclick = () => { logFilter = null; logTab(box); };
+    const f = $('fsLogF'), body = $('fsLogBody'); let last = null, timer, seq = 0;
+    const qs = () => { const p = new URLSearchParams(); if (logFilter) p.set('product_id', logFilter.product_id); const t = f.elements.q?.value.trim(); if (t) p.set('q', t);
+      ['kind', 'from', 'to'].forEach(k => { if (f.elements[k].value) p.set(k, f.elements[k].value); }); return p; };
+    const n = v => v == null ? '—' : String(v);
+    const row = m => { const when = new Date(m.created_at);
+      const what = [m.kind === 'sale' || m.kind === 'cancel' ? (m.sale_number ? `venda #${m.sale_number}` : '') : '', m.unit_cost_cents != null && m.kind === 'entry' ? `custo ${brl(m.unit_cost_cents)} cada` : '', m.note && m.kind !== 'cancel' ? esc(m.note) : m.kind === 'cancel' && m.note ? esc(m.note.replace(/^Venda cancelada: /, 'motivo: ')) : ''].filter(Boolean).join(' · ');
+      return `<tr><td>${dmy(m.created_at)}<br><small>${hhmm(m.created_at)}</small></td><td><b>${esc(m.name)}</b>${m.variant ? ` <span class="fs-var">${esc(m.variant)}</span>` : ''}${m.device_model ? ` <small>${esc(m.device_model)}</small>` : ''}${m.product_kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}</td>
+        <td>${LOG_KIND[m.kind] || m.kind}${what ? `<br><small>${what}</small>` : ''}</td><td class="n"><b class="${m.quantity < 0 ? 'fs-neg' : m.quantity > 0 ? 'fs-pos' : ''}">${m.quantity > 0 ? '+' : ''}${m.quantity}</b></td>
+        <td class="n">${n(m.stock_before)} → <b>${n(m.stock_after)}</b></td><td>${esc(m.who || '—')}</td></tr>`; };
+    const load = async more => {
+      const my = ++seq, p = qs(); if (more && last) p.set('before', last);
+      let r; try { r = await api('/store/stock/log?' + p); } catch (err) { $('fsLogInfo').textContent = err.message; return; }
+      if (my !== seq || !body.isConnected) return;
+      if (!more) body.innerHTML = '';
+      body.insertAdjacentHTML('beforeend', r.rows.map(row).join(''));
+      last = r.rows.length ? r.rows[r.rows.length - 1].created_at : last;
+      $('fsLogMore').hidden = !r.more;
+      $('fsLogInfo').textContent = body.children.length ? `${body.children.length} movimento(s)${r.more ? ' (há mais)' : ''}` : 'Nenhum movimento neste período.';
+    };
+    f.oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(false), 250); };
+    f.onsubmit = e => { e.preventDefault(); load(false); };
+    $('fsLogMore').onclick = () => load(true);
+    load(false);
   }
   // Entrada de estoque (compra). Produto com modelos: informa o modelo. O custo entra no relatório de compras.
   function stockDialog(p, onDone, variantName = '') {
@@ -909,7 +1035,7 @@
       <div class="fs-row"><label class="nv-field fs-grow">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label>
       <label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
       <small class="nv-help">Para corrigir para menos, use número negativo (ex.: −2). O custo entra no total de compras de estoque do relatório.</small>
-      ${p.barcode ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode && !p.ask_variant ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
+      ${p.barcode ? labelChoiceHtml(p.generated_barcode && !p.ask_variant ? 'each' : 'none') : ''}
       <button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsStock');
     if (p.ask_variant) { api(`/store/products/${p.id}/variants`).then(rows => { const dl = $('fsStockVars'); if (dl) dl.innerHTML = rows.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); (variantName ? f.elements.n : f.elements.m).focus(); }
@@ -921,7 +1047,7 @@
       if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Custo inválido.'; return; }
       const body = { add: n, unit_cost_cents: cost }; if (p.ask_variant) body.variant_name = f.elements.m.value.trim();
       if (p.ask_variant && !body.variant_name) { st.textContent = 'Informe o modelo.'; return; }
-      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', body); feedback(r.variant ? `Estoque de ${r.name} ${r.variant.name}: ${r.variant.stock_qty}.` : `Estoque de ${r.name}: ${r.stock_qty}.`); if (f.elements.print?.checked && n > 0) printLabels(r, n); $('editorDialog').close(); onDone?.(); }
+      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', body); feedback(r.variant ? `Estoque de ${r.name} ${r.variant.name}: ${r.variant.stock_qty}.` : `Estoque de ${r.name}: ${r.stock_qty}.`); $('editorDialog').close(); if (n > 0) await applyLabelChoice(f, r, n); onDone?.(); }
       catch (err) { st.textContent = err.message; }
     };
   }
@@ -1014,7 +1140,7 @@
         <div class="fs-row"><label class="nv-field" style="flex:0 0 170px">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 30"></label>
         <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label>
         <label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" value="${centsText(p.price_cents)}"${basic() ? ' readonly' : ''}></label></div>
-        ${p.barcode || attach ? '<label class="fs-check"><input type="checkbox" name="print"' + (p.generated_barcode && !p.ask_variant ? ' checked' : '') + '> Imprimir uma etiqueta para cada unidade</label>' : ''}
+        ${p.barcode || attach ? labelChoiceHtml(p.generated_barcode && !p.ask_variant ? 'each' : 'none') : ''}
         <div class="fs-row"><button class="nv-button">Somar ao estoque</button><button type="button" class="nv-button secondary" id="fsEnCancel">Cancelar</button></div><p role="status" class="nv-help"></p></form>`;
       const f = $('fsEnStock'), st = f.querySelector('[role=status]');
       $('fsEnCancel').onclick = cancel; trackQty(f.elements.n);
@@ -1033,7 +1159,7 @@
           let prod = p; if (Object.keys(patch).length) prod = await api('/store/products/' + p.id, 'PATCH', patch);
           const body = { add: n, unit_cost_cents: cost }; if (variant) body.variant_name = variant;
           const r = await api(`/store/products/${p.id}/stock`, 'POST', body);
-          if (f.elements.print?.checked && n > 0) printLabels({ ...prod, ...r }, n);
+          if (n > 0) await applyLabelChoice(f, { ...prod, ...r }, n);
           done(p.name + (variant ? ' ' + variant : ''), n, cost, false, r.variant ? r.variant.stock_qty : r.stock_qty);
         } catch (err) { st.textContent = err.message; btn.disabled = false; }
       };
@@ -1050,7 +1176,7 @@
         <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" placeholder="0,00"></label>
         <label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required placeholder="0,00"></label></div>
         <p class="nv-help" id="fsEnMargin"></p>
-        <label class="fs-check"><input type="checkbox" name="print"> Imprimir uma etiqueta para cada unidade</label>
+        ${labelChoiceHtml('none')}
         <div class="fs-row"><button class="nv-button">Cadastrar e somar ao estoque</button><button type="button" class="nv-button secondary" id="fsEnCancel">Cancelar</button></div><p role="status" class="nv-help"></p></form>`;
       const f = $('fsEnNew'), st = f.querySelector('[role=status]'), same = $('fsEnSame');
       $('fsEnCancel').onclick = cancel; trackQty(f.elements.n);
@@ -1081,7 +1207,7 @@
         const btn = f.querySelector('button'); btn.disabled = true;
         try {
           const p = await api('/store/products', 'POST', { name, barcode, price_cents: price, cost_cents: cost, stock_qty: n });
-          if (f.elements.print.checked && n > 0 && p.barcode) printLabels(p, n);
+          if (n > 0) await applyLabelChoice(f, p, n);
           done(p.name, n, cost, true, p.stock_qty);
         } catch (err) {
           btn.disabled = false; st.textContent = err.message;
@@ -1123,7 +1249,7 @@
       const found = await suggest(); if (found.length === 1) { scan.value = ''; pick(found[0]); }
     };
     // Cursor fora dos campos (depois de clicar num botão): a próxima tecla, inclusive do leitor, volta para o campo certo.
-    const d = $('editorDialog');
+    const d = stockHost();
     if (!d.dataset.enKeys) {
       d.dataset.enKeys = '1';
       d.addEventListener('keydown', e => {
@@ -1135,11 +1261,20 @@
     drawLog(); scan.focus();
   }
 
+  // Estoque abre como página (menu lateral "Estoque") ou como janela (botão "Estoque" dentro do Caixa).
+  // Com a página na tela, tudo que "reabre o estoque" redesenha a página e fecha a janela por cima.
+  let stockPage = null;
+  const stockOnPage = () => !!stockPage?.isConnected;
+  const stockHost = () => stockOnPage() ? stockPage : $('editorDialog');
   async function productsDialog(term = '', tab = 'list') {
-    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição']];
-    openDialog(`${header('Estoque')}<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`);
-    document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
+    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['labels', FPIcon('tag') + 'Etiquetas'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição'], ['log', FPIcon('receipt') + 'Histórico']];
+    const body = `<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`;
+    if (stockOnPage()) { const d = $('editorDialog'); if (d.open) d.close(); stockPage.innerHTML = body; }
+    else openDialog(header('Estoque') + body);
+    stockHost().querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => { if (b.dataset.ptab !== 'log') logFilter = null; productsDialog('', b.dataset.ptab); });
     const box = $('fsPTab');
+    if (tab === 'labels') return labelsTab(box);
+    if (tab === 'log') return logTab(box);
     if (tab === 'restock') return restockTab(box);
     if (tab === 'entry') return entryTab(box);
     if (tab === 'parts') return partsTab(box, term);
@@ -1148,10 +1283,10 @@
       box.innerHTML = `<p class="nv-help">Para produto <b>sem código de barras</b>: o sistema cria o código, já cadastra o produto com o estoque e abre as etiquetas para imprimir (uma por unidade). Depois é só colar no produto: o leitor reconhece na venda e o estoque baixa sozinho.</p>
         <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="Ex.: Capinha Galaxy A12 transparente"></label>
         <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required placeholder="0,00"></label><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" placeholder="0,00"></label><label class="nv-field" style="flex:0 0 120px">Quantidade<input name="qty" inputmode="numeric" required value="1"></label></div>
-        <p class="nv-help" id="fsGenInfo"></p><button class="nv-button">Gerar código, cadastrar e imprimir etiquetas</button><p role="status" class="nv-help"></p></form>`;
+        ${labelChoiceHtml('each')}<p class="nv-help" id="fsGenInfo"></p><button class="nv-button">Gerar código e cadastrar</button><p role="status" class="nv-help"></p></form>`;
       const f = $('fsGen'), st = f.querySelector('[role=status]');
       f.oninput = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value), q = Number(f.elements.qty.value);
-        $('fsGenInfo').innerHTML = [Number.isInteger(q) && q > 0 ? `${q} etiqueta(s) e estoque inicial de ${q}` : '', Number.isFinite(p) && Number.isFinite(c) ? `lucro por unidade ${brl(p - c)} (${margin(p, c)}%)` : ''].filter(Boolean).join(' · '); };
+        $('fsGenInfo').innerHTML = [Number.isInteger(q) && q > 0 ? `estoque inicial de ${q}` : '', Number.isFinite(p) && Number.isFinite(c) ? `lucro por unidade ${brl(p - c)} (${margin(p, c)}%)` : ''].filter(Boolean).join(' · '); };
       f.oninput(); f.elements.name.focus();
       f.onsubmit = async e => {
         e.preventDefault();
@@ -1162,10 +1297,10 @@
         if (!Number.isInteger(qty) || qty < 1 || qty > 500) { st.textContent = 'Quantidade de 1 a 500.'; return; }
         try {
           const p = await api('/store/products/generate', 'POST', { name, price_cents: price, cost_cents: cost, quantity: qty });
-          printLabels(p, qty);
-          box.innerHTML = `<div class="fs-last"><div><b>${esc(p.name)}</b> cadastrado com o código <b>${esc(p.barcode)}</b> e estoque ${p.stock_qty}.<br><small>As etiquetas abriram em outra janela. Se não abriram, libere pop-ups e use o botão.</small></div>
-            <div class="fs-actions"><button type="button" class="nv-button" id="fsGenPrint">${FPIcon('tag')}Imprimir etiquetas de novo</button><button type="button" class="nv-button secondary" id="fsGenMore">Gerar outro produto</button></div></div>`;
-          $('fsGenPrint').onclick = () => printLabels(p, qty); $('fsGenMore').onclick = () => productsDialog('', 'gen');
+          await applyLabelChoice(f, p, qty);
+          box.innerHTML = `<div class="fs-last"><div><b>${esc(p.name)}</b> cadastrado com o código <b>${esc(p.barcode)}</b> e estoque ${p.stock_qty}.</div>
+            <div class="fs-actions"><button type="button" class="nv-button" id="fsGenPrint">${FPIcon('tag')}Etiquetas deste produto</button><button type="button" class="nv-button secondary" id="fsGenMore">Gerar outro produto</button></div></div>`;
+          $('fsGenPrint').onclick = () => labelsDialog(p, 1); $('fsGenMore').onclick = () => productsDialog('', 'gen');
         } catch (err) { st.textContent = err.message; }
       };
       return;
@@ -1181,13 +1316,14 @@
       list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
         return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
           <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant ? 'Estoque por modelo' : `Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
-          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
+          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
       const byId = id => rows.find(p => p.id === id);
       list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(byId(b.dataset.fsEdit), reopen));
       list.querySelectorAll('[data-fs-stock]').forEach(b => b.onclick = () => stockDialog(byId(b.dataset.fsStock), reopen));
       list.querySelectorAll('[data-fs-vars]').forEach(b => b.onclick = () => variantsDialog(byId(b.dataset.fsVars), reopen));
-      list.querySelectorAll('[data-fs-lab]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsLab); labelsDialog(p, Math.max(1, p.stock_qty || 1)); });
+      list.querySelectorAll('[data-fs-lab]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsLab); labelsDialog(p, 1); });
+      list.querySelectorAll('[data-fs-hist]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsHist); logFilter = { product_id: p.id, name: p.name }; productsDialog('', 'log'); });
       list.querySelectorAll('[data-fs-pdel]').forEach(b => b.onclick = async () => {
         const p = byId(b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
         try { await api('/store/products/' + p.id, 'DELETE'); cart = cart.filter(i => i.id !== p.id); drawCart(); draw(); } catch (err) { feedback(err.message, true); }
@@ -1562,6 +1698,9 @@
   .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
   .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-labchoice{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px 10px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-labchoice legend{font-weight:600;font-size:14px;padding:0 4px}.fs-labchoice label{display:flex;align-items:baseline;gap:8px;font-size:14px}.fs-labchoice small{color:var(--nv-muted)}.fs-labchoice .fs-labqueue{margin:4px 0 0;padding-top:6px;border-top:1px dashed var(--nv-border)}
+  .fs-lbrow{align-items:center;gap:10px}.fs-lbchk input{width:20px;height:20px}.fs-lbfoot{align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}.fs-stockpage .fs-tabs{flex-wrap:wrap}
+  .fs-logwrap{overflow-x:auto;margin-top:6px}.fs-log{width:100%;border-collapse:collapse;font-size:14px}.fs-log th,.fs-log td{padding:8px 6px;border-bottom:1px solid var(--nv-border);text-align:left;vertical-align:top}.fs-log th{font-size:12px;color:var(--nv-muted);font-weight:600}.fs-log .n{text-align:right;white-space:nowrap}.fs-log small{color:var(--nv-muted)}.fs-logf{align-items:flex-end;flex-wrap:wrap}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-cb{border:1px solid #f0c36d;background:#fff8e6;border-radius:12px;padding:10px 12px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-cb>div:first-child{display:flex;flex-direction:column}.fs-cb small{color:var(--nv-muted)}.fs-cb .fs-check{margin:0;font-size:14px}.fs-cb-pay{font-size:15px}.fs-cb-pay b{font-size:18px}
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
@@ -1571,19 +1710,21 @@
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button>');
     const phone = document.querySelector('.nv-phone-nav');
     if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }
 
   window.FPSales = {
     enabled: () => !!config?.enabled,
-    titles: { cash: 'Caixa', messages: 'Mensagens' },
-    moreItems: () => config?.enabled ? [['messages', 'Mensagens'], ['cameras', 'Câmeras']] : [],
+    titles: { cash: 'Caixa', stock: 'Estoque', messages: 'Mensagens' },
+    moreItems: () => config?.enabled ? [['stock', 'Estoque'], ['messages', 'Mensagens'], ['cameras', 'Câmeras']] : [],
     async load(view, box, alive) {
       box.classList.remove('fs-private');
       if (!config?.enabled) { box.innerHTML = '<section class="nv-card">Recurso não habilitado para esta loja.</section>'; return; }
       if (view === 'cash') return loadCash(box, alive);
+      // Estoque pelo menu: as mesmas abas da janela do Caixa, sem precisar abrir o caixa.
+      if (view === 'stock') { box.innerHTML = '<section class="nv-card fs-stockpage" id="fsStockPage"></section>'; stockPage = $('fsStockPage'); return productsDialog('', 'list'); }
       return loadMessages(box, alive);
     }
   };

@@ -1028,6 +1028,47 @@
     $('fsLogMore').onclick = () => load(true);
     load(false);
   }
+  // Valor do estoque: login e senha próprios (não ficam salvos; só na memória enquanto a página está aberta).
+  let valueCreds = null;
+  async function valueTab(box) {
+    const ask = msg => {
+      box.innerHTML = `<form id="fsValF" class="fs-valf" autocomplete="off"><p class="nv-help">${FPIcon('lock')} Área restrita: quanto vale o que está no estoque (custo, venda e lucro).</p>
+        <label class="nv-field">Login<input name="login" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
+        <label class="nv-field">Senha<input name="password" type="password" autocomplete="new-password" required></label>
+        <button class="nv-button">Entrar</button><p role="alert" class="fs-neg" id="fsValErr">${msg ? esc(msg) : ''}</p></form>`;
+      const f = $('fsValF'); f.elements.login.focus();
+      f.onsubmit = async e => { e.preventDefault(); const b = f.querySelector('button'); b.disabled = true;
+        valueCreds = { login: f.elements.login.value, password: f.elements.password.value }; await show(); };
+    };
+    const show = async () => {
+      let d; try { d = await api('/store/stock/value', 'POST', valueCreds); }
+      catch (err) { valueCreds = null; return ask(err.message); }
+      if (!box.isConnected) return;
+      const P = d.products, pct = (a, b) => b > 0 ? (Math.round(a / b * 1000) / 10).toLocaleString('pt-BR') + '%' : '—';
+      const nm = r => `${esc(r.name)}${r.variant ? ` <span class="fs-var">${esc(r.variant)}</span>` : ''}`;
+      const table = (rows, cols) => rows.length ? `<div class="fs-logwrap"><table class="fs-log"><thead><tr><th>Produto</th>${cols.map(c => `<th class="n">${c[0]}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${nm(r)}</td>${cols.map(c => `<td class="n">${c[1](r)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<p class="nv-help">Nenhum item.</p>';
+      const profitCols = [['Qtd.', r => r.qty], ['Custo', r => brl(r.cost_cents)], ['Venda', r => brl(r.price_cents)],
+        ['Lucro un.', r => `<b class="${r.unit_profit_cents < 0 ? 'fs-neg' : 'fs-pos'}">${brl(r.unit_profit_cents)}</b>`], ['Margem', r => r.margin_pct == null ? '—' : r.margin_pct.toLocaleString('pt-BR') + '%'], ['Lucro no estoque', r => brl(r.total_profit_cents)]];
+      box.innerHTML = `<div class="fs-row fs-valhead"><p class="nv-help fs-grow">Só o que está cadastrado e ainda não foi vendido (estoque atual). Atualizado às ${hhmm(d.generated_at)}.</p>
+          <button type="button" class="nv-button secondary fs-small" id="fsValRe">${FPIcon('refresh')}Atualizar</button><button type="button" class="nv-button secondary fs-small" id="fsValOut">${FPIcon('lock')}Sair</button></div>
+        <div class="fs-valkpis">
+          <div class="nv-card"><div class="nv-card-label">Em estoque</div><div class="nv-number">${P.units.toLocaleString('pt-BR')}</div><small>unidades · ${P.items} produto(s)</small></div>
+          <div class="nv-card"><div class="nv-card-label">Preço de custo total</div><div class="nv-number">${brl(P.cost_cents)}</div><small>${P.without_cost.length ? `${P.without_cost.length} item(ns) sem custo ficaram fora` : 'todos com custo'}</small></div>
+          <div class="nv-card"><div class="nv-card-label">Preço de venda total</div><div class="nv-number">${brl(P.sale_cents)}</div><small>se vender tudo pelo preço cadastrado</small></div>
+          <div class="nv-card"><div class="nv-card-label">Lucro esperado</div><div class="nv-number ${P.profit_cents < 0 ? 'fs-neg' : 'fs-pos'}">${brl(P.profit_cents)}</div><small>margem ${pct(P.profit_cents, P.sale_with_cost_cents)} · itens com custo</small></div>
+        </div>
+        ${P.below_cost ? `<p class="fs-warn nv-help">${P.below_cost} item(ns) com preço de venda abaixo do custo.</p>` : ''}
+        ${d.parts.items ? `<p class="nv-help">Peças de serviço (fora dos totais acima): ${d.parts.units} unidade(s), custo ${brl(d.parts.cost_cents)}${d.parts.without_cost ? ` · ${d.parts.without_cost} sem custo` : ''}.</p>` : ''}
+        <h3 class="fs-valh">Maior lucro por unidade</h3>${table(d.top, profitCols)}
+        <h3 class="fs-valh">Menor lucro por unidade</h3>${table(d.bottom, profitCols)}
+        <h3 class="fs-valh">Onde está mais dinheiro parado (custo no estoque)</h3>${table(d.most_capital, [['Qtd.', r => r.qty], ['Custo un.', r => brl(r.cost_cents)], ['Custo no estoque', r => `<b>${brl(r.stock_cost_cents)}</b>`], ['Venda no estoque', r => brl(r.price_cents * r.qty)]])}
+        ${P.without_cost.length ? `<h3 class="fs-valh">Sem preço de custo (fora do custo e do lucro)</h3>${table(P.without_cost, [['Qtd.', r => r.qty], ['Venda', r => brl(r.price_cents)]])}` : ''}`;
+      $('fsValRe').onclick = show;
+      $('fsValOut').onclick = () => { valueCreds = null; ask(''); };
+    };
+    if (valueCreds) show(); else ask('');
+  }
   // Entrada de estoque (compra). Produto com modelos: informa o modelo. O custo entra no relatório de compras.
   function stockDialog(p, onDone, variantName = '') {
     openDialog(`${header('Entrada de estoque')}<form id="fsStock" autocomplete="off"><p class="nv-help"><b>${esc(p.name)}</b>${p.ask_variant ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · vendido e não reposto: <b>${p.restock_pending}</b>` : ''}</p>
@@ -1267,7 +1308,7 @@
   const stockOnPage = () => !!stockPage?.isConnected;
   const stockHost = () => stockOnPage() ? stockPage : $('editorDialog');
   async function productsDialog(term = '', tab = 'list') {
-    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['labels', FPIcon('tag') + 'Etiquetas'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição'], ['log', FPIcon('receipt') + 'Histórico']];
+    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['labels', FPIcon('tag') + 'Etiquetas'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição'], ['log', FPIcon('receipt') + 'Histórico'], ['value', FPIcon('lock') + 'Valor do estoque']];
     const body = `<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`;
     if (stockOnPage()) { const d = $('editorDialog'); if (d.open) d.close(); stockPage.innerHTML = body; }
     else openDialog(header('Estoque') + body);
@@ -1275,6 +1316,7 @@
     const box = $('fsPTab');
     if (tab === 'labels') return labelsTab(box);
     if (tab === 'log') return logTab(box);
+    if (tab === 'value') return valueTab(box);
     if (tab === 'restock') return restockTab(box);
     if (tab === 'entry') return entryTab(box);
     if (tab === 'parts') return partsTab(box, term);
@@ -1700,7 +1742,7 @@
   .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-labchoice{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px 10px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-labchoice legend{font-weight:600;font-size:14px;padding:0 4px}.fs-labchoice label{display:flex;align-items:baseline;gap:8px;font-size:14px}.fs-labchoice small{color:var(--nv-muted)}.fs-labchoice .fs-labqueue{margin:4px 0 0;padding-top:6px;border-top:1px dashed var(--nv-border)}
   .fs-lbrow{align-items:center;gap:10px}.fs-lbchk input{width:20px;height:20px}.fs-lbfoot{align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}.fs-stockpage .fs-tabs{flex-wrap:wrap}
-  .fs-logwrap{overflow-x:auto;margin-top:6px}.fs-log{width:100%;border-collapse:collapse;font-size:14px}.fs-log th,.fs-log td{padding:8px 6px;border-bottom:1px solid var(--nv-border);text-align:left;vertical-align:top}.fs-log th{font-size:12px;color:var(--nv-muted);font-weight:600}.fs-log .n{text-align:right;white-space:nowrap}.fs-log small{color:var(--nv-muted)}.fs-logf{align-items:flex-end;flex-wrap:wrap}
+  .fs-valf{max-width:360px}.fs-valhead{align-items:center;gap:8px;flex-wrap:wrap}.fs-valkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:8px 0 12px}.fs-valkpis .nv-card{margin:0}.fs-valkpis .nv-number{font-size:26px}.fs-valkpis small{color:var(--nv-muted);font-size:12px}.fs-valh{font-size:16px;margin:18px 0 4px}.fs-logwrap{overflow-x:auto;margin-top:6px}.fs-log{width:100%;border-collapse:collapse;font-size:14px}.fs-log th,.fs-log td{padding:8px 6px;border-bottom:1px solid var(--nv-border);text-align:left;vertical-align:top}.fs-log th{font-size:12px;color:var(--nv-muted);font-weight:600}.fs-log .n{text-align:right;white-space:nowrap}.fs-log small{color:var(--nv-muted)}.fs-logf{align-items:flex-end;flex-wrap:wrap}
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-cb{border:1px solid #f0c36d;background:#fff8e6;border-radius:12px;padding:10px 12px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-cb>div:first-child{display:flex;flex-direction:column}.fs-cb small{color:var(--nv-muted)}.fs-cb .fs-check{margin:0;font-size:14px}.fs-cb-pay{font-size:15px}.fs-cb-pay b{font-size:18px}
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}

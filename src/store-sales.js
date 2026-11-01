@@ -6,6 +6,7 @@
 //   quem já recebeu, para a lista do dia mostrar o que falta enviar.
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { registerStockValue } from './stock-value.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -22,6 +23,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   });
   const guard = [...staff, enabled];
   const owner = [auth, roles('owner'), enabled];
+  registerStockValue(app, { q, route, bad, valid, audit, guard, tid });
   // Operador novato (access_level 'basic') não cancela venda, não lança saídas/sangria/suprimento,
   // não fecha o caixa e não dá desconto nem muda preço.
   const fullOnly = (req, res, next) => req.user.access_level === 'basic' ? bad(res, 403, 'Seu acesso (operador novato) não permite esta ação. Peça a um operador livre ou ao dono.') : next();

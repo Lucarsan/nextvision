@@ -432,6 +432,24 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     }
     bad(res, 409, 'Não foi possível gerar um código livre. Tente de novo.');
   }));
+  // Produto já cadastrado sem código de barras que precisa de etiqueta: recebe um código interno (o mesmo de "Gerar códigos").
+  // Se já tem código, devolve o produto como está.
+  app.post('/api/store/products/:id/barcode/generate', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
+    const cur = (await q(`SELECT ${productFields} FROM products WHERE id=$1 AND tenant_id=$2 AND active`, [req.params.id, tid(req)])).rows[0];
+    if (!cur) return bad(res, 404, 'Produto não encontrado');
+    if (cur.barcode) return res.json(cur);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const n = (await q("SELECT nextval('product_internal_code_seq') n")).rows[0].n;
+      const code = ean13('2' + String(n).padStart(11, '0'));
+      try {
+        const r = await q(`UPDATE products SET barcode=$1,generated_barcode=true,updated_at=now() WHERE id=$2 AND tenant_id=$3 AND barcode IS NULL RETURNING ${productFields}`, [code, req.params.id, tid(req)]);
+        if (!r.rowCount) return res.json((await q(`SELECT ${productFields} FROM products WHERE id=$1`, [req.params.id])).rows[0]);
+        await audit(req, 'barcode', 'product', req.params.id); return res.json(r.rows[0]);
+      } catch (e) { if (e.code !== '23505') throw e; }
+    }
+    bad(res, 409, 'Não foi possível gerar um código livre. Tente de novo.');
+  }));
   // Entrada (ou ajuste) de estoque: soma ao estoque atual; produto sem controle passa a controlar.
   // Produto com modelos: a entrada é por modelo. Entrada abate o que estava "vendido e não reposto".
   app.post('/api/store/products/:id/stock', ...guard, route(async (req, res) => {

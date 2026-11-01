@@ -31,7 +31,10 @@ export function registerStoreQr(app, { q, auth, roles, route, bad, valid, audit 
   }));
 
   app.post('/api/public/stores/:slug/contact', publicWrite, route(async (req, res) => {
-    const v = valid(z.object({ name: z.string().trim().min(2).max(80), phone: z.string().trim().min(8).max(30) }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({
+      name: z.string().trim().min(2).max(80).refine(n => /\p{L}/u.test(n), 'Informe seu nome.'),
+      phone: z.string().trim().min(8).max(30).refine(p => /^[1-9][1-9]\d{8,9}$/.test(p.replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '')), 'Informe o WhatsApp com DDD.')
+    }).strict(), req, res); if (!v) return;
     const s = await storeBySlug(req.params.slug); if (!s) return bad(res, 404, 'Loja não encontrada');
     if (!s.whatsapp) return bad(res, 409, 'A loja ainda não cadastrou o WhatsApp de atendimento.');
     const key = (await q('SELECT fp_phone_key($1) k', [v.phone])).rows[0].k;

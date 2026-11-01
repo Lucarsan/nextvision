@@ -358,6 +358,7 @@ function Show-Maintenance {
       $age = [int]([datetime]::UtcNow - [datetime]::Parse($st.observed_at).ToUniversalTime()).TotalSeconds
       $it = New-Object Windows.Forms.ListViewItem('Central'); [void]$it.SubItems.Add([string]$st.central + ' (atualizado ha ' + $age + ' s)'); [void]$script:grid.Items.Add($it)
       if ($st.PSObject.Properties['recording']) { $it = New-Object Windows.Forms.ListViewItem('Gravacao'); [void]$it.SubItems.Add([string]$st.recording + ' | ' + [string]$st.recordings_free); [void]$script:grid.Items.Add($it) }
+      if ($st.PSObject.Properties['backup']) { $it = New-Object Windows.Forms.ListViewItem('Backup da loja'); [void]$it.SubItems.Add([string]$st.backup); [void]$script:grid.Items.Add($it) }
       foreach ($c in @($st.cameras)) { $it = New-Object Windows.Forms.ListViewItem('Camera ' + $c.name); [void]$it.SubItems.Add([string]$c.detail + ' - ' + [string]$c.host); [void]$script:grid.Items.Add($it) }
     } catch { $it = New-Object Windows.Forms.ListViewItem('Agente'); [void]$it.SubItems.Add('sem status recente'); [void]$script:grid.Items.Add($it) }
   }

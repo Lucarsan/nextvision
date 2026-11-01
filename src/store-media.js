@@ -88,7 +88,7 @@ const publicMedia = (row, cloudflare) => row ? {
 const componentState = z.enum(['ok', 'starting', 'degraded', 'down', 'unknown']);
 const heartbeatSchema = z.object({
   agent_version: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/),
-  components: z.record(z.enum(['service', 'tunnel', 'relay', 'publisher', 'network', 'disk']), z.object({ state: componentState, detail: z.string().max(200).optional() })).default({}),
+  components: z.record(z.enum(['service', 'tunnel', 'relay', 'publisher', 'network', 'disk', 'backup']), z.object({ state: componentState, detail: z.string().max(200).optional() })).default({}),
   cameras: z.array(z.object({ id: z.string().uuid(), state: componentState, detail: z.string().max(200).optional() })).max(64).default([]),
   // Relógio do PC: as gravações são achadas pelo horário, então a central corrige a diferença.
   clock: z.string().datetime({ offset: true }).optional(),

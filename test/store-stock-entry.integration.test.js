@@ -67,7 +67,7 @@ test('painel: entrada rápida pelo leitor e por nome', {
     await page.getByRole('button', { name: 'Abrir caixa' }).click();
     await page.waitForSelector('#fsSale');
     await page.locator('#fsProducts').click();
-    await page.getByRole('tab', { name: '📥 Entrada rápida' }).click();
+    await page.getByRole('tab', { name: 'Entrada rápida' }).click();
 
     // Leitor: digita o código e Enter. Código desconhecido abre o cadastro com o código preenchido.
     await page.locator('#fsEnScan').pressSequentially('7894444444442\n', { delay: 5 });

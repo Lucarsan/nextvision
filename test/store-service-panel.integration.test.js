@@ -35,7 +35,7 @@ test('caixa registra serviço com peça, fornecedor e aparelho sugeridos', {
     await page.screenshot({ path: process.env.SHOT_DIR ? process.env.SHOT_DIR + '/caixa-produto.png' : undefined });
 
     // Serviço: escolher a peça preenche aparelho, fornecedor, custo, preço e nome.
-    await page.getByRole('button', { name: '🔧 Serviço' }).click();
+    await page.getByRole('button', { name: 'Serviço', exact: true }).click();
     assert.equal(await page.locator('#fsScan').isVisible(), false, 'leitor/itens de produto escondidos');
     await page.locator('#fsSvcPartQ').click(); await page.locator('#fsSvcPartQ').fill('a12');
     await page.locator('#fsSvcPartList button', { hasText: 'Tela · Galaxy A12' }).click();
@@ -53,8 +53,8 @@ test('caixa registra serviço com peça, fornecedor e aparelho sugeridos', {
     assert.match(await page.locator('.fs-col-report').innerText(), /Troca de tela · Galaxy A12/);
 
     // Segundo serviço sem peça: fornecedor sugerido pelo que já foi usado.
-    await page.getByRole('button', { name: '🔧 Serviço' }).click();
-    // Botões de serviços: lista inicial; "⚙ Editar" define o preço; o botão preenche serviço e preço.
+    await page.getByRole('button', { name: 'Serviço', exact: true }).click();
+    // Botões de serviços: lista inicial; "Editar" define o preço; o botão preenche serviço e preço.
     await page.waitForSelector('[data-fs-svc]');
     assert.match(await page.locator('#fsSvcQuick').innerText(), /Troca de bateria[\s\S]*Reparo comum/);
     await page.locator('#fsSvcManage').click();
@@ -78,13 +78,13 @@ test('caixa registra serviço com peça, fornecedor e aparelho sugeridos', {
     await page.waitForFunction(() => document.querySelectorAll('.fs-tag-svc').length === 2);
 
     // Estoque: aba Peças mostra a tela com 1 unidade e "repor 1".
-    await page.getByRole('button', { name: '📦 Estoque' }).click();
-    await page.getByRole('tab', { name: '🔧 Peças' }).click();
+    await page.getByRole('button', { name: 'Estoque' }).click();
+    await page.getByRole('tab', { name: 'Peças' }).click();
     await page.waitForSelector('#fsPartList .fs-sale');
     const parts = await page.locator('#fsPartList').innerText();
     assert.match(parts, /Tela · Galaxy A12/); assert.match(parts, /Estoque: 1/); assert.match(parts, /repor 1/);
     await page.screenshot({ path: process.env.SHOT_DIR ? process.env.SHOT_DIR + '/estoque-pecas.png' : undefined });
-    await page.getByRole('tab', { name: '🏭 Fornecedores' }).click();
+    await page.getByRole('tab', { name: 'Fornecedores' }).click();
     await page.waitForSelector('text=Modelos de aparelho');
     assert.match(await page.locator('#fsPTab').innerText(), /iPhone 11/);
     assert.deepEqual(errors, []);

@@ -82,7 +82,7 @@
     if (!lines.length) return '';
     return lines.join(' ') + '\n' + cashbackRules();
   }
-  const cbBadge = cb => cbOn() && cb?.balance_cents > 0 ? `<span class="fs-cb-badge" title="Saldo de cashback">💰 ${brl(cb.balance_cents)}</span>` : '';
+  const cbBadge = cb => cbOn() && cb?.balance_cents > 0 ? `<span class="fs-cb-badge" title="Saldo de cashback">${FPIcon('wallet')}${brl(cb.balance_cents)}</span>` : '';
   const cbWhen = r => r.days_left <= 0 ? 'hoje' : r.days_left === 1 ? 'amanhã' : `em ${r.days_left} dias (${ymdShort(r.expires_on)})`;
   const reminderMessage = r => render(config.cashback_reminder_message || DEFAULT_CB_REMINDER, {
     cliente: greetName(r.name) || 'tudo bem', loja: config.name || 'loja', valor: brl(r.expiring_cents), saldo: brl(r.balance_cents),
@@ -104,13 +104,13 @@
   function progressBar(l) {
     if (!l || !l.enabled) return '';
     const pct = Math.min(100, Math.round(100 * l.checkins / l.target));
-    return `<div class="fs-loyal" title="Cartão fidelidade"><div class="fs-bar"><span style="width:${pct}%"></span></div><small>${l.complete ? '🎁 Prêmio liberado' : `${l.checkins}/${l.target} · faltam ${l.remaining}`}</small></div>`;
+    return `<div class="fs-loyal" title="Cartão fidelidade"><div class="fs-bar"><span style="width:${pct}%"></span></div><small>${l.complete ? FPIcon('gift') + ' Prêmio liberado' : `${l.checkins}/${l.target} · faltam ${l.remaining}`}</small></div>`;
   }
   function feedback(text, error = false) {
     const n = $('panelFeedback'); if (!n) return; n.textContent = text; n.classList.toggle('error', error); n.hidden = !text;
   }
   function openDialog(html) { const d = $('editorDialog'); d.innerHTML = html; if (!d.open) d.showModal(); return d; }
-  const header = t => `<div class="nv-heading"><h2 id="dialogTitle">${t}</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">✕</button></div>`;
+  const header = t => `<div class="nv-heading"><h2 id="dialogTitle">${t}</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">${FPIcon('x')}</button></div>`;
 
   // Abre o WhatsApp na hora do clique (antes de qualquer espera, para o navegador não bloquear)
   // e registra o envio.
@@ -131,12 +131,12 @@
     const s = data.session, sum = data.summary;
     const methods = Object.entries(sum.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('') || '<span class="nv-help">Nenhuma venda ainda.</span>';
     const saleRow = x => { const svc = (x.items || []).find(i => i.service);
-      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">🔧 Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">🧾</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
+      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">' + FPIcon('wrench') + 'Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">${FPIcon('receipt')}</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
         <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
         <div class="fs-cashbar-side"><label class="fs-seller" hidden>Vendedor<select id="fsSeller" aria-label="Vendedor da venda"><option value="">…</option></select></label>
-        <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">🖨 Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
+        <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">${FPIcon('printer')}Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
       <div class="fs-grid">
         <div class="fs-col-report">
           <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
@@ -147,7 +147,7 @@
             <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras saídas do dia aparecem aqui.</p>'}</div></section>
         </div>
         <section class="nv-card fs-newsale"><h2>Nova venda</h2>
-          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">🛒 Produto</button><button type="button" data-fs-mode="service">🔧 Serviço</button></div>
+          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">${FPIcon('cart')}Produto</button><button type="button" data-fs-mode="service">${FPIcon('wrench')}Serviço</button></div>
           <form id="fsSale" autocomplete="off">
           <div class="fs-scan" data-only="product"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
             <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
@@ -161,7 +161,7 @@
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
           <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
           <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
-          <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> 🧾 Imprimir comprovante ao registrar</label>
+          <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> Imprimir comprovante ao registrar</label>
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
       </div>`;
@@ -208,7 +208,7 @@
     box.innerHTML = `<section class="nv-card fs-open"><h2>Caixa fechado</h2><p class="nv-help">Abra o caixa para registrar as vendas do dia. Cada venda fica ligada a um cliente e soma no cartão fidelidade.</p>
       <form id="fsOpen" class="fs-row"><label class="nv-field">Troco inicial na gaveta<input name="opening" inputmode="decimal" placeholder="0,00"></label><button class="nv-button">Abrir caixa</button></form><p role="status" class="nv-help" id="fsOpenStatus"></p>
       ${l ? `<p class="nv-help fs-lastclose">Último fechamento: ${dmy(l.closed_at)} às ${hhmm(l.closed_at)}${l.closed_by_name ? ' por ' + esc(l.closed_by_name) : ''} · esperado ${brl(l.expected_cash_cents)} · contado ${brl(l.counted_cash_cents)}${diff ? ` · <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">diferença ${brl(diff)}</b>` : ' · sem diferença'}</p>` : ''}
-      <div class="fs-actions">${l ? '<button class="nv-button secondary" id="fsPrintLast">🖨 Relatório do último caixa</button>' : ''}<button class="nv-button secondary" id="fsHistory">Histórico de caixas</button><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">📦 Produtos</button></div></section>`;
+      <div class="fs-actions">${l ? '<button class="nv-button secondary" id="fsPrintLast">' + FPIcon('printer') + 'Relatório do último caixa</button>' : ''}<button class="nv-button secondary" id="fsHistory">Histórico de caixas</button><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Produtos</button></div></section>`;
     $('fsProducts').onclick = () => productsDialog(); setupEye(box);
     $('fsOpen').onsubmit = async e => {
       e.preventDefault(); const raw = e.currentTarget.elements.opening.value; const v = raw.trim() ? parseMoney(raw) : 0;
@@ -223,7 +223,7 @@
     const rows = await api('/store/cash/sessions');
     openDialog(`${header('Histórico de caixas')}<div class="fs-table"><table><thead><tr><th>Abertura</th><th>Fechamento</th><th>Vendas</th><th>Com cliente</th><th>Entradas</th><th>Saídas</th><th>Gaveta (esperado / contado)</th><th></th></tr></thead><tbody>${rows.map(r => {
       const diff = r.counted_cash_cents != null ? r.counted_cash_cents - r.expected_cash_cents : null;
-      return `<tr><td>${dmy(r.opened_at)} ${hhmm(r.opened_at)}<br><small>${esc(r.opened_by_name)}</small></td><td>${r.closed_at ? dmy(r.closed_at) + ' ' + hhmm(r.closed_at) : '<b>aberto</b>'}</td><td>${r.sales_count}</td><td>${r.sales_count ? Math.round(100 * r.linked_count / r.sales_count) + '%' : '—'}</td><td>${brl(r.sales_total_cents)}</td><td>${brl(r.expenses_total_cents)}</td><td>${r.closed_at ? `${brl(r.expected_cash_cents)} / ${brl(r.counted_cash_cents)}${diff ? ` <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">(${brl(diff)})</b>` : ''}` : '—'}${r.close_note ? `<br><small>${esc(r.close_note)}</small>` : ''}</td><td><button type="button" class="nv-button secondary fs-small" data-fs-print="${r.id}">🖨</button></td></tr>`;
+      return `<tr><td>${dmy(r.opened_at)} ${hhmm(r.opened_at)}<br><small>${esc(r.opened_by_name)}</small></td><td>${r.closed_at ? dmy(r.closed_at) + ' ' + hhmm(r.closed_at) : '<b>aberto</b>'}</td><td>${r.sales_count}</td><td>${r.sales_count ? Math.round(100 * r.linked_count / r.sales_count) + '%' : '—'}</td><td>${brl(r.sales_total_cents)}</td><td>${brl(r.expenses_total_cents)}</td><td>${r.closed_at ? `${brl(r.expected_cash_cents)} / ${brl(r.counted_cash_cents)}${diff ? ` <b class="${diff < 0 ? 'fs-neg' : 'fs-pos'}">(${brl(diff)})</b>` : ''}` : '—'}${r.close_note ? `<br><small>${esc(r.close_note)}</small>` : ''}</td><td><button type="button" class="nv-button secondary fs-small" data-fs-print="${r.id}" aria-label="Imprimir relatório">${FPIcon('printer')}</button></td></tr>`;
     }).join('') || '<tr><td colspan="8">Nenhum caixa ainda.</td></tr>'}</tbody></table></div>`);
     document.querySelectorAll('[data-fs-print]').forEach(b => b.onclick = () => printReport(b.dataset.fsPrint));
   }
@@ -273,7 +273,7 @@
     const bal = cbBalance(); if (!bal) { box.innerHTML = ''; box.dataset.html = ''; return; }
     const cb = saleCustomer.cashback, t = currentTotal(), can = Number.isFinite(t) && t > 0 ? cbAllowed(t, bal) : 0, use = cbUse();
     const when = cb.next_expires_on ? `${cb.next_expiring_cents < bal ? brl(cb.next_expiring_cents) + ' vence em' : 'Vale até'} ${ymdShort(cb.next_expires_on)}` : '';
-    const html = `<div class="fs-cb"><div><b>💰 Cashback disponível: ${brl(bal)}</b><small>${when}</small></div>
+    const html = `<div class="fs-cb"><div><b class="fs-cb-title">${FPIcon('wallet')}Cashback disponível: ${brl(bal)}</b><small>${when}</small></div>
       <label class="fs-check"><input type="checkbox" id="fsCbUse" ${cbWanted ? 'checked' : ''} ${can ? '' : 'disabled'}> ${can ? `Usar cashback nesta venda: <b>− ${brl(can)}</b>` : 'Informe o valor da venda para usar o cashback'}</label>
       ${use ? `<div class="fs-cb-pay">A pagar: <b>${brl(t - use)}</b> <small>(${brl(t)} − ${brl(use)} de cashback${bal - use > 0 ? ` · fica ${brl(bal - use)} de saldo` : ''})</small></div>` : can && can < bal ? `<small class="nv-help">Limite: até ${config.cashback_max_use_percent}% do valor da compra.</small>` : ''}</div>`;
     if (box.dataset.html === html) return; // evita redesenhar (e perder o foco) a cada tecla
@@ -312,14 +312,14 @@
     const changed = x.price_cents != null && x.unit != null && x.unit !== x.price_cents;
     return `<div class="fs-cart-row" data-cart-id="${x.id}"><span class="fs-cart-name">${esc(x.label)}<span class="fs-unit-wrap">R$ <input class="fs-unit${x.unit == null ? ' fs-need' : ''}"${basic() && x.price_cents != null ? ' readonly' : ''} inputmode="decimal" value="${x.unit != null ? centsText(x.unit) : ''}" placeholder="preço" aria-label="Preço de cada ${esc(x.label)}"> cada${changed ? ` <s>${brl(x.price_cents)}</s>` : ''}</span></span>
       <span class="fs-qq"><button type="button" data-q="-1" aria-label="Diminuir ${esc(x.label)}">−</button><input class="fs-qn" type="number" inputmode="numeric" min="1" max="9999" value="${x.qty}" aria-label="Quantidade de ${esc(x.label)}"><button type="button" data-q="1" aria-label="Aumentar ${esc(x.label)}">+</button></span>
-      <b class="fs-cart-sub">${x.unit != null ? brl(x.unit * x.qty) : '—'}</b><button type="button" class="fs-cart-del" data-del aria-label="Tirar ${esc(x.label)}">✕</button></div>`;
+      <b class="fs-cart-sub">${x.unit != null ? brl(x.unit * x.qty) : '—'}</b><button type="button" class="fs-cart-del" data-del aria-label="Tirar ${esc(x.label)}">${FPIcon('x')}</button></div>`;
   }
   async function drawQuick() {
     const box = $('fsQuick'); if (!box) return;
     const items = await loadQuick(); if (!box.isConnected) return;
     const chips = items.map(i => `<button type="button" class="fs-chip" data-fs-quick="${i.id}"><b>${esc(i.label)}</b>${i.price_cents != null ? `<small>${brl(i.price_cents)}</small>` : ''}</button>`).join('');
     const quickSummary = quickCart.length ? `<div class="fs-cart">${quickCart.map(cartRow).join('')}<div class="fs-cart-foot"><span>Itens: <b id="fsCartTotal">${brl(cartSum())}</b></span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar itens</button></div></div>` : '';
-    box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? '⚙ Editar' : '+ Cadastrar item frequente'}</button></div>
+    box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar item frequente'}</button></div>
       ${cart.length ? '<p class="nv-help fs-quick-empty">Com produtos lidos pelo leitor, o valor é a soma dos produtos. Itens frequentes ficam para vendas sem leitor.</p>' : items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (xerox, película, capa…) para lançar com um toque.</p>'}${quickSummary}`;
     box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
     $('fsQuickManage').onclick = manageQuick;
@@ -338,7 +338,7 @@
   }
   function addQuick(item) {
     const f = $('fsSale'); if (!item || !f) return;
-    if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "📦 Produtos".', true); return; }
+    if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "Produtos".', true); return; }
     if (!quickCart.length) { const cur = parseMoney(f.elements.total.value); lastAuto = ''; if (Number.isFinite(cur) && cur > 0 && f.elements.total.dataset.quick !== '1') quickCart.push({ id: 'avulso', label: 'Valor avulso', price_cents: null, unit: cur, qty: 1 }); }
     const hit = quickCart.find(x => x.id === item.id);
     if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, unit: item.price_cents, qty: 1 });
@@ -414,15 +414,15 @@
   }
   function drawLast() {
     const box = $('fsLast'); if (!box || !lastSale) return; const s = lastSale, c = s.customer;
-    const receiptBtn = '<button type="button" class="nv-button secondary" id="fsReceiptNow">🧾 Imprimir comprovante</button>';
+    const receiptBtn = '<button type="button" class="nv-button secondary" id="fsReceiptNow">' + FPIcon('receipt') + 'Imprimir comprovante</button>';
     const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
     if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
     const note = s.loyalty?.enabled ? (s.loyalty_counted ? 'Somou 1 compra no cartão.' : s.sale.order_id ? 'Pagamento de pedido: conta no cartão quando o pedido é finalizado.' : 'Abaixo do valor mínimo: não somou no cartão.') : '';
     const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
-    box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${esc(c.name)}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">💰 ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
+    box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${esc(c.name)}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">${FPIcon('wallet')} ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
       <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
     wireReceipt();
-    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), { customer_id: c.id, kind: 'status' }); b.textContent = 'Enviado ✓'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
+    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), { customer_id: c.id, kind: 'status' }); b.innerHTML = FPIcon('check') + 'Enviado'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
   }
 
@@ -478,7 +478,7 @@
     const last = name => history.find(h => h.name.toLowerCase() === name.toLowerCase())?.last_price_cents ?? null;
     const priceOf = i => i.price_cents ?? last(i.name);
     const current = String(svc.name || '').trim().toLowerCase();
-    box.innerHTML = `<div class="fs-quick-head"><span>Serviços</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? '⚙ Editar' : '+ Cadastrar serviço'}</button></div>
+    box.innerHTML = `<div class="fs-quick-head"><span>Serviços</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar serviço'}</button></div>
       ${items.length ? `<div class="fs-chips">${items.map(i => { const p = priceOf(i); return `<button type="button" class="fs-chip${i.name.toLowerCase() === current ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${i.name.toLowerCase() === current}"><b>${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; }).join('')}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (troca de tela, bateria…) para lançar com um toque.</p>'}`;
     box.querySelectorAll('[data-fs-svc]').forEach(b => b.onclick = () => {
       const i = items.find(x => x.id === b.dataset.fsSvc); if (!i) return;
@@ -676,7 +676,7 @@
     const btn = $('fsEye'); if (!btn) return;
     const apply = () => {
       const hidden = valuesHidden(); box.classList.toggle('fs-private', hidden);
-      btn.innerHTML = hidden ? '👁 Mostrar valores' : '🙈 Esconder valores';
+      btn.innerHTML = hidden ? FPIcon('eye') + 'Mostrar valores' : FPIcon('eyeOff') + 'Esconder valores';
       btn.setAttribute('aria-pressed', String(!hidden)); btn.title = hidden ? 'Mostrar os valores do caixa' : 'Esconder os valores do caixa';
     };
     btn.onclick = () => { eyeMemory = !valuesHidden(); try { localStorage.setItem(EYE_KEY, eyeMemory ? '1' : '0'); } catch { /* fica só na memória */ } apply(); };
@@ -749,7 +749,7 @@
     const below = knownCost && cost > 0 && total < cost;
     out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}${i.variant ? ` <span class="fs-var">${esc(i.variant)}</span>` : ''}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.cost_cents != null ? ` <span class="fs-costcode" title="Código interno da loja">${costCode(i.cost_cents)}</span>` : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small></div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
-      <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">✕</button></div>`).join('')}
+      <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">${FPIcon('x')}</button></div>`).join('')}
       <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
       <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label></div>
       ${below ? '<div class="fs-costsum fs-below"><b>Atenção: total abaixo do custo.</b></div>' : ''}
@@ -893,13 +893,13 @@
       @media print{.bar{display:none}body.a4 .lb{border-color:transparent}}
     </style></head><body class="a4"><div class="bar"><b>${n} etiqueta(s) · ${esc(p.name)}</b>
       <label><input type="radio" name="fmt" value="a4" checked> Folha A4 (3 por linha)</label><label><input type="radio" name="fmt" value="th"> Impressora de etiquetas 50×30 mm</label>
-      <button onclick="print()">🖨 Imprimir</button></div><div class="sheet">${label.repeat(n)}</div>
+      <button onclick="print()">Imprimir</button></div><div class="sheet">${label.repeat(n)}</div>
       <script>const pg=document.getElementById('pg');const set=v=>{document.body.className=v;pg.textContent=v==='th'?'@page{size:50mm 30mm;margin:0}':'@page{size:A4;margin:10mm 7mm}'};document.querySelectorAll('[name=fmt]').forEach(r=>r.onchange=()=>set(r.value));set('a4');<\/script></body></html>`);
     w.document.close();
   }
   function labelsDialog(p, defaultQty, title) {
     openDialog(`${header(title || 'Imprimir etiquetas')}<form id="fsLab"><p class="nv-help"><b>${esc(p.name)}</b> · ${brl(p.price_cents)} · código ${esc(p.barcode)}</p>
-      <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label><button class="nv-button">🏷 Abrir etiquetas para imprimir</button></form>`);
+      <label class="nv-field">Quantas etiquetas?<input name="n" inputmode="numeric" value="${defaultQty || 1}"></label><button class="nv-button">${FPIcon('tag')}Abrir etiquetas para imprimir</button></form>`);
     $('fsLab').onsubmit = e => { e.preventDefault(); printLabels(p, Number(e.currentTarget.elements.n.value) || 1); };
   }
   // Entrada de estoque (compra). Produto com modelos: informa o modelo. O custo entra no relatório de compras.
@@ -928,7 +928,7 @@
   // Modelos de um produto (película, capinha): estoque e reposição por modelo.
   async function variantsDialog(p, onBack) {
     let rows = []; try { rows = await api(`/store/products/${p.id}/variants`); } catch (err) { feedback(err.message, true); return; }
-    openDialog(`${header('Modelos · ' + esc(p.name))}<div class="fs-row"><button type="button" class="nv-button" id="fsVarAdd">+ Entrada de estoque</button><button type="button" class="nv-button secondary" id="fsVarBack">← Produtos</button></div>
+    openDialog(`${header('Modelos · ' + esc(p.name))}<div class="fs-row"><button type="button" class="nv-button" id="fsVarAdd">+ Entrada de estoque</button><button type="button" class="nv-button secondary" id="fsVarBack">${FPIcon('back')}Produtos</button></div>
       <p class="nv-help">Os modelos aparecem aqui ao vender ou ao dar entrada no estoque. Os mais vendidos são sugeridos primeiro no caixa.</p>
       <div class="nv-list">${rows.map(v => `<div class="fs-sale"><div><b>${esc(v.name)}</b><br><small>Estoque: <b class="${v.stock_qty != null && v.stock_qty <= 0 ? 'fs-neg' : ''}">${v.stock_qty ?? '—'}</b> · vendidas: ${v.sold_count}${v.restock_pending ? ` · <span class="fs-neg">repor ${v.restock_pending}</span>` : ''}</small></div>
         <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-fs-vin="${esc(v.name)}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-fs-vdel="${v.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum modelo ainda.</p>'}</div>`);
@@ -940,15 +940,15 @@
   // Reposição: o que foi vendido e ainda não teve entrada de estoque. Imprime para levar às compras.
   async function restockTab(box) {
     let rows = []; try { rows = await api('/store/stock/restock'); } catch (err) { box.textContent = err.message; return; }
-    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Vendido e ainda não reposto (some quando você dá entrada no estoque).</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>🖨 Imprimir lista de reposição</button></div>
-      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor. 👍</p>'}</div>`;
+    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Vendido e ainda não reposto (some quando você dá entrada no estoque).</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
+      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
     if ($('fsRestockPrint')) $('fsRestockPrint').onclick = () => {
       const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
       const total = rows.reduce((a, r) => a + (r.cost_cents || 0) * r.pending, 0);
-      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:22px}</style></head><body>
+      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:28px}.box{display:inline-block;width:12px;height:12px;border:1.5px solid #111;border-radius:2px}</style></head><body>
         <h1>Reposição de estoque · ${esc(config?.name || '')}</h1><div>${new Date().toLocaleString('pt-BR')}</div>
-        <table><thead><tr><th class="ck">✓</th><th>Produto</th><th>Modelo</th><th>Fornecedor</th><th class="n">Repor</th><th class="n">Estoque atual</th><th class="n">Custo estimado</th></tr></thead><tbody>
-        ${rows.map(r => `<tr><td class="ck">☐</td><td>${esc(r.name)}</td><td>${esc(r.variant || '')}</td><td>${esc(r.supplier_name || '')}</td><td class="n"><b>${r.pending}</b></td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—'}</td></tr>`).join('')}
+        <table><thead><tr><th class="ck">OK</th><th>Produto</th><th>Modelo</th><th>Fornecedor</th><th class="n">Repor</th><th class="n">Estoque atual</th><th class="n">Custo estimado</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td class="ck"><span class="box"></span></td><td>${esc(r.name)}</td><td>${esc(r.variant || '')}</td><td>${esc(r.supplier_name || '')}</td><td class="n"><b>${r.pending}</b></td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—'}</td></tr>`).join('')}
         </tbody></table><p><b>Total estimado: ${brl(total)}</b> (pelo custo cadastrado)</p><script>setTimeout(()=>print(),200)<\/script></body></html>`);
       w.document.close();
     };
@@ -1136,7 +1136,7 @@
   }
 
   async function productsDialog(term = '', tab = 'list') {
-    const tabs = [['list', 'Produtos'], ['entry', '📥 Entrada rápida'], ['parts', '🔧 Peças'], ['suppliers', '🏭 Fornecedores'], ['gen', '🏷 Gerar códigos'], ['restock', '🔁 Reposição']];
+    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição']];
     openDialog(`${header('Estoque')}<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`);
     document.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => productsDialog('', b.dataset.ptab));
     const box = $('fsPTab');
@@ -1164,14 +1164,14 @@
           const p = await api('/store/products/generate', 'POST', { name, price_cents: price, cost_cents: cost, quantity: qty });
           printLabels(p, qty);
           box.innerHTML = `<div class="fs-last"><div><b>${esc(p.name)}</b> cadastrado com o código <b>${esc(p.barcode)}</b> e estoque ${p.stock_qty}.<br><small>As etiquetas abriram em outra janela. Se não abriram, libere pop-ups e use o botão.</small></div>
-            <div class="fs-actions"><button type="button" class="nv-button" id="fsGenPrint">🏷 Imprimir etiquetas de novo</button><button type="button" class="nv-button secondary" id="fsGenMore">Gerar outro produto</button></div></div>`;
+            <div class="fs-actions"><button type="button" class="nv-button" id="fsGenPrint">${FPIcon('tag')}Imprimir etiquetas de novo</button><button type="button" class="nv-button secondary" id="fsGenMore">Gerar outro produto</button></div></div>`;
           $('fsGenPrint').onclick = () => printLabels(p, qty); $('fsGenMore').onclick = () => productsDialog('', 'gen');
         } catch (err) { st.textContent = err.message; }
       };
       return;
     }
     box.innerHTML = `<div class="fs-row"><input id="fsProdSearch" class="fs-grow" type="search" placeholder="Bipe o código ou busque pelo nome" value="${esc(term)}" aria-label="Buscar produto"><button type="button" class="nv-button" id="fsProdNew">+ Novo produto</button></div>
-      <p class="nv-help">Chegou mercadoria? Use a aba <b>"📥 Entrada rápida"</b>: bipa uma unidade e informa a quantidade. Produto sem código: aba "🏷 Gerar códigos".</p><div id="fsProdList" class="nv-list"></div>`;
+      <p class="nv-help">Chegou mercadoria? Use a aba <b>"Entrada rápida"</b>: bipa uma unidade e informa a quantidade. Produto sem código: aba "Gerar códigos".</p><div id="fsProdList" class="nv-list"></div>`;
     const input = $('fsProdSearch'), list = $('fsProdList'); let timer, rows = [];
     const reopen = () => productsDialog(input.value.trim());
     const draw = async () => {
@@ -1181,7 +1181,7 @@
       list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
         return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
           <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant ? 'Estoque por modelo' : `Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
-          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">🏷 Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
+          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
       const byId = id => rows.find(p => p.id === id);
       list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(byId(b.dataset.fsEdit), reopen));
@@ -1257,7 +1257,7 @@
       <p class="nv-help">Dinheiro esperado na gaveta: troco ${brl(sum.opening_cents)} + vendas em dinheiro ${brl(sum.by_method.cash?.total_cents || 0)} + suprimentos ${brl(sum.deposits_cents)} − sangrias ${brl(sum.withdrawals_cents)} − saídas em dinheiro ${brl(sum.expenses_by_method.cash?.total_cents || 0)} = <b>${brl(sum.expected_cash_cents)}</b></p>
       <form id="fsCloseForm"><label class="nv-field">Dinheiro contado na gaveta<input name="counted" inputmode="decimal" required placeholder="0,00"></label><p id="fsDiff" class="nv-help"></p><label class="nv-field">Observação (opcional)<input name="note" maxlength="400"></label><label class="fs-check"><input type="checkbox" name="print" checked> Imprimir relatório ao fechar</label><button class="nv-button">Fechar caixa</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsCloseForm');
-    f.elements.counted.oninput = () => { const v = parseMoney(f.elements.counted.value); const d = v - sum.expected_cash_cents; $('fsDiff').innerHTML = Number.isFinite(v) ? (d === 0 ? 'Bateu certinho ✓' : `Diferença: <b class="${d < 0 ? 'fs-neg' : 'fs-pos'}">${brl(d)}</b> (${d < 0 ? 'faltando' : 'sobrando'})`) : ''; };
+    f.elements.counted.oninput = () => { const v = parseMoney(f.elements.counted.value); const d = v - sum.expected_cash_cents; $('fsDiff').innerHTML = Number.isFinite(v) ? (d === 0 ? FPIcon('check') + ' Bateu certinho' : `Diferença: <b class="${d < 0 ? 'fs-neg' : 'fs-pos'}">${brl(d)}</b> (${d < 0 ? 'faltando' : 'sobrando'})`) : ''; };
     f.onsubmit = async e => {
       e.preventDefault(); const v = parseMoney(f.elements.counted.value);
       if (!Number.isFinite(v) || v < 0) { f.querySelector('[role=status]').textContent = 'Informe o valor contado.'; return; }
@@ -1404,7 +1404,7 @@
       <p class="nv-help">Clientes que compraram no dia (caixa e pedidos finalizados). "Enviar" abre o WhatsApp com a mensagem pronta: obrigado, cartão fidelidade${cbOn() ? ', cashback (ganho e saldo em reais)' : ''} e pedido de avaliação.</p>
       <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}" data-fs-row="${r.id}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small> ${cbBadge(r.cashback)}<br><small>${r.purchases.map(p => p.kind === 'sale' ? `venda #${esc(p.ref)} ${brl(p.total_cents)}` : `pedido ${esc(p.ref)} finalizado`).join(' · ')}</small>${progressBar(r.loyalty)}
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(statusMessage(r))}</pre></details></div>
-        <div class="fs-actions">${r.sent ? `<span class="fs-ok">Enviado ✓</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`).join('') || '<p class="nv-help">Nenhuma compra com cliente identificado neste dia.</p>'}</div>`;
+        <div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`).join('') || '<p class="nv-help">Nenhuma compra com cliente identificado neste dia.</p>'}</div>`;
     $('fsDay').onchange = e => { statusDay = e.target.value; statusTab(tab, alive); };
     $('fsToday').onclick = () => { statusDay = ''; statusTab(tab, alive); };
     $('fsYesterday').onclick = () => { statusDay = yesterday; statusTab(tab, alive); };
@@ -1428,7 +1428,7 @@
     const row = r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small><br>
         <small><b class="${r.days_left <= 1 ? 'fs-neg' : ''}">${brl(r.expiring_cents)} vence ${cbWhen(r)}</b>${r.expiring_cents < r.balance_cents ? ` · saldo total ${brl(r.balance_cents)}` : ''} · aviso de ${r.stage === 1 ? '1 dia' : r.stage + ' dias'}${r.sent ? ` · avisado ${dmy(r.sent_at)} ${hhmm(r.sent_at)}` : ''}</small>
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(reminderMessage(r))}</pre></details></div>
-        <div class="fs-actions">${r.sent ? '<span class="fs-ok">Avisado ✓</span>' : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-cb="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}</div></div>`;
+        <div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Avisado</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-cb="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}</div></div>`;
     tab.innerHTML = `<div class="fs-row fs-daybar"><div><small class="nv-help">Saldo em aberto na loja</small><br><b>${brl(data.total_balance_cents)}</b> <small>· ${data.customers_with_balance} cliente(s)</small></div>
         <span class="fs-grow"></span><b>${rows.length - rows.filter(r => !r.sent).length} de ${rows.length} avisados</b>${pending.length ? '<button type="button" class="nv-button fp-whats" id="fsCbNext">Enviar próximo</button>' : ''}</div>
       <p class="nv-help">Clientes com cashback vencendo nos próximos 15 dias. O aviso aparece quando faltam 15, 10, 5 e 1 dia (uma vez em cada etapa). "Enviar" abre o WhatsApp com o valor, a data e as regras.</p>
@@ -1470,7 +1470,7 @@
     const sent = rows.filter(r => r.sent).length;
     out.innerHTML = `<div class="fs-row fs-daybar"><b>${sent} de ${rows.length} enviados</b><span class="fs-grow"></span>${rows.length > sent ? '<button type="button" class="nv-button fp-whats" id="fsOfferNext">Enviar próximo</button>' : ''}</div>
       <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(offerMessage({ name: 'Maria' }, offerText))}</pre></details>
-      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone)}${r.last_buy ? ' · última compra ' + dmy(r.last_buy) : ''}</small></div><div class="fs-actions">${r.sent ? '<span class="fs-ok">Enviado ✓</span>' : `<button type="button" class="nv-button fp-whats fs-small" data-fs-offer="${r.id}">Enviar</button>`}<button type="button" class="nv-button secondary fs-small" data-fs-optout="${r.id}" title="Cliente pediu para não receber ofertas">Não quer ofertas</button></div></div>`).join('') || '<p class="nv-help">Nenhum cliente nesse filtro.</p>'}</div>`;
+      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${esc(r.name)}</b> <small>${esc(r.phone)}${r.last_buy ? ' · última compra ' + dmy(r.last_buy) : ''}</small></div><div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : `<button type="button" class="nv-button fp-whats fs-small" data-fs-offer="${r.id}">Enviar</button>`}<button type="button" class="nv-button secondary fs-small" data-fs-optout="${r.id}" title="Cliente pediu para não receber ofertas">Não quer ofertas</button></div></div>`).join('') || '<p class="nv-help">Nenhum cliente nesse filtro.</p>'}</div>`;
     const send = async id => { const r = rows.find(x => x.id === id); try { await sendWhats(r.phone, offerMessage(r, offerText), { customer_id: r.id, kind: 'offer', campaign: key }); drawOfferList(alive); } catch (err) { feedback(err.message, true); } };
     out.querySelectorAll('[data-fs-offer]').forEach(b => b.onclick = () => send(b.dataset.fsOffer));
     out.querySelectorAll('[data-fs-optout]').forEach(b => b.onclick = async () => { try { await api(`/store/sales/customers/${b.dataset.fsOptout}/offers`, 'PATCH', { opt_out: true }); feedback('Cliente não receberá mais ofertas.'); drawOfferList(alive); } catch (err) { feedback(err.message, true); } });
@@ -1571,9 +1571,9 @@
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">$ &nbsp;Caixa</button><button data-view="messages">✉ &nbsp;Mensagens</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button>');
     const phone = document.querySelector('.nv-phone-nav');
-    if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">$<div>Caixa</div></button>'); }
+    if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }
 
   window.FPSales = {

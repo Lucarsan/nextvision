@@ -9,6 +9,20 @@ const isoLocal = d => [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'
 const labels = { queued: 'Na fila', live: 'Em atendimento', paused: 'Pausado', completed: 'Finalizado' };
 const detailLabels = { vehicle: 'Veículo', device: 'Aparelho', other: 'Item / serviço' };
 const currentStep = o => o.status === 'completed' ? 'Finalizado' : cap(o.steps?.[o.step_index] || labels[o.status]);
+// Medição: avisa a central quando o link de acompanhamento sai pelo WhatsApp ou é copiado.
+// Não atrasa nada na tela; se falhar, a loja nem percebe.
+function measureShare(text, channel) {
+  const links = String(text || '').match(/https?:\/\/[^\s]+/g) || [];
+  for (const link of links) {
+    let path; try { path = new URL(link).pathname; } catch { continue; }
+    if (!/^\/p\/[\w-]{16,100}\/?$/.test(path) && !/^\/[a-z0-9-]{3,60}\/\d{4,5}\/?$/.test(path)) continue;
+    try { fetch('/api/store/link-shares', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (sessionStorage.getItem('nv_token') || '') }, body: JSON.stringify({ link, channel }) }).catch(() => {}); } catch { }
+  }
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest?.('a[href^="https://wa.me/"]');
+  if (a) { try { measureShare(new URL(a.href).searchParams.get('text'), 'whatsapp'); } catch { } }
+}, true);
 const trackingUrl = o => (o.order_number && storeSettings.slug) ? (storeSettings.short_link_base || location.origin) + '/' + storeSettings.slug + '/' + o.order_number : location.origin + '/p/' + o.share_code;
 const newest = (a, b) => new Date(b.created_at) - new Date(a.created_at) || b.id.localeCompare(a.id);
 let activeView = 'home', storeSettings = {}, cachedOrders = [], cachedProcesses = [], cachedCustomers = [];
@@ -149,7 +163,7 @@ function liveCard(o) {
 const expandedLive = new Set();
 function liveDetails(o) {
   const d = o.details || {}, info = (k, v) => v ? `<div><dt>${safe(k)}</dt><dd>${safe(v)}</dd></div>` : '';
-  return `<div class="fp-live-details"><dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}${info('Recebido em', new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}</dl>${photoStrip(o)}<div class="fp-buttons"><button type="button" class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar dados</button><button type="button" class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button></div></div>`;
+  return `<div class="fp-live-details"><dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}${info('Recebido em', new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}${info('Acompanhamento', o.link_opens ? 'Aberto ' + o.link_opens + (o.link_opens > 1 ? ' vezes' : ' vez') + (o.link_people > 1 ? ' por ' + o.link_people + ' pessoas' : '') : 'Ainda não aberto pelo cliente')}</dl>${photoStrip(o)}<div class="fp-buttons"><button type="button" class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar dados</button><button type="button" class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button></div></div>`;
 }
 function setHtml(node, html) { if (node && node.dataset.signature !== html) { node.innerHTML = html; node.dataset.signature = html; } }
 function renderNow() {
@@ -440,13 +454,13 @@ document.addEventListener('click', async e => {
       button.disabled = true;
       try {
         await api('/orders/' + o.id + '/transition', 'POST', { action: 'complete', expected_step_index: o.step_index, expected_status: o.status });
-        if (win) { win.opener = null; win.location.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(readyMessage(o)); }
+        if (win) { win.opener = null; win.location.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(readyMessage(o)); measureShare(readyMessage(o), 'whatsapp'); }
         await reload(true); feedback(notify ? 'Pedido finalizado. Envie a mensagem que abriu no WhatsApp.' : 'Pedido finalizado.');
       } catch (error) { win?.close(); await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
       return;
     }
-    if (button.dataset.copyOrder) { const o = cachedOrders.find(o => o.id === button.dataset.copyOrder); await navigator.clipboard.writeText(trackingUrl(o)); feedback('Link copiado.'); }
+    if (button.dataset.copyOrder) { const o = cachedOrders.find(o => o.id === button.dataset.copyOrder); await navigator.clipboard.writeText(trackingUrl(o)); measureShare(trackingUrl(o), 'copy'); feedback('Link copiado.'); }
     if (button.dataset.sendOrder) { const o = cachedOrders.find(o => o.id === button.dataset.sendOrder); window.open(whatsUrl(o), '_blank', 'noopener,noreferrer'); }
     if (button.dataset.photoDel && confirm('Apagar esta foto?')) { await api('/orders/' + button.dataset.photoOrder + '/photos/' + button.dataset.photoDel, 'DELETE'); await reload(true); feedback('Foto apagada.'); }
     if (button.dataset.deleteOrder && confirm('Excluir este pedido? O link será desativado, o vídeo ao vivo será bloqueado e gravações em andamento serão finalizadas. Os arquivos já gravados não serão apagados do computador.')) { await api('/orders/' + button.dataset.deleteOrder, 'DELETE'); await reload(true); feedback('Pedido excluído.'); }
@@ -467,7 +481,7 @@ $('createQuick').onclick = async () => {
   catch (error) { $('quickError').textContent = error.message; }
   finally { $('createQuick').disabled = false; }
 };
-$('copyLink').onclick = async () => { try { await navigator.clipboard.writeText($('trackingLink').value); feedback('Link copiado.'); } catch { $('trackingLink').select(); } };
+$('copyLink').onclick = async () => { try { await navigator.clipboard.writeText($('trackingLink').value); measureShare($('trackingLink').value, 'copy'); feedback('Link copiado.'); } catch { $('trackingLink').select(); } };
 async function refreshVisible() {
   if (document.hidden) return;
   try { await reload(); } catch(error) { $('syncStatus').textContent = error.status===403?'Acesso bloqueado pela central.':'Conexão interrompida. Tentando atualizar novamente…';if(error.status===403)feedback(error.message,true); }

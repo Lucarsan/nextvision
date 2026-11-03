@@ -331,11 +331,29 @@
     // Descrição: reescreve enquanto for o texto automático; se o operador escreveu algo, não mexe.
     if (!desc || desc === lastAuto) f.elements.description.value = text;
     lastAuto = text;
-    const input = f.elements.total;
-    if (quickCart.length) { input.value = toInput(cartSum()); input.readOnly = true; input.dataset.quick = '1'; }
-    else if (input.dataset.quick === '1') { input.value = ''; input.readOnly = false; input.dataset.quick = ''; }
     const tot = $('fsCartTotal'); if (tot) tot.textContent = brl(cartSum());
+    drawSaleTotals(); syncTotal();
+  }
+  // Produtos (leitor) e itens frequentes juntos na mesma venda: o valor é a soma dos dois, menos o desconto.
+  const saleGross = () => cartGross() + cartSum();
+  const saleDisc = () => cart.length ? Math.min(discountCents(saleGross()), Math.max(0, saleGross() - 1)) : 0;
+  function syncTotal() {
+    const f = $('fsSale'); if (!f) return;
+    const input = f.elements.total, label = $('fsTotalLabel');
+    if (cart.length || quickCart.length) {
+      const disc = saleDisc(), total = saleGross() - disc;
+      input.value = toInput(total); input.readOnly = true; input.dataset.auto = '1';
+      if (label) label.textContent = cart.length && quickCart.length ? `Valor (produtos + itens${disc ? ' − desconto' : ''})` : cart.length ? (disc ? 'Valor (produtos − desconto)' : 'Valor (soma dos produtos)') : 'Valor (soma dos itens)';
+    } else if (input.dataset.auto === '1') { input.value = ''; input.readOnly = false; input.dataset.auto = ''; if (label) label.textContent = 'Valor'; }
     f.dispatchEvent(new Event('input'));
+  }
+  // Linhas de total abaixo dos produtos: com itens frequentes junto, mostra a parte de cada um e o total da venda.
+  function drawSaleTotals() {
+    const box = $('fsSaleTotals'), qbox = $('fsSaleQ'); if (!box) return;
+    if (!cart.length) { box.innerHTML = ''; if (qbox) qbox.innerHTML = ''; return; }
+    const q = cartSum(), disc = saleDisc(), gross = saleGross();
+    if (qbox) qbox.innerHTML = q ? `<div class="fs-pcart-total fs-sub"><span>+ Itens frequentes</span><b>${brl(q)}</b></div>` : '';
+    box.innerHTML = q || disc ? `<div class="fs-pcart-total"><span>Total da venda${disc ? ' com desconto' : ''}</span><b>${brl(gross - disc)}</b></div>` : '';
   }
   async function loadQuick(force) {
     if (quickItems && !force) return quickItems;
@@ -354,7 +372,7 @@
     const chips = items.map(i => `<button type="button" class="fs-chip" data-fs-quick="${i.id}"><b>${esc(i.label)}</b>${i.price_cents != null ? `<small>${brl(i.price_cents)}</small>` : ''}</button>`).join('');
     const quickSummary = quickCart.length ? `<div class="fs-cart">${quickCart.map(cartRow).join('')}<div class="fs-cart-foot"><span>Itens: <b id="fsCartTotal">${brl(cartSum())}</b></span><button type="button" class="nv-button secondary fs-small" id="fsQuickClear">Limpar itens</button></div></div>` : '';
     box.innerHTML = `<div class="fs-quick-head"><span>Itens frequentes</span><button type="button" class="fs-link" id="fsQuickManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar item frequente'}</button></div>
-      ${cart.length ? '<p class="nv-help fs-quick-empty">Com produtos lidos pelo leitor, o valor é a soma dos produtos. Itens frequentes ficam para vendas sem leitor.</p>' : items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (xerox, película, capa…) para lançar com um toque.</p>'}${quickSummary}`;
+      ${items.length ? `<div class="fs-chips">${chips}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os itens que você mais vende (xerox, película, capa…) para lançar com um toque.</p>'}${quickSummary}`;
     box.querySelectorAll('[data-fs-quick]').forEach(b => b.onclick = () => addQuick(items.find(i => i.id === b.dataset.fsQuick)));
     $('fsQuickManage').onclick = manageQuick;
     box.querySelectorAll('[data-cart-id]').forEach(row => {
@@ -372,8 +390,7 @@
   }
   function addQuick(item) {
     const f = $('fsSale'); if (!item || !f) return;
-    if (cart.length) { feedback('Esta venda tem produtos lidos pelo leitor. Para incluir este item, cadastre-o como produto em "Produtos".', true); return; }
-    if (!quickCart.length) { const cur = parseMoney(f.elements.total.value); lastAuto = ''; if (Number.isFinite(cur) && cur > 0 && f.elements.total.dataset.quick !== '1') quickCart.push({ id: 'avulso', label: 'Valor avulso', price_cents: null, unit: cur, qty: 1 }); }
+    if (!quickCart.length && !cart.length) { const cur = parseMoney(f.elements.total.value); lastAuto = ''; if (Number.isFinite(cur) && cur > 0 && f.elements.total.dataset.auto !== '1') quickCart.push({ id: 'avulso', label: 'Valor avulso', price_cents: null, unit: cur, qty: 1 }); }
     const hit = quickCart.find(x => x.id === item.id);
     if (hit) hit.qty++; else quickCart.push({ id: item.id, label: item.label, price_cents: item.price_cents, unit: item.price_cents, qty: 1 });
     applyCart();
@@ -427,23 +444,25 @@
     const toPay = payable();
     if (received != null && (!Number.isFinite(received) || received < toPay)) { status.textContent = 'O valor recebido é menor que o valor a pagar.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
+    // Produtos e itens frequentes vão juntos como itens; descrição automática fica para o servidor montar com todos.
+    const desc = f.elements.description.value.trim();
     const body = service ? serviceBody(f.elements.method.value)
-      : cart.length
-      ? { items: cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })), discount_cents: Math.min(discountCents(cartGross()), Math.max(0, cartGross() - 1)), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
-      : quickCart.length
-        ? { items: quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit })), payment_method: f.elements.method.value, description: f.elements.description.value.trim() }
-        : { total_cents: total, payment_method: f.elements.method.value, description: f.elements.description.value.trim() };
+      : cart.length || quickCart.length
+      ? { items: [...cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })),
+          ...quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit }))],
+          ...(saleDisc() ? { discount_cents: saleDisc() } : {}), payment_method: f.elements.method.value, description: cart.length && desc === lastAuto ? '' : desc }
+        : { total_cents: total, payment_method: f.elements.method.value, description: desc };
     const noPrice = quickCart.find(x => x.unit == null);
-    if (!service && !cart.length && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
+    if (!service && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
     const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0) body.cashback_use_cents = use; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; quickCart = []; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
-      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${service ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrado${service ? '' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${service ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${service ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function drawLast() {
@@ -761,7 +780,6 @@
   }
 
   function addToCart(p, quantity = 1, variant = null) {
-    if (quickCart.length) { feedback('Esta venda já tem itens frequentes (valor digitado). Registre-a ou clique em "Limpar" nos itens frequentes antes de bipar produtos.', true); beep(false); return false; }
     // Produto com modelos (código geral de película/capinha): pergunta o modelo antes de pôr na venda.
     if (p.ask_variant && !variant) { variantPicker(p, v => addToCart(p, quantity, v)); return true; }
     const vname = variant?.name || null;
@@ -808,17 +826,19 @@
   const cartGross = () => cart.reduce((a, i) => a + unitOf(i) * i.quantity, 0);
   function drawCart(flashId) {
     const out = $('fsCart'), f = $('fsSale'); if (!out || !f) return;
-    const sub = cartGross();
-    const disc = Math.min(discountCents(sub), Math.max(0, sub - 1)), total = sub - disc;
+    const sub = cartGross(), gross = saleGross();
+    // Desconto vale para a venda toda (produtos + itens frequentes).
+    const disc = saleDisc(), total = sub - (gross ? Math.round(disc * sub / gross) : 0);
     const knownCost = cart.every(i => i.cost_cents != null), cost = cart.reduce((a, i) => a + (i.cost_cents || 0) * i.quantity, 0);
     const below = knownCost && cost > 0 && total < cost;
     out.innerHTML = cart.length ? `<div class="fs-pcart">${cart.map((i, n) => `<div class="fs-item${i.id === flashId ? ' fs-flash' : ''}"><div class="fs-grow"><b>${esc(i.name)}${i.variant ? ` <span class="fs-var">${esc(i.variant)}</span>` : ''}</b><br><small><span class="fs-unit-wrap">R$ <input class="fs-unit" data-fs-unit="${n}"${basic() ? ' readonly' : ''} inputmode="decimal" value="${centsText(unitOf(i))}" aria-label="Preço de cada ${esc(i.name)}"> cada${unitOf(i) !== i.price_cents ? ` <s>${brl(i.price_cents)}</s>` : ''}</span>${i.cost_cents != null && unitOf(i) < i.cost_cents ? ' <b class="fs-neg">abaixo do custo</b>' : ''}${i.barcode ? ' · ' + esc(i.barcode) : ''}${i.cost_cents != null ? ` <span class="fs-costcode" title="Código interno da loja">${costCode(i.cost_cents)}</span>` : ''}${i.stock_qty != null ? ` · <span class="${i.stock_qty - i.quantity < 0 ? 'fs-neg' : ''}">estoque ${i.stock_qty}</span>` : ''}</small></div>
       <div class="fs-qty"><button type="button" class="nv-button secondary fs-small" data-fs-dec="${n}" aria-label="Diminuir">−</button><b>${i.quantity}</b><button type="button" class="nv-button secondary fs-small" data-fs-inc="${n}" aria-label="Aumentar">+</button></div>
       <b class="fs-item-total">${brl(unitOf(i) * i.quantity)}</b><button type="button" class="nv-button secondary fs-small" data-fs-del="${n}" aria-label="Tirar da venda">${FPIcon('x')}</button></div>`).join('')}
       <div class="fs-pcart-total"><span>${cart.reduce((a, i) => a + i.quantity, 0)} item(ns)</span><b>${brl(sub)}</b></div>
+      <div id="fsSaleQ"></div>
       <div class="fs-disc"><label>Desconto <input id="fsDiscount" inputmode="decimal" placeholder="0,00 ou 10%" value="${esc(cartDiscount)}" autocomplete="off"></label></div>
       ${below ? '<div class="fs-costsum fs-below"><b>Atenção: total abaixo do custo.</b></div>' : ''}
-      ${disc ? `<div class="fs-pcart-total"><span>Total com desconto</span><b>${brl(total)}</b></div>` : ''}</div>` : '';
+      <div id="fsSaleTotals"></div></div>` : '';
     out.querySelectorAll('[data-fs-inc]').forEach(b => b.onclick = () => { cart[b.dataset.fsInc].quantity++; drawCart(); });
     out.querySelectorAll('[data-fs-dec]').forEach(b => b.onclick = () => { const i = cart[b.dataset.fsDec]; if (i.quantity > 1) i.quantity--; else cart.splice(b.dataset.fsDec, 1); drawCart(); });
     out.querySelectorAll('[data-fs-del]').forEach(b => b.onclick = () => { cart.splice(b.dataset.fsDel, 1); drawCart(); });
@@ -830,11 +850,8 @@
       inp.onfocus = () => inp.select();
     });
     if (!cart.length) cartDiscount = '';
-    // Com produtos, o valor é a soma dos itens menos o desconto (não editável); sem produtos, volta a ser digitado.
-    const input = f.elements.total, auto = input.dataset.auto === '1';
-    if (cart.length) { input.value = centsText(total); input.readOnly = true; input.dataset.auto = '1'; $('fsTotalLabel').textContent = disc ? 'Valor (produtos − desconto)' : 'Valor (soma dos produtos)'; }
-    else if (auto) { input.value = ''; input.readOnly = false; input.dataset.auto = ''; $('fsTotalLabel').textContent = 'Valor'; }
-    f.dispatchEvent(new Event('input')); drawQuick();
+    // Com produtos e/ou itens frequentes, o valor é a soma menos o desconto (não editável); sem nada, volta a ser digitado.
+    drawSaleTotals(); syncTotal();
   }
 
   // Código lido (pelo leitor ou digitado): acha o produto e põe na venda; se não existe, oferece cadastrar.
@@ -844,7 +861,7 @@
       try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); if (addToCart(p)) beep(true); }
       catch (err) {
         if (err.status !== 404) { feedback(err.message, true); beep(false); return; }
-        beep(false); if (quickCart.length) { addToCart({}); return; }
+        beep(false);
         productDialog({ barcode: code }, p => { if (addToCart(p)) beep(true); }, true);
       }
     });
@@ -1940,7 +1957,7 @@
   .fs-chip.fs-chip-on{border-color:var(--nv-blue);box-shadow:0 0 0 1.5px var(--nv-blue) inset}.fs-tag-svc{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--nv-blue-soft);font-size:12px;font-weight:600}
   #fsSvc .fs-picked{background:var(--nv-surface,#fff)}#fsSvc .nv-field input,#fsSvc .nv-field select{width:100%}
   .fs-pricesec{margin-bottom:22px}#fsPkQ{min-height:42px;padding:10px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;font:inherit}.fs-pklist{max-height:300px;overflow:auto;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;padding:6px 10px;display:grid;gap:2px}.fs-pk{display:flex;gap:8px;align-items:center;font-size:14px;padding:3px 0}.fs-pk span{flex:1}
-  .fs-costgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.fs-costcol{border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:10px 12px}.fs-costline{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px}.fs-costline span{color:var(--nv-text,#374151)}.fs-costnet{border-top:1px solid var(--nv-border,#e5e7eb);margin-top:4px;padding-top:6px;font-size:15px}.fs-cost{color:#b54708}.fs-costs{margin-bottom:16px}.fs-costs .nv-heading{flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+  .fs-pcart-total.fs-sub{color:var(--nv-muted);font-size:14px}.fs-costgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.fs-costcol{border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:10px 12px}.fs-costline{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px}.fs-costline span{color:var(--nv-text,#374151)}.fs-costnet{border-top:1px solid var(--nv-border,#e5e7eb);margin-top:4px;padding-top:6px;font-size:15px}.fs-cost{color:#b54708}.fs-costs{margin-bottom:16px}.fs-costs .nv-heading{flex-wrap:wrap;gap:4px 12px;align-items:baseline}
   @media (max-width:760px){.fs-costgrid{grid-template-columns:1fr}}
   .fs-varmode{border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;padding:8px 12px;margin:6px 0 10px;display:grid;gap:6px;font-size:14px}.fs-varmode legend{font-size:13px;color:var(--nv-muted);padding:0 4px}
   .fs-season{display:block;font-size:11px;color:#b54708}.fs-admin-dialog{width:min(420px,calc(100% - 24px))}.fs-admin-dialog h2{display:flex;align-items:center;gap:8px;font-size:18px;margin:0 0 6px}

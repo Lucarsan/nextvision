@@ -204,3 +204,4 @@ a.nv-button{text-decoration:none}
 #dashboardContent .fp-main-col>.fp-live,#dashboardContent .fp-main-col>.fp-all{flex:none}
 .fp-qr-wrap{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin:6px 0 14px}.fp-qr-img{width:180px;height:180px;border:1px solid #E5E7EB;border-radius:12px;padding:8px;background:#fff;flex:none}.fp-qr-side{flex:1 1 240px;min-width:0}
 .fp-final-photo{cursor:pointer}.fp-photos .nv-help{font-weight:400}
+.nv-demo-banner{margin:0 0 12px;padding:10px 14px;border-radius:12px;background:#FFF7ED;border:1px solid #FED7AA;color:#9A3412;font-size:14px}

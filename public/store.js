@@ -499,6 +499,7 @@ setInterval(refreshVisible, 5000);
   try {
     const me = await api('/me'); if (!['owner', 'operator'].includes(me.role)) { location.replace('/'); return; }
     storeSettings = await api('/store/settings');
+    if (storeSettings.demo_mode && $('syncStatus')) { const d = document.createElement('div'); d.className = 'nv-demo-banner'; d.textContent = 'Loja de demonstração: os pedidos novos começam sozinhos e avançam uma etapa a cada ' + (storeSettings.demo_step_seconds || 40) + ' s. O link do cliente mostra vídeos de exemplo e, no fim, a foto final. Você também pode avançar, pausar ou voltar pelos botões.'; $('syncStatus').before(d); }
     $('storeBrandName').textContent = storeSettings.name || 'Minha loja'; document.querySelector('.nv-profile span').textContent = storeSettings.name || 'Minha loja';
     if (storeSettings.logo_url) { const img = document.createElement('img'); img.src = storeSettings.logo_url; img.alt = 'Logo da loja'; img.style.cssText = 'width:100%;height:100%;object-fit:contain;border-radius:10px'; $('storeBrandIcon').replaceChildren(img); }
     $('homeFilters').innerHTML = toolbar('home');

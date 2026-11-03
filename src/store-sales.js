@@ -99,7 +99,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       expenses_count: moves.rows.filter(r => r.kind === 'expense').reduce((a, r) => a + r.n, 0),
       expenses_total_cents: expenses,
       balance_cents: salesTotal - expenses,
-      costs_cents: Number(cost.cost), costs_unknown_items: cost.unknown, net_cents: salesTotal - Number(cost.cost) - expenses,
+      costs_cents: Number(cost.cost), costs_unknown_items: cost.unknown,
       opening_cents: opening, deposits_cents: sum('deposit'), withdrawals_cents: sum('withdrawal'),
       cashback_used_cents: Number(cb.used), cashback_earned_cents: Number(cb.earned),
       expected_cash_cents: opening + (by.cash?.total_cents || 0) + sum('deposit') - sum('withdrawal') - (expensesBy.cash?.total_cents || 0)
@@ -175,30 +175,6 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!open.rowCount) return res.json({ session: null, last_closed: last.rows[0] || null });
     const s = open.rows[0];
     res.json({ session: s, ...(await sessionDetail(tid(req), s.id)), last_closed: last.rows[0] || null });
-  }));
-
-  // Custos e saldo líquido do dia, da semana (desde segunda) e do mês, contando todos os caixas do período.
-  // Custos = preço de custo do que foi vendido (mercadorias, peças dos serviços e brindes): é o que gira para reposição.
-  // Saldo líquido = vendas − custos − saídas.
-  app.get('/api/store/cash/costs', ...full, route(async (req, res) => {
-    const z_ = TZ.replace(/'/g, '');
-    const periods = { day: `date_trunc('day', now() AT TIME ZONE '${z_}')`, week: `date_trunc('week', now() AT TIME ZONE '${z_}')`, month: `date_trunc('month', now() AT TIME ZONE '${z_}')` };
-    const out = {};
-    for (const [k, start] of Object.entries(periods)) {
-      const since = `(${start}) AT TIME ZONE '${z_}'`;
-      const r = (await q(`SELECT
-          (SELECT coalesce(sum(total_cents),0)::bigint FROM sales WHERE tenant_id=$1 AND canceled_at IS NULL AND created_at>=${since}) sales,
-          (SELECT count(*)::int FROM sales WHERE tenant_id=$1 AND canceled_at IS NULL AND created_at>=${since}) n,
-          (SELECT coalesce(sum(i.unit_cost_cents*i.quantity),0)::bigint FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND x.created_at>=${since}) cost,
-          (SELECT coalesce(sum(i.unit_cost_cents*i.quantity) FILTER (WHERE i.service),0)::bigint FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND x.created_at>=${since}) parts,
-          (SELECT count(*)::int FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND x.created_at>=${since} AND i.unit_cost_cents IS NULL AND (i.product_id IS NOT NULL OR NOT i.service)) unknown,
-          (SELECT coalesce(sum(amount_cents),0)::bigint FROM cash_movements WHERE tenant_id=$1 AND kind='expense' AND canceled_at IS NULL AND created_at>=${since}) expenses,
-          to_char(${start},'YYYY-MM-DD') from_day`, [tid(req)])).rows[0];
-      const sales = Number(r.sales), cost = Number(r.cost), exp = Number(r.expenses);
-      out[k] = { from: r.from_day, sales_count: r.n, sales_cents: sales, costs_cents: cost, parts_cost_cents: Number(r.parts), goods_cost_cents: cost - Number(r.parts),
-        costs_unknown_items: r.unknown, gross_cents: sales - cost, expenses_cents: exp, net_cents: sales - cost - exp };
-    }
-    res.set('Cache-Control', 'no-store'); res.json(out);
   }));
 
   app.post('/api/store/cash/open', ...guard, route(async (req, res) => {

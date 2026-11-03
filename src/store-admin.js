@@ -36,6 +36,16 @@ export function inWindow(day, lastDay, from, to) {
   return f <= t ? day >= f && day <= t : day >= f || day <= t;
 }
 
+// Rotas que pedem a senha do admin: cabeçalho X-Admin-Token com a liberação de /api/store/admin/unlock,
+// presa à loja e ao usuário logado.
+export function requireAdmin(req, res, next) {
+  try {
+    const p = jwt.verify(String(req.get('x-admin-token') || ''), process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    if (p.adm === 1 && p.t === req.user.tenant_id && p.u === req.user.id) return next();
+  } catch { /* cai no aviso abaixo */ }
+  res.status(401).json({ error: 'Esta ação pede a senha do admin.', admin_required: true });
+}
+
 export function registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard, tid, uuid }) {
   const secret = process.env.JWT_SECRET;
   const attempts = rateLimit({ windowMs: 15 * 60000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Muitas tentativas. Tente de novo em 15 minutos.' } });
@@ -50,13 +60,7 @@ export function registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard
     res.json({ admin_token: token, expires_at: new Date(Date.now() + ADMIN_MINUTES * 60000).toISOString() });
   }));
   // Rotas que pedem a senha do admin: cabeçalho X-Admin-Token com a liberação recebida acima.
-  const adminOnly = (req, res, next) => {
-    try {
-      const p = jwt.verify(String(req.get('x-admin-token') || ''), secret, { algorithms: ['HS256'] });
-      if (p.adm === 1 && p.t === tid(req) && p.u === req.user.id) return next();
-    } catch { /* cai no aviso abaixo */ }
-    res.status(401).json({ error: 'Esta ação pede a senha do admin.', admin_required: true });
-  };
+  const adminOnly = requireAdmin;
 
   // ---------- Preço por época do mês ----------
   const lastSync = new Map(); // tenant -> horário da última conferência

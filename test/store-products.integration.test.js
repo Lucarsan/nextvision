@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createStoreFixture } from './helpers/store-fixture.js';
+import { createStoreFixture, FIXTURE_ADMIN } from './helpers/store-fixture.js';
 
 const skip = !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL';
 
@@ -291,14 +291,17 @@ test('relatórios por e-mail: conteúdo, configuração, envio e agendamento sem
     const m = reportHtml(await reportData(db.query.bind(db), tenant, 'monthly', day));
     assert.match(m, /Total gasto no mês/);
 
-    // Configuração (dono) e prévia.
-    assert.equal((await request('/store/reports/send', { method: 'POST', body: { kind: 'daily' } })).status, 400, 'sem e-mail cadastrado');
-    await api('/store/reports/settings', { method: 'PATCH', body: { report_email: 'Dono@Example.test', report_daily: true, report_weekly: true, report_monthly: false } });
-    assert.equal((await api('/store/reports/settings')).report_email, 'dono@example.test');
-    const prev = await fetch(f.base + '/api/store/reports/preview?kind=weekly', { headers: { Authorization: 'Bearer ' + f.ownerToken } });
+    // Configuração e prévia: pedem a senha do admin (o relatório mostra o faturamento).
+    assert.equal((await request('/store/reports/settings')).status, 401, 'sem senha do admin');
+    assert.equal((await request('/store/reports/preview')).status, 401, 'sem senha do admin');
+    assert.equal((await request('/store/reports/send', { method: 'POST', body: { kind: 'daily' }, admin: true })).status, 400, 'sem e-mail cadastrado');
+    await api('/store/reports/settings', { method: 'PATCH', admin: true, body: { report_email: 'Dono@Example.test', report_daily: true, report_weekly: true, report_monthly: false } });
+    assert.equal((await api('/store/reports/settings', { admin: true })).report_email, 'dono@example.test');
+    const { admin_token } = await api('/store/admin/unlock', { method: 'POST', body: FIXTURE_ADMIN });
+    const prev = await fetch(f.base + '/api/store/reports/preview?kind=weekly', { headers: { Authorization: 'Bearer ' + f.ownerToken, 'X-Admin-Token': admin_token } });
     assert.equal(prev.status, 200); assert.match(await prev.text(), /RELATÓRIO SEMANAL/);
     const nov = await f.addOperator(tenant, 'basic');
-    assert.equal((await request('/store/reports/preview', { token: nov.token })).status, 403);
+    assert.equal((await request('/store/reports/preview', { token: nov.token })).status, 401, 'funcionário sem a senha não vê');
     assert.equal((await request('/internal/reports/run', { method: 'POST' })).status, 200, 'sem chave configurada o ping é aberto (só envia o que está no horário)');
     // O ping usa a hora real; limpa o que ele possa ter enviado antes de simular o horário.
     await db.query('DELETE FROM report_runs'); sent.length = 0;

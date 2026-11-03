@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { linkStats, duration } from './link-analytics.js';
+import { requireAdmin } from './store-admin.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const SCHEDULE = { daily: { hour: 18 }, weekly: { hour: 15, weekday: 6 }, monthly: { hour: 18 } };
@@ -241,8 +242,9 @@ export async function runDueReports(q, now = new Date()) {
 }
 
 export function registerReports(app, { q, auth, roles, route, bad, valid, audit }) {
-  const owner = [auth, roles('owner')];
-  const staffFull = [auth, roles('owner', 'operator'), (req, res, next) => req.user.access_level === 'basic' ? bad(res, 403, 'Seu acesso não permite ver relatórios.') : next()];
+  // Relatórios mostram quanto a loja fatura: ver, mudar o e-mail ou enviar pede a senha do admin (não vaza para funcionário).
+  const owner = [auth, roles('owner', 'operator'), requireAdmin];
+  const staffFull = owner;
   const dayParam = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
   const today = () => ymd(localNow());
 

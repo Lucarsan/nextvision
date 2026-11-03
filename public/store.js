@@ -402,7 +402,8 @@ async function loadSection(view) {
     if (view === 'orders') return await loadOrders(box, version);
     if (view === 'customers') return await loadCustomers(box, version);
     if ((view === 'cash' || view === 'stock' || view === 'messages') && window.FPSales) return await window.FPSales.load(view, box, () => version === viewVersion);
-    if (view === 'more') { box.innerHTML = '<section class="nv-card"><h2>Mais opções</h2><div class="nv-list">'+[...(window.FPSales?.moreItems()||[]),['customers','Clientes'],['processes','Processos'],['plan','Meu plano'],['settings','Configurações'],['support','Suporte']].map(([key,label])=>'<button class="nv-button secondary" data-view="'+key+'">'+label+'</button>').join('')+'</div></section>';return;}
+    if (window.FPTools?.has(view)) return await window.FPTools.load(view, box, () => version === viewVersion);
+    if (view === 'more') { box.innerHTML = '<section class="nv-card"><h2>Mais opções</h2><div class="nv-list">'+[...(window.FPTools?.moreItems()||[]),...(window.FPSales?.moreItems()||[]),['customers','Clientes'],['processes','Processos'],['plan','Meu plano'],['settings','Configurações'],['support','Suporte']].map(([key,label])=>'<button class="nv-button secondary" data-view="'+key+'">'+label+'</button>').join('')+'</div></section>';return;}
     if (view === 'queues') { box.innerHTML = '<section class="nv-card"><h2>Fila de atendimento</h2><p class="nv-help">Atendimento por ordem de chegada. Arraste pelo ⋮⋮ para mudar a ordem.</p><div id="queueList" class="nv-list"></div></section>'; drawQueue(); return; }
     await loadEditor(view, box, version);
   } catch (error) { if (version === viewVersion) box.innerHTML = `<section class="nv-card" role="alert">${safe(error.message)}</section>`; }
@@ -411,7 +412,7 @@ async function switchView(view) {
   activeView = view;
   document.querySelectorAll('[data-view]').forEach(node => node.classList.toggle('active', node.dataset.view === view));
   $('dashboardContent').hidden = view !== 'home'; $('sectionContent').hidden = view === 'home';
-  const names = { home: 'Visão geral', orders: 'Pedidos', customers: 'Clientes', queues: 'Fila de atendimento', processes: 'Processos', cameras: 'Câmeras', settings: 'Configurações', support: 'Suporte', plan:'Meu plano', more:'Mais opções', ...(window.FPSales?.titles||{}) };
+  const names = { home: 'Visão geral', orders: 'Pedidos', customers: 'Clientes', queues: 'Fila de atendimento', processes: 'Processos', cameras: 'Câmeras', settings: 'Configurações', support: 'Suporte', plan:'Meu plano', more:'Mais opções', ...(window.FPSales?.titles||{}), ...(window.FPTools?.titles||{}) };
   document.querySelector('.nv-top h1').textContent = names[view] || '';
   if (view !== 'home') await loadSection(view); else { viewVersion++; renderLiveLists(); }
 }

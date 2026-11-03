@@ -176,6 +176,34 @@ test('edge video: publica o Worker, entrega link assinado, Worker busca na loja 
     assert.equal((await fetch(env.CHECK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: source.url.split('/v/')[1].split('/')[0] }) })).status, 204);
     assert.equal((await fetch(env.CHECK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'x'.repeat(60) }) })).status, 403);
 
+    // Área de espera: pedido na fila vê a câmera da espera (sem disputar câmera) e a posição na fila.
+    await api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { camera_limit: 2 } });
+    const espera = await api('/cameras', { method: 'POST', token: f.masterToken, body: { tenant_id: f.tenant, name: 'Espera' } }, 201);
+    await db.query('UPDATE cameras SET device_id=(SELECT id FROM shop_devices WHERE tenant_id=$1 LIMIT 1) WHERE id=$2', [f.tenant, espera.id]);
+    const waitingOrder = await api('/orders/quick', { method: 'POST', body: { reference: 'Fila', process_id: proc.id } }, 201);
+    const wtoken = waitingOrder.tracking_url.split('/p/')[1];
+    assert.equal((await fetch(f.base + '/api/public/orders/' + wtoken + '/live-source')).status, 404, 'sem câmera de espera: só a posição');
+    const op = await f.addOperator(f.tenant);
+    assert.equal((await request('/store/waiting-camera', { method: 'PATCH', token: op.token, body: { camera_id: espera.id } })).status, 403, 'só o dono escolhe');
+    assert.equal((await request('/store/waiting-camera', { method: 'PATCH', body: { camera_id: crypto.randomUUID() } })).status, 400);
+    assert.equal((await api('/store/waiting-camera', { method: 'PATCH', body: { camera_id: espera.id } })).waiting_camera_id, espera.id);
+    assert.equal((await api('/store/settings')).waiting_camera_id, espera.id);
+    let wpub = await (await fetch(f.base + '/api/public/orders/' + wtoken)).json();
+    assert.equal(wpub.status, 'queued'); assert.equal(wpub.waiting_camera, true); assert.equal(wpub.queue_position, 1);
+    const wsrc = await (await fetch(f.base + '/api/public/orders/' + wtoken + '/live-source')).json();
+    assert.equal(wsrc.mode, 'edge');
+    r = await worker.handle(new Request(wsrc.url, { headers: { Origin: 'https://ficoupronto.com' } }), env);
+    assert.equal(r.status, 200, await r.text());
+    const waitStream = (await db.query('SELECT stream_path FROM cameras WHERE id=$1', [espera.id])).rows[0].stream_path;
+    assert.ok(media.seen.at(-1).url.startsWith('/' + waitStream + '/index.m3u8'), 'busca a câmera da espera');
+    // Câmera da espera bloqueada pela central: o link volta a mostrar só a posição.
+    await db.query('UPDATE cameras SET enabled=false WHERE id=$1', [espera.id]);
+    wpub = await (await fetch(f.base + '/api/public/orders/' + wtoken)).json();
+    assert.equal(wpub.waiting_camera, false);
+    assert.equal((await fetch(f.base + '/api/public/orders/' + wtoken + '/live-source')).status, 404);
+    await db.query('UPDATE cameras SET enabled=true WHERE id=$1', [espera.id]);
+    await api('/store/waiting-camera', { method: 'PATCH', body: { camera_id: null } });
+
     // Pausou: a central revoga e o Worker passa a recusar (depois do cache de 15 s).
     assert.equal((await request('/orders/' + order.id + '/transition', { method: 'POST', body: { action: 'pause' } })).status, 200);
     assert.equal((await fetch(env.CHECK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: source.url.split('/v/')[1].split('/')[0] }) })).status, 403);

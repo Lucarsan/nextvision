@@ -499,7 +499,7 @@ setInterval(refreshVisible, 5000);
 (async () => {
   if (!token) { location.replace('/#entrar'); return; }
   try {
-    const me = await api('/me'); if (!['owner', 'operator'].includes(me.role)) { location.replace('/'); return; }
+    const me = await api('/me'); if (!['owner', 'operator'].includes(me.role)) { location.replace('/'); return; } window.__fpRole = me.role;
     storeSettings = await api('/store/settings');
     if (storeSettings.demo_mode && $('syncStatus')) { const d = document.createElement('div'); d.className = 'nv-demo-banner'; d.textContent = 'Loja de demonstração: os pedidos novos começam sozinhos e avançam uma etapa a cada ' + (storeSettings.demo_step_seconds || 40) + ' s. O link do cliente mostra vídeos de exemplo e, no fim, a foto final. Você também pode avançar, pausar ou voltar pelos botões.'; $('syncStatus').before(d); }
     $('storeBrandName').textContent = storeSettings.name || 'Minha loja'; document.querySelector('.nv-profile span').textContent = storeSettings.name || 'Minha loja';
@@ -607,7 +607,12 @@ async function loadSupport(box, version) {
 async function loadEditor(view, box, version) {
  if(view==='cameras'){
  const cameras=await api('/cameras');if(version!==viewVersion)return;
- box.innerHTML='<section class="nv-card"><h2>Câmeras autorizadas</h2><p class="nv-help">Cadastro, instalação, troca e remoção são realizados pela central ou por técnicos autorizados. Seu painel utiliza apenas as câmeras liberadas para esta loja.</p><div class="nv-list">'+cameras.map(c=>'<article class="nv-order"><div><strong>'+safe(c.name)+'</strong><p>'+safe(c.station||'Sem setor informado')+'</p></div><span class="nv-pill '+(c.enabled?'':'orange')+'">'+safe(c.enabled?(c.status==='ready'?'Configurada':c.status==='offline'?'Sem conexão':'Em configuração'):'Bloqueada pela central')+'</span></article>').join('')+'</div></section>';
+ box.innerHTML='<section class="nv-card"><h2>Câmeras autorizadas</h2><p class="nv-help">Cadastro, instalação, troca e remoção são realizados pela central ou por técnicos autorizados. Seu painel utiliza apenas as câmeras liberadas para esta loja.</p><div class="nv-list">'+cameras.map(c=>'<article class="nv-order"><div><strong>'+safe(c.name)+'</strong><p>'+safe(c.station||'Sem setor informado')+'</p></div><span class="nv-pill '+(c.enabled?'':'orange')+'">'+safe(c.enabled?(c.status==='ready'?'Configurada':c.status==='offline'?'Sem conexão':'Em configuração'):'Bloqueada pela central')+'</span></article>').join('')+'</div></section>'
+  +'<section class="nv-card"><h2>Área de espera</h2><p class="nv-help">A câmera da área de espera aparece no link de todos os clientes que estão na fila, junto com a posição de cada um. Quando o atendimento começa, o link passa para a câmera da etapa.</p>'
+  +'<label class="nv-field">Câmera da área de espera<select id="waitingCamera" '+(window.__fpRole==='owner'?'':'disabled')+'><option value="">Nenhuma (só a posição na fila)</option>'+cameras.filter(c=>c.enabled).map(c=>'<option value="'+safe(c.id)+'" '+(c.id===storeSettings.waiting_camera_id?'selected':'')+'>'+safe(c.name)+'</option>').join('')+'</select></label>'
+  +(window.__fpRole==='owner'?'':'<p class="nv-help">Só o dono da loja pode mudar.</p>')+'</section>';
+ const wc=document.getElementById('waitingCamera');
+ if(wc)wc.onchange=async()=>{wc.disabled=true;try{const r=await api('/store/waiting-camera','PATCH',{camera_id:wc.value||null});storeSettings.waiting_camera_id=r.waiting_camera_id;feedback(wc.value?'Câmera da área de espera salva.':'Área de espera sem câmera.')}catch(e){feedback(e.message,true)}finally{wc.disabled=false}};
  }else if(view==='processes'){
 
  const [processes,cameras]=await Promise.all([api('/processes'),api('/cameras')]);

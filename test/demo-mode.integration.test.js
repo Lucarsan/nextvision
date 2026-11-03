@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createStoreFixture } from './helpers/store-fixture.js';
-import { demoVideoFor, nextDemoAction, START_AFTER_SECONDS, LAST_STEP_SECONDS } from '../src/demo-mode.js';
+import { demoVideoFor, nextDemoAction, demoWaitSeconds, LAST_STEP_SECONDS } from '../src/demo-mode.js';
 
 test('modo demonstração: vídeo por etapa e próxima ação', () => {
   assert.equal(demoVideoFor('Banho'), '/demo/pet/banho.mp4');
@@ -12,8 +12,9 @@ test('modo demonstração: vídeo por etapa e próxima ação', () => {
   assert.equal(demoVideoFor('Pronto para retirada'), null);
   const now = Date.parse('2026-11-03T12:00:00Z'), ago = s => new Date(now - s * 1000).toISOString();
   const o = { status: 'queued', step_index: 0, steps_count: 4, demo_step_seconds: 40 };
-  assert.equal(nextDemoAction({ ...o, last_change: ago(START_AFTER_SECONDS - 1) }, now), null);
-  assert.equal(nextDemoAction({ ...o, last_change: ago(START_AFTER_SECONDS) }, now), 'start');
+  assert.equal(demoWaitSeconds(40), 32); assert.equal(demoWaitSeconds(10), 8);
+  assert.equal(nextDemoAction({ ...o, last_change: ago(31) }, now), null);
+  assert.equal(nextDemoAction({ ...o, last_change: ago(32) }, now), 'start');
   assert.equal(nextDemoAction({ ...o, status: 'live', last_change: ago(39) }, now), null);
   assert.equal(nextDemoAction({ ...o, status: 'live', last_change: ago(40) }, now), 'advance');
   assert.equal(nextDemoAction({ ...o, status: 'live', step_index: 3, last_change: ago(LAST_STEP_SECONDS) }, now), 'complete');
@@ -49,7 +50,9 @@ test('loja demo: pedido anda sozinho, mostra o vídeo da etapa e termina com fot
     assert.equal(settings.demo_mode, true); assert.equal(settings.demo_step_seconds, 10);
 
     const pub = () => fetch(base + '/api/public/orders/' + order.share_code).then(r => r.json());
-    let p = await pub(); assert.equal(p.status, 'queued'); assert.equal(p.demo_mode, true); assert.equal(p.demo_video, undefined);
+    let p = await pub(); assert.equal(p.status, 'queued'); assert.equal(p.demo_mode, true);
+    // Na fila: vídeo da área de espera e a fila andando (2 na frente logo no começo).
+    assert.equal(p.demo_video, '/demo/pet/espera.mp4'); assert.equal(p.queue_position, 3); assert.equal(p.last_change, undefined);
 
     await age(db, order.id, 30); await age(db, foreign.id, 30);
     p = await waitFor(async () => { const x = await pub(); return x.status === 'live' && x; });

@@ -15,6 +15,9 @@ const DEMO_VIDEOS = [
   [/tosa|finaliza|acabamento|escova/i, '/demo/pet/tosa.mp4']
 ];
 export const START_AFTER_SECONDS = 8;
+// Na fila, a demonstração mostra a área de espera e a fila andando antes de começar.
+export const DEMO_WAITING_VIDEO = '/demo/pet/espera.mp4';
+export const demoWaitSeconds = stepSeconds => Math.max(START_AFTER_SECONDS, Math.round((Number(stepSeconds) || 40) * 0.8));
 export const LAST_STEP_SECONDS = 12;
 
 // Vídeo de exemplo para o nome da etapa; etapa sem vídeo (ex.: "Pronto para retirada") → null.
@@ -37,7 +40,7 @@ function demoFinalPhoto() {
 // Etapa sem vídeo de exemplo (ex.: "Recepção") também passa rápido.
 export function nextDemoAction(o, nowMs = Date.now()) {
   const idle = (nowMs - new Date(o.last_change).getTime()) / 1000;
-  if (o.status === 'queued') return idle >= START_AFTER_SECONDS ? 'start' : null;
+  if (o.status === 'queued') return idle >= demoWaitSeconds(o.demo_step_seconds) ? 'start' : null;
   if (o.status !== 'live') return null;
   const last = o.step_index >= o.steps_count - 1;
   const short = last || (o.step_name !== undefined && !demoVideoFor(o.step_name));

@@ -94,3 +94,55 @@ test('loja demo: pedido anda sozinho, mostra o vídeo da etapa e termina com fot
     assert.equal((await db.query('SELECT status FROM orders WHERE id=$1', [foreign.id])).rows[0].status, 'queued');
   } finally { await browser?.close(); await f.cleanup(); }
 });
+
+test('link de apresentação /demo/<loja>: cria o pedido-vitrine e recomeça do zero', {
+  skip: process.env.TEST_DATABASE_URL ? false : 'Set TEST_DATABASE_URL', timeout: 120000
+}, async () => {
+  const f = await createStoreFixture(); const { api, db, base } = f; let browser;
+  try {
+    const slug = (await db.query('SELECT slug FROM tenants WHERE id=$1', [f.tenant])).rows[0].slug.replace(/_/g, '-');
+    await db.query('UPDATE tenants SET slug=$2 WHERE id=$1', [f.tenant, slug]);
+    await db.query('INSERT INTO tenant_slugs(slug,tenant_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [slug, f.tenant]);
+    await api('/processes', { method: 'POST', body: { name: 'Só tosa', steps: ['Tosa', 'Pronto para retirada'] } }, 201);
+    await api('/processes', { method: 'POST', body: { name: 'Banho e tosa', steps: ['Recepção', 'Banho', 'Secagem', 'Tosa', 'Pronto para retirada'] } }, 201);
+    // Loja sem demo: 404.
+    assert.equal((await fetch(base + '/demo/' + slug, { redirect: 'manual' })).status, 404);
+    await api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { niche: 'pet', demo_mode: true, demo_step_seconds: 10 } });
+    const go = await fetch(base + '/demo/' + slug, { redirect: 'manual' });
+    assert.equal(go.status, 302);
+    const code = go.headers.get('location').split('/p/')[1];
+    let p = await (await fetch(base + '/api/public/orders/' + code)).json();
+    assert.equal(p.demo_showcase, true); assert.equal(p.item_name, 'Thor'); assert.equal(p.process, 'Banho e tosa'); assert.equal(p.status, 'queued');
+    // Leva até o fim e confere que recomeça do zero, no mesmo link, sem foto final.
+    const id = (await db.query('SELECT id FROM orders WHERE share_code=$1', [code])).rows[0].id;
+    await db.query("UPDATE orders SET status='completed',step_index=4,started_at=now(),completed_at=now() WHERE id=$1", [id]);
+    await db.query("INSERT INTO order_photos(tenant_id,order_id,mime_type,image_data,kind) VALUES($1,$2,'image/jpeg','\\xffd8ffd9','final')", [f.tenant, id]);
+    assert.equal((await fetch(base + '/api/public/orders/' + code + '/demo-restart', { method: 'POST' })).status, 204);
+    p = await (await fetch(base + '/api/public/orders/' + code)).json();
+    assert.equal(p.status, 'queued'); assert.equal(p.step_index, 0); assert.deepEqual(p.final_photos, []);
+    // Abrir o link de novo usa o mesmo pedido (não cria outro).
+    const again = await fetch(base + '/demo/' + slug, { redirect: 'manual' });
+    assert.equal(again.headers.get('location').split('/p/')[1], code);
+    assert.equal((await db.query("SELECT count(*)::int n FROM orders WHERE external_reference='DEMO'")).rows[0].n, 1);
+    // Pedido comum da loja demo não pode ser recomeçado pelo link público.
+    const cli = await api('/customers', { method: 'POST', body: { name: 'Ana' } }, 201);
+    const procs = await api('/processes');
+    const normal = await api('/orders', { method: 'POST', body: { customer_id: cli.id, process_id: procs[0].id } }, 201);
+    assert.equal((await fetch(base + '/api/public/orders/' + normal.share_code + '/demo-restart', { method: 'POST' })).status, 404);
+    // Navegador: o botão vira "Recomeçar do início" e volta o pedido para a fila.
+    if (process.env.BROWSER_EXECUTABLE) {
+      const require = createRequire(import.meta.url);
+      let pw; try { pw = require('playwright'); } catch { pw = require('playwright-core'); }
+      browser = await pw.chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox'] });
+      await db.query("UPDATE orders SET status='completed',step_index=4,started_at=now(),completed_at=now() WHERE id=$1", [id]);
+      const page = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+      const errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.goto(base + '/p/' + code);
+      await page.waitForFunction(() => /Recomeçar do início/.test(document.getElementById('refresh').textContent));
+      assert.match(await page.locator('h1').textContent(), /ficou pronto/);
+      await page.locator('#refresh').click();
+      await page.waitForFunction(() => /na fila/.test(document.querySelector('h1')?.textContent || ''));
+      assert.deepEqual(errors, []);
+    }
+  } finally { await browser?.close(); await f.cleanup(); }
+});

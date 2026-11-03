@@ -87,3 +87,37 @@ export function startDemoLoop(intervalMs = 4000) {
   timer.unref();
   return timer;
 }
+
+// Pedido-vitrine da loja demo: um link fixo (/demo/<loja>) que mostra o processo inteiro
+// e pode recomeçar do zero quantas vezes for preciso. Marcado com a referência "DEMO".
+export const SHOWCASE_REF = 'DEMO';
+export async function restartShowcase(slug) {
+  const { db } = await dbModule();
+  const c = await db.connect();
+  try {
+    await c.query('BEGIN');
+    const t = (await c.query("SELECT t.id FROM tenant_slugs s JOIN tenants t ON t.id=s.tenant_id WHERE s.slug=$1 AND t.demo_mode AND t.status IN ('trial','active')", [slug])).rows[0];
+    if (!t) { await c.query('ROLLBACK'); return null; }
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['nextvision-demo-showcase:' + t.id]);
+    let o = (await c.query('SELECT id,share_code FROM orders WHERE tenant_id=$1 AND external_reference=$2 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE', [t.id, SHOWCASE_REF])).rows[0];
+    if (!o) {
+      // Processo com mais etapas que têm vídeo de exemplo (ex.: "Banho e tosa").
+      const procs = (await c.query('SELECT id,steps FROM processes WHERE tenant_id=$1 AND archived_at IS NULL ORDER BY created_at', [t.id])).rows;
+      if (!procs.length) { await c.query('ROLLBACK'); return null; }
+      const score = p => (p.steps || []).filter(s => demoVideoFor(s)).length * 10 - (p.steps || []).filter(s => !demoVideoFor(s)).length;
+      const proc = procs.sort((a, b) => score(b) - score(a))[0];
+      let cust = (await c.query("SELECT id FROM customers WHERE tenant_id=$1 AND name='Tutor da demonstração' AND deleted_at IS NULL LIMIT 1", [t.id])).rows[0];
+      if (!cust) cust = (await c.query("INSERT INTO customers(tenant_id,name) VALUES($1,'Tutor da demonstração') RETURNING id", [t.id])).rows[0];
+      const crypto = await import('node:crypto');
+      o = (await c.query("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,share_code",
+        [t.id, cust.id, proc.id, crypto.randomBytes(32).toString('hex'), SHOWCASE_REF, JSON.stringify({ item_type: 'pet', pet_name: 'Thor', species: 'Cão', breed: 'Yorkshire', size: 'P', service: 'Banho e tosa' })])).rows[0];
+    } else {
+      await c.query("UPDATE orders SET status='queued',step_index=0,started_at=NULL,completed_at=NULL,camera_id=NULL WHERE id=$1", [o.id]);
+      await c.query("DELETE FROM order_photos WHERE order_id=$1 AND kind='final'", [o.id]);
+      await c.query('DELETE FROM loyalty_checkins WHERE order_id=$1 AND redemption_id IS NULL', [o.id]);
+    }
+    await c.query("INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,NULL,'demo_restart','order',$2)", [t.id, o.id]);
+    await c.query('COMMIT');
+    return o;
+  } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+}

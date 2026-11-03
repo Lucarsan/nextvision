@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
-import {demoVideoFor,startDemoLoop} from './demo-mode.js';
+import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -727,10 +727,25 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  const out=r.rows[0];
  // Loja de demonstração: vídeo de exemplo da etapa no lugar da câmera.
  if(out.demo_mode&&out.status==='live')out.demo_video=demoVideoFor((out.steps||[])[out.step_index]);
+ out.demo_showcase=!!out.demo_mode&&out.external_reference===SHOWCASE_REF;
  res.set('Cache-Control','no-store');res.json(out);
 }));
 // Rota explícita da prévia, independente da resolução do diretório de trabalho.
 app.get('/loja-preview.html',(_req,res)=>res.sendFile('loja-preview.html',{root:new URL('../public/',import.meta.url).pathname}));
+// Link de apresentação da loja demo: sempre recomeça o pedido-vitrine do zero.
+const demoLimit=rateLimit({windowMs:60000,limit:20,standardHeaders:'draft-7',legacyHeaders:false});
+app.get(/^\/demo\/([a-z0-9-]{3,60})\/?$/,demoLimit,route(async(req,res)=>{
+ const o=await restartShowcase(req.params[0]);
+ if(!o)return res.status(404).sendFile('tracking.html',{root:'public'});
+ res.set('Cache-Control','no-store').redirect(302,'/p/'+encodeURIComponent(o.share_code));
+}));
+app.post('/api/public/orders/:token/demo-restart',demoLimit,route(async(req,res)=>{
+ if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
+ const r=await q("SELECT s.slug FROM orders o JOIN tenants t ON t.id=o.tenant_id JOIN tenant_slugs s ON s.tenant_id=t.id AND s.slug=t.slug WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.demo_mode AND o.external_reference=$3",[digestToken(req.params.token),req.params.token,SHOWCASE_REF]);
+ if(!r.rowCount)return bad(res,404,'Não encontrado');
+ const o=await restartShowcase(r.rows[0].slug);if(!o)return bad(res,404,'Não encontrado');
+ res.status(204).end();
+}));
 // Link curto: /<loja>/<numero>. Limite por IP dificulta testar numeros em sequencia.
 const shortLinkLimit=rateLimit({windowMs:10*60000,limit:40,standardHeaders:'draft-7',legacyHeaders:false});
 app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res)=>{

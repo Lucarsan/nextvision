@@ -35,6 +35,20 @@ test('painel: links úteis, atalhos do topo, dívidas e recibo', {
     await page.waitForSelector('#ftLinkList .ft-link');
     assert.equal(await page.locator('.nv-top h1').textContent(), 'Links úteis');
     assert.equal(await page.locator('#ftQuick [data-view="links"]').getAttribute('class'), 'ft-qbtn active');
+    // Janelas fecham ao clicar fora (no fundo); clicar dentro não fecha.
+    await page.locator('[data-ft-link-new]').click();
+    await page.waitForSelector('#ftDialog[open]');
+    await page.locator('#ftLinkF [name=keywords]').click();
+    assert.equal(await page.locator('#ftDialog').evaluate(d => d.open), true, 'clique dentro mantém aberta');
+    await page.mouse.click(8, 8);
+    await page.waitForFunction(() => !document.getElementById('ftDialog').open);
+    // Arrastar de dentro para fora (selecionar texto) não fecha.
+    await page.locator('[data-ft-link-new]').click();
+    const box = await page.locator('#ftLinkF [name=url]').boundingBox();
+    await page.mouse.move(box.x + 10, box.y + 10); await page.mouse.down(); await page.mouse.move(8, 8); await page.mouse.up();
+    assert.equal(await page.locator('#ftDialog').evaluate(d => d.open), true, 'arrastar para fora não fecha');
+    await page.mouse.click(8, 8);
+    await page.waitForFunction(() => !document.getElementById('ftDialog').open);
     // Busca por palavra-chave.
     await page.locator('#ftLinkQ').fill('roubado');
     await page.waitForFunction(() => document.querySelectorAll('#ftLinkList .ft-link').length === 1);
@@ -124,6 +138,14 @@ test('painel: links úteis, atalhos do topo, dívidas e recibo', {
     assert.equal((await api('/store/tools/settings')).receipt_issuer.city, 'Fortaleza');
     await page.screenshot(shot('tools-7-recibo'), { fullPage: true });
 
+    // Senha do admin (janela por cima de outra): clicar fora cancela e a de baixo continua.
+    await page.locator('.nv-sidebar [data-view="stock"]').click();
+    await page.evaluate(() => { window.__adm = null; window.FPAdmin.ensure('teste').then(v => { window.__adm = v; }); });
+    await page.waitForSelector('#fsAdminDialog[open]');
+    await page.mouse.click(8, 8);
+    await page.waitForFunction(() => window.__adm === false && !document.getElementById('fsAdminDialog').open);
+    await page.locator('#ftQuick [data-view="links"]').click();
+    await page.waitForSelector('#ftRc', { state: 'attached' }); // volta na última aba usada (Recibos)
     // Celular: atalhos rolam numa linha; "Links úteis" fica em "Mais".
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('[data-ft-tab="links"]').click();

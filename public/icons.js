@@ -69,5 +69,16 @@
   // HTML fixo: troca <i data-ic="nome"></i> pelo desenho.
   const fill = root => root.querySelectorAll('i[data-ic]').forEach(i => { i.outerHTML = icon(i.dataset.ic); });
   window.FPIconFill = fill;
+  // Janelas (<dialog> aberto com showModal): clicar fora, no fundo escurecido, fecha — igual ao Esc.
+  // Só fecha se o clique começou e terminou fora (arrastar uma seleção de texto para fora não fecha).
+  // Dispara 'cancel' antes, para quem trata o fechamento (ex.: senha do admin) responder como no Esc.
+  const outside = (d, e) => { const r = d.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
+  let downOutside = null;
+  document.addEventListener('pointerdown', e => { const d = e.target; downOutside = d instanceof HTMLDialogElement && d.open && outside(d, e) ? d : null; }, true);
+  document.addEventListener('click', e => {
+    const d = e.target, started = downOutside; downOutside = null;
+    if (!(d instanceof HTMLDialogElement) || !d.open || started !== d || !outside(d, e) || e.clientX === 0 && e.clientY === 0) return;
+    if (d.dispatchEvent(new Event('cancel', { cancelable: true }))) d.close();
+  });
   fill(document);
 })();

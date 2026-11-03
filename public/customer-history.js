@@ -1,5 +1,5 @@
 // Histórico do cliente com a loja: o que comprou, quanto gastou, como pagou, serviços (aparelho, peça, garantia)
-// e pedidos. Aberto pela aba Clientes (nome do cliente ou botão "Histórico").
+// e pedidos. Abre ao clicar no nome ou na foto do cliente em qualquer parte do painel ([data-customer-history]).
 (() => {
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -39,13 +39,15 @@
   }
 
   async function open(id) {
-    const d = $('editorDialog');
+    // Janela própria, por cima de qualquer outra (não apaga uma venda ou formulário aberto embaixo).
+    let d = $('chDialog');
+    if (!d) { d = document.createElement('dialog'); d.id = 'chDialog'; d.className = 'nv-dialog'; d.setAttribute('aria-labelledby', 'chTitle'); document.body.appendChild(d); d.addEventListener('click', e => { if (e.target.closest('[data-ch-close]')) d.close(); }); }
     d.innerHTML = '<p class="nv-help">Carregando histórico…</p>'; if (!d.open) d.showModal();
-    let h; try { h = await api(`/store/customers/${id}/history`); } catch (e) { d.innerHTML = `<div class="nv-heading"><h2>Histórico</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">${icon('x')}</button></div><p class="ch-neg">${esc(e.message)}</p>`; return; }
+    let h; try { h = await api(`/store/customers/${id}/history`); } catch (e) { d.innerHTML = `<div class="nv-heading"><h2>Histórico</h2><button type="button" class="nv-button secondary" data-ch-close aria-label="Fechar">${icon('x')}</button></div><p class="ch-neg">${esc(e.message)}</p>`; return; }
     const c = h.customer, t = h.totals;
     const timeline = [...h.sales.map(x => ({ at: x.created_at, html: saleCard(x, h.today) })), ...h.orders.map(o => ({ at: o.created_at, html: orderCard(o) }))].sort((a, b) => String(b.at).localeCompare(String(a.at)));
     const wa = phoneLink(c.phone);
-    d.innerHTML = `<div class="nv-heading"><h2 id="dialogTitle">${esc(c.name)}</h2><button type="button" class="nv-button secondary" data-close-dialog aria-label="Fechar">${icon('x')}</button></div>
+    d.innerHTML = `<div class="nv-heading"><h2 id="chTitle">${esc(c.name)}</h2><button type="button" class="nv-button secondary" data-ch-close aria-label="Fechar">${icon('x')}</button></div>
       <p class="nv-help">${c.phone ? (wa ? `<a href="${wa}" target="_blank" rel="noopener">${esc(c.phone)}</a>` : esc(c.phone)) : 'sem telefone'}${c.email ? ' · ' + esc(c.email) : ''}${c.address ? ' · ' + esc(c.address) : ''} · cliente desde ${dmy(String(t.first_at || c.created_at).slice(0, 10))}</p>
       <div class="ch-kpis"><div><small>Total gasto</small><b>${brl(t.spent_cents)}</b></div><div><small>Compras</small><b>${t.sales}</b></div><div><small>Serviços</small><b>${t.services}</b></div><div><small>Pedidos</small><b>${t.orders}</b></div><div><small>Última vez</small><b>${t.last_at ? dmy(String(t.last_at).slice(0, 10)) : '—'}</b></div></div>
       ${Object.keys(t.by_method).length ? `<p class="ch-pills">${Object.entries(t.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k] || k} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</p>` : ''}
@@ -58,7 +60,8 @@
   }
 
   const css = document.createElement('style');
-  css.textContent = `.fp-linkbtn{all:unset;cursor:pointer;color:inherit;font:inherit}.fp-linkbtn:hover,.fp-linkbtn:focus-visible{text-decoration:underline;color:var(--nv-primary,#f25c1f)}
+  css.textContent = `.fp-cust-link{cursor:pointer;border-radius:4px}.fp-cust-link:hover,.fp-cust-link:focus-visible{text-decoration:underline;color:var(--nv-primary,#f25c1f);outline:none}.fp-cust-avatar{cursor:pointer}.fp-cust-avatar:hover{outline:2px solid var(--nv-primary,#f25c1f);outline-offset:1px}
+  .fp-linkbtn{all:unset;cursor:pointer;color:inherit;font:inherit}.fp-linkbtn:hover,.fp-linkbtn:focus-visible{text-decoration:underline;color:var(--nv-primary,#f25c1f)}
   .ch-kpis{display:flex;flex-wrap:wrap;gap:18px;margin:10px 0}.ch-kpis div{display:flex;flex-direction:column}.ch-kpis small{color:var(--nv-muted)}.ch-kpis b{font-size:20px}
   .ch-pills{display:flex;flex-wrap:wrap;gap:6px}.ch-warr{background:#ecfdf3;border:1px solid #abefc6;border-radius:12px;padding:8px 12px;margin:8px 0;font-size:14px}.ch-warr ul{margin:4px 0 0;padding-left:18px}
   .ch-search{width:100%;margin:10px 0;padding:10px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;font:inherit}
@@ -67,4 +70,8 @@
   .ch-right{float:right}.ch-desc{margin:6px 0 0;font-size:14px}.ch-ok{color:#027a48}.ch-neg{color:#b42318}.ch-muted{color:var(--nv-muted)}`;
   document.head.appendChild(css);
   window.FPCustomerHistory = { open };
+  // Qualquer nome/foto marcado com data-customer-history abre o histórico (clique ou Enter/Espaço).
+  const trigger = e => { const el = e.target.closest?.('[data-customer-history]'); if (!el || el.matches('button[data-history-customer]')) return false; e.preventDefault(); e.stopPropagation(); open(el.dataset.customerHistory); return true; };
+  document.addEventListener('click', trigger, true);
+  document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-customer-history]')) trigger(e); });
 })();

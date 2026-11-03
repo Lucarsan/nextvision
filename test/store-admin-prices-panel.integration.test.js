@@ -128,7 +128,7 @@ test('painel: capas no total, senha do admin, brinde, custos, preços e históri
     await page.locator('.nv-sidebar [data-view="customers"]').click();
     await page.locator('[data-history-customer]').first().click();
     await page.waitForSelector('#chList .ch-card');
-    const hist = await page.locator('#editorDialog').innerText();
+    const hist = await page.locator('#chDialog').innerText();
     assert.match(hist, /Maria Souza/); assert.match(hist, /Troca de tela/); assert.match(hist, /Garantias valendo/); assert.match(hist, /brinde/i); assert.match(hist, /Crédito|Pix|Dinheiro|Débito/);
     await page.screenshot(shot('historico-cliente'));
     await page.locator('#chSearch').fill('bateria');

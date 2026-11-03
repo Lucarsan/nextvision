@@ -99,7 +99,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       expenses_count: moves.rows.filter(r => r.kind === 'expense').reduce((a, r) => a + r.n, 0),
       expenses_total_cents: expenses,
       balance_cents: salesTotal - expenses,
-      costs_cents: Number(cost.cost), costs_unknown_items: cost.unknown,
+      costs_cents: Number(cost.cost), costs_unknown_items: cost.unknown, net_cents: salesTotal - Number(cost.cost) - expenses,
       opening_cents: opening, deposits_cents: sum('deposit'), withdrawals_cents: sum('withdrawal'),
       cashback_used_cents: Number(cb.used), cashback_earned_cents: Number(cb.earned),
       expected_cash_cents: opening + (by.cash?.total_cents || 0) + sum('deposit') - sum('withdrawal') - (expensesBy.cash?.total_cents || 0)
@@ -974,14 +974,37 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         (SELECT max(m.created_at) FROM customer_messages m WHERE m.tenant_id=c.tenant_id AND m.customer_id=c.id AND m.kind='status') last_status_at
       FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1
       GROUP BY c.id ORDER BY max(b.at) DESC`, [tid(req), day, TZ]);
-    const progress = await progressFor(tid(req), r.rows.map(x => x.id));
-    const cashback = await cashbackFor(tid(req), r.rows.map(x => x.id));
+    const today = (await q(`SELECT to_char(now() AT TIME ZONE $1,'YYYY-MM-DD') d`, [TZ])).rows[0].d;
+    // Pendentes de dias anteriores (só na visão de hoje): comprou nos últimos 30 dias, antes de hoje, tem WhatsApp
+    // e não recebeu o status depois da última compra. Some ao enviar ou ao dispensar. Só entram as compras ainda sem mensagem.
+    let pending = [];
+    if (!day || day === today) {
+      const p = await q(`WITH ls AS (SELECT customer_id,max(created_at) at FROM customer_messages WHERE tenant_id=$1 AND kind='status' GROUP BY 1),
+        buys AS (
+          SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents
+            FROM sales x WHERE x.tenant_id=$1 AND x.customer_id IS NOT NULL AND x.canceled_at IS NULL
+            AND (x.created_at AT TIME ZONE $2)::date BETWEEN (now() AT TIME ZONE $2)::date-30 AND (now() AT TIME ZONE $2)::date-1
+          UNION ALL
+          SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0
+            FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
+            AND (o.completed_at AT TIME ZONE $2)::date BETWEEN (now() AT TIME ZONE $2)::date-30 AND (now() AT TIME ZONE $2)::date-1
+        )
+        SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
+          json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents) ORDER BY b.at) purchases,
+          sum(b.cashback_earned_cents)::int cashback_earned_cents, max(ls.at) last_status_at
+        FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1 AND c.deleted_at IS NULL LEFT JOIN ls ON ls.customer_id=c.id
+        WHERE (ls.at IS NULL OR b.at>ls.at) AND length(regexp_replace(coalesce(c.phone,''),'\D','','g'))>=10
+          AND c.id <> ALL($3::uuid[])
+        GROUP BY c.id ORDER BY max(b.at)`, [tid(req), TZ, r.rows.map(x => x.id)]);
+      pending = p.rows;
+    }
+    const all = [...r.rows, ...pending];
+    const progress = await progressFor(tid(req), all.map(x => x.id));
+    const cashback = await cashbackFor(tid(req), all.map(x => x.id));
+    const shapeRow = ({ cashback_earned_cents, ...x }) => ({ ...x, loyalty: progress.get(x.id), cashback: { ...cashback.get(x.id), earned_cents: cashback_earned_cents || 0 },
+      sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) });
     res.set('Cache-Control', 'no-store');
-    res.json({
-      day: day || (await q(`SELECT to_char(now() AT TIME ZONE $1,'YYYY-MM-DD') d`, [TZ])).rows[0].d,
-      customers: r.rows.map(({ cashback_earned_cents, ...x }) => ({ ...x, loyalty: progress.get(x.id), cashback: { ...cashback.get(x.id), earned_cents: cashback_earned_cents || 0 },
-        sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) }))
-    });
+    res.json({ day: day || today, today, customers: r.rows.map(shapeRow), pending: pending.map(shapeRow) });
   }));
 
   // Público de ofertas: clientes com telefone que não pediram para sair.

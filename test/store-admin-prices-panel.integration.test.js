@@ -101,7 +101,16 @@ test('painel: capas no total, senha do admin, brinde, custos, preços e históri
 
     // 5) Custos e saldo líquido: capa 6,00 + tela 90,00 + película 1,00 = 97,00.
     await page.waitForFunction(() => /Custos[\s\S]*97,00/.test(document.querySelector('.fs-kpis')?.textContent || ''));
-    assert.doesNotMatch(await page.locator('.fs-kpis').innerText(), /Saldo líquido/);
+    assert.deepEqual(await page.$$eval('.fs-kpis > div > small', x => x.map(e => e.textContent.replace(/ \(.*/, ''))), ['Entradas', 'Custos', 'Dinheiro na gaveta', 'Despesas', 'Saldo do dia']);
+    const cashNow = await api('/store/cash');
+    assert.match(await page.locator('.fs-kpis').innerText(), new RegExp('Saldo do dia\\s*R\\$\\s?' + (cashNow.summary.net_cents / 100).toFixed(2).replace('.', ',')));
+    // Relatório do caixa: custos por item e saldo líquido.
+    await page.locator('#fsPrint').click();
+    await page.waitForFunction(() => !!window.FPSales.lastReportHtml);
+    const repHtml = await page.evaluate(() => window.FPSales.lastReportHtml);
+    assert.match(repHtml, /Custos \(o que repor\)/); assert.match(repHtml, /Entradas[\s\S]*Custos[\s\S]*Dinheiro na gaveta[\s\S]*Despesas[\s\S]*Saldo do dia/); assert.doesNotMatch(repHtml, /Saídas|Saldo líquido/); assert.match(repHtml, /97,00/);
+    assert.match(repHtml, /peça do serviço/); assert.match(repHtml, /brinde/);
+    { const p2 = await context.newPage(); await p2.setContent(repHtml); await p2.screenshot({ ...shot('relatorio-custos'), fullPage: true }); await p2.close(); }
     assert.equal(await page.locator('#fsCosts').count(), 0, 'sem quadro de custos detalhado no painel');
     await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot(shot('caixa-custos'));
 

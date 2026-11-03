@@ -92,12 +92,12 @@ test('senha do admin, capas no total com modelo, brinde, custos, preços em lote
     await api('/store/cash/movements', { method: 'POST', body: { kind: 'expense', amount_cents: 1000, category: 'Outros', note: 'lanche' } }, 201);
     const cash = await api('/store/cash');
     assert.equal(cash.summary.costs_cents, 3 * 600 + 9000 + 100);
-    assert.equal(cash.summary.net_cents, undefined, 'saldo líquido só no e-mail');
+    assert.equal(cash.summary.net_cents, cash.summary.sales_total_cents - cash.summary.costs_cents - 1000, 'saldo líquido = entradas − custos − saídas');
     assert.equal((await fetch(f.base + '/api/store/cash/costs', { headers: { Authorization: 'Bearer ' + f.ownerToken } })).status, 404, 'detalhe de custos só no e-mail');
     const day = (await f.db.query("SELECT to_char(now() AT TIME ZONE 'America/Fortaleza','YYYY-MM-DD') d")).rows[0].d;
     const rep = await reportData((sql, params) => f.db.query(sql, params), tenant, 'daily', day);
     assert.equal(rep.costs_total, 3 * 600 + 9000 + 100); assert.equal(rep.net, rep.sales_total - rep.costs_total - 1000);
-    assert.match(reportHtml(rep), /Saldo líquido/);
+    assert.match(reportHtml(rep), /Entradas[\s\S]*Custos[\s\S]*Despesas[\s\S]*Saldo do dia/); assert.doesNotMatch(reportHtml(rep), /Saídas|Saldo líquido/);
     assert.ok(rep.restock.some(r => r.name === 'Película 3D' && r.variant === 'Galaxy A12'), 'brinde entra na reposição');
 
     // ---------- Reajuste em lote ----------

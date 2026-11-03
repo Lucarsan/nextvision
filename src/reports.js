@@ -147,11 +147,11 @@ export function reportHtml(d) {
 <div style="color:#4b5563;font-size:14px">${esc(d.period.title)}</div>
 
 <table style="width:100%;border-collapse:separate;border-spacing:6px;margin:14px -6px 0"><tr>
-${kpi(`Vendas (${d.sales.length})`, brl(d.sales_total), '#027a48')}${kpi('Saídas', brl(d.expenses_total), '#b42318')}${kpi('Saldo (vendas − saídas)', brl(d.balance))}
+${kpi(`Entradas (${d.sales.length} vendas)`, brl(d.sales_total), '#027a48')}${kpi('Custos (mercadorias e peças vendidas)', brl(d.costs_total || 0), '#b54708')}${kpi('Despesas', brl(d.expenses_total), '#b42318')}
 </tr><tr>
-${kpi('Custos (mercadorias e peças vendidas)', brl(d.costs_total || 0), '#b54708')}${kpi('Saldo líquido (vendas − custos − saídas)', brl(d.net ?? d.balance), (d.net ?? 0) < 0 ? '#b42318' : '#027a48')}${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}
+${kpi(`${d.kind === 'daily' ? 'Saldo do dia' : 'Saldo do período'} (entradas − custos − despesas)`, brl(d.net ?? d.balance), (d.net ?? 0) < 0 ? '#b42318' : '#027a48')}${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}${kpi('Descontos dados', brl(d.discounts))}
 </tr><tr>
-${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Descontos dados', brl(d.discounts))}${kpi('Para repor (itens)', (d.restock || []).reduce((a, r) => a + r.pending, 0))}
+${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Para repor (itens)', (d.restock || []).reduce((a, r) => a + r.pending, 0))}
 </tr></table>
 <p style="font-size:12px;color:#6b7280;margin:0 0 6px">Custos = preço de custo do que saiu (mercadorias ${brl(d.goods_cost || 0)} · peças dos serviços ${brl(d.parts_cost || 0)}).${d.costs_unknown ? ` ${d.costs_unknown} item(ns) sem preço de custo ficaram fora.` : ''}</p>
 ${noCost.length && all.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
@@ -177,14 +177,14 @@ ${services.length ? h2(`Serviços realizados (${brl(d.services_total)})`) + tabl
     services.map(x => [esc(x.name), esc(x.model || '—'), esc(x.supplier || '—'), x.qty, brl(x.total), x.known ? brl(x.cost) : '—', x.known ? `<span style="color:${x.total - x.cost < 0 ? '#b42318' : '#027a48'}">${brl(x.total - x.cost)}</span>` : '—']), '') : ''}
 ${(d.by_supplier || []).length ? h2('Por fornecedor') + table(['Fornecedor', R('Serviços'), R('Custo das peças nos serviços'), R('Compras de estoque')], d.by_supplier.map(x => [esc(x.name), x.services || '—', brl(x.services_cost), brl(x.purchases)]), '') : ''}
 
-${h2(`Saídas lançadas (${brl(d.expenses_total)})`)}
-${long ? table(['Categoria', R('Total')], Object.entries(d.expenses_by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => [esc(k), brl(v)]), 'Nenhuma saída no período.')
-    : table(['Hora', 'Categoria', 'Descrição', 'Forma', R('Valor')], d.expenses.map(e => [hhmm(e.created_at, d.timezone), esc(e.category), esc(e.note), esc(METHODS[e.method] || ''), brl(e.amount_cents)]), 'Nenhuma saída no dia.')}
+${h2(`Despesas lançadas (${brl(d.expenses_total)})`)}
+${long ? table(['Categoria', R('Total')], Object.entries(d.expenses_by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => [esc(k), brl(v)]), 'Nenhuma despesa no período.')
+    : table(['Hora', 'Categoria', 'Descrição', 'Forma', R('Valor')], d.expenses.map(e => [hhmm(e.created_at, d.timezone), esc(e.category), esc(e.note), esc(METHODS[e.method] || ''), brl(e.amount_cents)]), 'Nenhuma despesa no dia.')}
 
 ${h2(`Compras de estoque (${brl(d.purchases_total)})`)}
 ${table(['Item', 'Fornecedor', R('Qtd'), R('Custo total')], d.purchases.map(b => [esc(b.name) + (b.part ? ' <small>(peça)</small>' : ''), esc(b.supplier || '—'), b.qty, b.known ? brl(b.total) : brl(b.total) + ' *']), 'Nenhuma entrada de estoque no período.')}
 ${d.purchases.some(b => !b.known) ? '<p style="font-size:12px;color:#6b7280">* entrada sem custo informado (conta como zero).</p>' : ''}
-${d.kind === 'monthly' ? `<p style="font-size:13px"><b>Total gasto no mês:</b> saídas ${brl(d.expenses_total)} + compras de estoque ${brl(d.purchases_total)} = <b>${brl(d.expenses_total + d.purchases_total)}</b>. <span style="color:#6b7280">Se a compra também foi lançada como saída no caixa, ela aparece nos dois.</span></p>` : ''}
+${d.kind === 'monthly' ? `<p style="font-size:13px"><b>Total gasto no mês:</b> despesas ${brl(d.expenses_total)} + compras de estoque ${brl(d.purchases_total)} = <b>${brl(d.expenses_total + d.purchases_total)}</b>. <span style="color:#6b7280">Se a compra também foi lançada como despesa no caixa, ela aparece nos dois.</span></p>` : ''}
 
 ${h2(d.new_products.some(p => p.kind === 'part') ? 'Produtos e peças novos cadastrados' : 'Produtos novos cadastrados')}
 ${table(['Produto', 'Código', R('Venda'), R('Custo'), R('Estoque')], d.new_products.map(p => [esc(p.name) + (p.kind === 'part' ? ` ${esc(p.device_model || '')} <small>(peça${p.supplier ? ' · ' + esc(p.supplier) : ''})</small>` : '') + (p.ask_variant ? ' <small>(com modelos)</small>' : ''), esc(p.barcode || '—') + (p.generated_barcode ? ' <small>(gerado)</small>' : ''), brl(p.price_cents), p.cost_cents != null ? brl(p.cost_cents) : '—', p.ask_variant ? 'por modelo' : (p.stock_qty ?? '—')]), 'Nenhum produto novo no período.')}

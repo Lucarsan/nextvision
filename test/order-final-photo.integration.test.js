@@ -92,13 +92,12 @@ test('foto final no painel e no link do cliente (navegador)', {
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const cp = await phone.newPage(); const cerrors = []; cp.on('pageerror', e => cerrors.push(e.message));
     await cp.goto(base + '/p/' + order.share_code);
-    await cp.waitForSelector('.final-photos img');
-    assert.match(await cp.locator('h1').textContent(), /Thor ficou pronto!/);
-    assert.match(await cp.locator('.final-photos h2').textContent(), /Thor ficou assim/);
-    assert.match(await cp.locator('.final-save').getAttribute('href'), /\?download=1$/);
-    assert.ok(await cp.locator('.final-photos img').evaluate(img => img.complete && img.naturalWidth > 0), 'a foto carrega');
-    // A foto final vem logo depois do quadro de etapas.
-    assert.ok(await cp.evaluate(() => document.querySelector('.final-photos').previousElementSibling?.querySelector('.timeline') !== null));
+    await cp.waitForSelector('.media.photo img');
+    assert.match(await cp.locator('.media.photo .shade strong').textContent(), /Thor ficou pronto!/);
+    assert.match(await cp.locator('.actions a[download]').getAttribute('href'), /\?download=1$/);
+    assert.ok(await cp.locator('.media.photo img').evaluate(img => img.complete && img.naturalWidth > 0), 'a foto carrega');
+    // A foto final vem antes do quadro de etapas, no topo.
+    assert.ok(await cp.evaluate(() => document.querySelector('#content > .hero')?.nextElementSibling?.querySelector('.segs') !== null));
     await cp.screenshot({ ...shot('cliente-foto-final'), fullPage: true });
     assert.deepEqual(cerrors, []);
   } finally { await browser?.close(); await f.cleanup(); }

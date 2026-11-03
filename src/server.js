@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
-import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF} from './demo-mode.js';
+import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -247,8 +247,15 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
  const result=await q('UPDATE platform_settings SET sales_whatsapp=$1,support_whatsapp=CASE WHEN $2::boolean THEN NULLIF($3,\'\') ELSE support_whatsapp END WHERE id=true RETURNING sales_whatsapp,support_whatsapp',[v.sales_whatsapp,v.support_whatsapp!==undefined,v.support_whatsapp||'']);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,t.waiting_camera_id,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
+}));
+// Câmera da área de espera (dono): mostrada a todos os pedidos que estão na fila.
+app.patch('/api/store/waiting-camera',auth,roles('owner'),route(async(req,res)=>{
+ const v=valid(z.object({camera_id:uuid.nullable()}).strict(),req,res);if(!v)return;
+ if(v.camera_id&&!(await q('SELECT 1 FROM cameras WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',[v.camera_id,tid(req)])).rowCount)return bad(res,400,'Câmera inválida');
+ const r=await q('UPDATE tenants SET waiting_camera_id=$1 WHERE id=$2 RETURNING waiting_camera_id',[v.camera_id,tid(req)]);
+ await audit(req,'update_waiting_camera','tenant',tid(req));res.json(r.rows[0]);
 }));
 app.patch('/api/store/location',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({city:z.string().trim().max(80),state:z.union([z.literal(''),z.string().regex(/^[A-Z]{2}$/)]),whatsapp:z.preprocess(digitsOnly,z.union([z.literal(''),z.string().regex(/^\d{10,15}$/,'WhatsApp inválido: use DDD + número')])).optional()}).strict(),req,res);if(!v)return;const wa=v.whatsapp?(v.whatsapp.length<=11?'55'+v.whatsapp:v.whatsapp):null;const r=await q('UPDATE tenants SET city=$1,state=$2,whatsapp=CASE WHEN $4 THEN $5 ELSE whatsapp END WHERE id=$3 RETURNING city,state,whatsapp',[v.city||null,v.state||null,tid(req),v.whatsapp!==undefined,wa]);await audit(req,'update','tenant_location',tid(req));res.json(r.rows[0]);}));
 app.patch('/api/store/message-templates',auth,roles('owner'),route(async(req,res)=>{const t=z.string().trim().max(1000);const v=valid(z.object({created:t,started:t,advanced:t,paused:t}).partial().strict(),req,res);if(!v)return;const r=await q("UPDATE tenants SET message_templates=message_templates || $1::jsonb WHERE id=$2 RETURNING message_templates",[JSON.stringify(v),tid(req)]);await audit(req,'update','tenant_messages',tid(req));res.json(r.rows[0]);}));
@@ -548,22 +555,24 @@ async function resolveLive(token){
  const legacy=legacyMediaConfig();
  const hash=crypto.createHash('sha256').update(token).digest('hex');
  // A camera must belong to this tenant and this active order; never expose a general camera feed
- const found=await q(`SELECT o.id,o.tenant_id,t.slug tenant_slug,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
+ const found=await q(`SELECT o.id,o.tenant_id,o.status,t.waiting_camera_id,t.slug tenant_slug,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
- JOIN cameras c ON c.id=(CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text THEN o.process_snapshot->'step_cameras'->>o.step_index::text ELSE o.process_snapshot->>'camera_id' END)::uuid AND c.tenant_id=o.tenant_id AND c.enabled AND c.deleted_at IS NULL
+ JOIN cameras c ON c.id=(CASE WHEN o.status='queued' THEN t.waiting_camera_id::text WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text THEN o.process_snapshot->'step_cameras'->>o.step_index::text ELSE o.process_snapshot->>'camera_id' END)::uuid AND c.tenant_id=o.tenant_id AND c.enabled AND c.deleted_at IS NULL
  AND ((c.device_id IS NULL AND c.id=$3::uuid) OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=c.device_id AND d.tenant_id=c.tenant_id AND d.enabled AND d.revoked_at IS NULL))
  LEFT JOIN store_media sm ON sm.tenant_id=o.tenant_id
- WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.status='live'
+ WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND (o.status='live' OR (o.status='queued' AND t.waiting_camera_id IS NOT NULL))
  AND o.deleted_at IS NULL AND t.status IN ('trial','active') AND (sm.tenant_id IS NOT NULL OR c.id=$3::uuid OR $4::boolean)`,[hash,token,legacy?.cameraId||null,Boolean(legacy&&!legacy.cameraId)]);
  if(!found.rowCount)return {status:404,message:'Vídeo indisponível'};
  const order=found.rows[0];
  // Vídeo da própria loja (túnel da loja); senão, a origem antiga configurada no Render.
  const config=mediaConfigFor(order,legacy);
  if(!config){console.error('HLS configuration incomplete');return {status:503,message:'Vídeo indisponível'};}
- const chosen=cameraForStep(order.step_cameras,order.process_camera,order.step_index);
+ // Na fila: a câmera da área de espera é de todos os pedidos na fila (não disputa câmera).
+ const waiting=order.status==='queued';
+ const chosen=waiting?order.waiting_camera_id:cameraForStep(order.step_cameras,order.process_camera,order.step_index);
  if(chosen!==order.media_camera||(!config.perStore&&config.cameraId&&chosen!==config.cameraId))return {status:404,message:'Vídeo indisponível'};
- const competing=await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
+ const competing=waiting?{rowCount:0}:await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL
  AND (CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text
  THEN o.process_snapshot->'step_cameras'->>o.step_index::text
@@ -701,7 +710,9 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
  const r=await q(`SELECT o.id,o.status,o.step_index,o.camera_id,o.external_reference,
  EXISTS(SELECT 1 FROM cameras available WHERE available.id=o.camera_id AND available.tenant_id=o.tenant_id AND available.enabled AND available.deleted_at IS NULL AND (available.device_id IS NULL OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=available.device_id AND d.tenant_id=available.tenant_id AND d.enabled AND d.revoked_at IS NULL))) camera_available,
- o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,t.demo_mode,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,o.details->>'brand' item_brand,o.details->>'model' item_model,o.details->>'pet_name' item_name,
+ o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,t.demo_mode,t.demo_step_seconds,t.google_review_url,t.city store_city,o.completed_at,o.details->>'breed' item_breed,o.details->>'size' item_size,
+ EXISTS(SELECT 1 FROM cameras w WHERE w.id=t.waiting_camera_id AND w.tenant_id=t.id AND w.enabled AND w.deleted_at IS NULL) waiting_camera,
+ GREATEST(o.created_at,COALESCE((SELECT max(a.created_at) FROM audit_events a WHERE a.target_type='order' AND a.target_id=o.id::text),o.created_at)) last_change,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,o.details->>'brand' item_brand,o.details->>'model' item_model,o.details->>'pet_name' item_name,
  t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,
  CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN
  (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,
@@ -727,6 +738,13 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  const out=r.rows[0];
  // Loja de demonstração: vídeo de exemplo da etapa no lugar da câmera.
  if(out.demo_mode&&out.status==='live')out.demo_video=demoVideoFor((out.steps||[])[out.step_index]);
+ // Demonstração na fila: vídeo da área de espera e a fila andando (2 → 1 → 0 na frente).
+ if(out.demo_mode&&out.status==='queued'){
+  out.demo_video=DEMO_WAITING_VIDEO;
+  const waited=(Date.now()-new Date(out.last_change).getTime())/1000,total=Math.max(1,demoWaitSeconds(out.demo_step_seconds));
+  out.queue_position=Math.max(0,2-Math.floor(waited*3/total))+1;
+ }
+ delete out.last_change;delete out.demo_step_seconds;
  out.demo_showcase=!!out.demo_mode&&out.external_reference===SHOWCASE_REF;
  res.set('Cache-Control','no-store');res.json(out);
 }));

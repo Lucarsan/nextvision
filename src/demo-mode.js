@@ -34,12 +34,14 @@ function demoFinalPhoto() {
 }
 
 // Decide a próxima ação de um pedido da loja demo, ou null para esperar.
+// Etapa sem vídeo de exemplo (ex.: "Recepção") também passa rápido.
 export function nextDemoAction(o, nowMs = Date.now()) {
   const idle = (nowMs - new Date(o.last_change).getTime()) / 1000;
   if (o.status === 'queued') return idle >= START_AFTER_SECONDS ? 'start' : null;
   if (o.status !== 'live') return null;
   const last = o.step_index >= o.steps_count - 1;
-  if (idle < (last ? LAST_STEP_SECONDS : o.demo_step_seconds)) return null;
+  const short = last || (o.step_name !== undefined && !demoVideoFor(o.step_name));
+  if (idle < (short ? LAST_STEP_SECONDS : o.demo_step_seconds)) return null;
   return last ? 'complete' : 'advance';
 }
 
@@ -67,7 +69,7 @@ async function apply(o, action) {
 
 export async function demoTick(nowMs = Date.now()) {
   const { q } = await dbModule();
-  const r = await q(`SELECT o.id,o.tenant_id,o.status,o.step_index,o.customer_id,jsonb_array_length(o.process_snapshot->'steps') steps_count,t.demo_step_seconds,
+  const r = await q(`SELECT o.id,o.tenant_id,o.status,o.step_index,o.customer_id,jsonb_array_length(o.process_snapshot->'steps') steps_count,o.process_snapshot->'steps'->>o.step_index step_name,t.demo_step_seconds,
     GREATEST(o.created_at,COALESCE((SELECT max(a.created_at) FROM audit_events a WHERE a.target_type='order' AND a.target_id=o.id::text),o.created_at)) last_change
     FROM orders o JOIN tenants t ON t.id=o.tenant_id
     WHERE t.demo_mode AND t.status IN ('trial','active') AND o.deleted_at IS NULL AND o.status IN ('queued','live')`);

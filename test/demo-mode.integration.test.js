@@ -18,6 +18,9 @@ test('modo demonstração: vídeo por etapa e próxima ação', () => {
   assert.equal(nextDemoAction({ ...o, status: 'live', last_change: ago(40) }, now), 'advance');
   assert.equal(nextDemoAction({ ...o, status: 'live', step_index: 3, last_change: ago(LAST_STEP_SECONDS) }, now), 'complete');
   assert.equal(nextDemoAction({ ...o, status: 'paused', last_change: ago(999) }, now), null);
+  // Etapa sem vídeo (Recepção) passa em 12 s; com vídeo espera o tempo da loja.
+  assert.equal(nextDemoAction({ ...o, status: 'live', step_name: 'Recepção', last_change: ago(LAST_STEP_SECONDS) }, now), 'advance');
+  assert.equal(nextDemoAction({ ...o, status: 'live', step_name: 'Banho', last_change: ago(LAST_STEP_SECONDS) }, now), null);
 });
 
 // Volta o relógio do pedido para o loop do servidor agir já na próxima rodada (a cada 4 s).
@@ -32,7 +35,10 @@ test('loja demo: pedido anda sozinho, mostra o vídeo da etapa e termina com fot
 }, async () => {
   const f = await createStoreFixture(); const { api, db, base } = f; let browser;
   try {
-    await api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { niche: 'pet', demo_mode: true, demo_step_seconds: 10 } });
+    await api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { niche: 'pet', demo_mode: true, demo_step_seconds: 10, sales_enabled: true } });
+    // Pet shop recebe serviços de pet no caixa (não os de celular).
+    const svc = (await api('/store/sales/service-items')).map(i => i.name);
+    assert.ok(svc.includes('Banho porte P') && svc.includes('Tosa higiênica')); assert.ok(!svc.includes('Troca de tela'));
     // Loja comum (sem demo) não anda sozinha.
     const proc = await api('/processes', { method: 'POST', body: { name: 'Banho e tosa', steps: ['Banho', 'Secagem', 'Tosa', 'Pronto para retirada'] } }, 201);
     const cli = await api('/customers', { method: 'POST', body: { name: 'Ana Lima', phone: '85988887777' } }, 201);

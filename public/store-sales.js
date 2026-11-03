@@ -27,11 +27,42 @@
   const basic = () => config?.access_level === 'basic';
   let cart = []; // [{ id, name, barcode, price_cents, quantity }] — produtos lidos pelo leitor na venda em montagem
 
-  async function api(path, method = 'GET', body) {
-    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+  async function api(path, method = 'GET', body, extra = {}) {
+    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', ...extra }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { status: r.status });
+    if (!r.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { status: r.status, admin_required: !!data.admin_required });
     return data;
+  }
+  // Senha do admin (a mesma do "Valor do estoque"): pedida uma vez e válida por 15 minutos nesta tela.
+  // Usa uma janela própria por cima da que estiver aberta, para não perder o que foi digitado.
+  let adminGrant = null; // { token, until }
+  function askAdmin(reason) {
+    return new Promise(resolve => {
+      let d = $('fsAdminDialog');
+      if (!d) { d = document.createElement('dialog'); d.id = 'fsAdminDialog'; d.className = 'nv-dialog fs-admin-dialog'; document.body.appendChild(d); }
+      d.innerHTML = `<form id="fsAdminF" autocomplete="off"><h2>${FPIcon('lock')} Senha do admin</h2><p class="nv-help">${esc(reason || 'Esta ação pede a senha do admin.')}</p>
+        <label class="nv-field">Login<input name="login" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
+        <label class="nv-field">Senha<input name="password" type="password" autocomplete="new-password" required></label>
+        <div class="fs-row"><button class="nv-button">Liberar por 15 min</button><button type="button" class="nv-button secondary" id="fsAdminNo">Cancelar</button></div><p role="alert" class="fs-neg"></p></form>`;
+      const f = d.querySelector('form'), err = f.querySelector('[role=alert]');
+      const done = v => { d.close(); resolve(v); };
+      d.oncancel = e => { e.preventDefault(); done(false); };
+      d.querySelector('#fsAdminNo').onclick = () => done(false);
+      f.onsubmit = async e => {
+        e.preventDefault(); const b = f.querySelector('button'); b.disabled = true; err.textContent = '';
+        try { const r = await api('/store/admin/unlock', 'POST', { login: f.elements.login.value, password: f.elements.password.value }); adminGrant = { token: r.admin_token, until: Date.parse(r.expires_at) - 15000 }; done(true); }
+        catch (ex) { err.textContent = ex.message; b.disabled = false; f.elements.password.select(); }
+      };
+      d.showModal(); f.elements.login.focus();
+    });
+  }
+  async function adminApi(path, method, body, reason) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!adminGrant || adminGrant.until < Date.now()) { adminGrant = null; if (!(await askAdmin(reason))) throw Object.assign(Error('Ação cancelada: precisa da senha do admin.'), { canceled: true }); }
+      try { return await api(path, method, body, { 'X-Admin-Token': adminGrant.token }); }
+      catch (e) { if (!e.admin_required) throw e; adminGrant = null; }
+    }
+    throw Error('Senha do admin não aceita.');
   }
   // 558532130953 -> (85) 3213-0953; 5585999998888 -> (85) 99999-8888
   const phoneBR = p => { let d = String(p || '').replace(/\D/g, ''); if (d.length >= 12 && d.startsWith('55')) d = d.slice(2); return d.length === 10 ? `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}` : d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : String(p || ''); };
@@ -134,9 +165,10 @@
       return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">' + FPIcon('wrench') + 'Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">${FPIcon('receipt')}</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
-        <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div></div></div>
+        <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div>${basic() ? '' : `<div title="Preço de custo das mercadorias, peças e brindes que saíram neste caixa"><small>Custos</small><b class="fs-cost">${brl(sum.costs_cents)}</b></div><div title="Vendas − custos − saídas"><small>Saldo líquido</small><b class="${sum.net_cents < 0 ? 'fs-neg' : ''}">${brl(sum.net_cents)}</b></div>`}</div></div>
         <div class="fs-cashbar-side"><label class="fs-seller" hidden>Vendedor<select id="fsSeller" aria-label="Vendedor da venda"><option value="">…</option></select></label>
         <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">${FPIcon('printer')}Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
+      ${basic() ? '' : '<section class="nv-card fs-costs" id="fsCosts" aria-live="polite"></section>'}
       <div class="fs-grid">
         <div class="fs-col-report">
           <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
@@ -165,7 +197,7 @@
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
       </div>`;
-    saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
+    saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers(); drawCosts(alive);
     const sf = $('fsSale');
     const updChange = () => {
       const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
@@ -200,6 +232,21 @@
         + (r.cashback_returned_cents ? ` Voltaram ${brl(r.cashback_returned_cents)} de cashback para o cliente.` : '') + (r.cashback_removed_cents ? ` Saiu o cashback de ${brl(r.cashback_removed_cents)} que a venda gerou${r.cashback_already_spent_cents ? ` (${brl(r.cashback_already_spent_cents)} já tinham sido usados pelo cliente)` : ''}.` : '')); loadCash(box, alive); }
       catch (err) { feedback(err.message, true); }
     });
+  }
+
+  // Custos (o que vai ser reposto) e saldo líquido do dia, da semana e do mês.
+  async function drawCosts(alive) {
+    const box = $('fsCosts'); if (!box) return;
+    let d; try { d = await api('/store/cash/costs'); } catch { box.hidden = true; return; }
+    if (!alive() || !box.isConnected) return;
+    const col = (label, x) => `<div class="fs-costcol"><div class="nv-card-label">${label}</div>
+      <div class="fs-costline"><span>Vendas (${x.sales_count})</span><b class="fs-pos">${brl(x.sales_cents)}</b></div>
+      <div class="fs-costline" title="Mercadorias ${brl(x.goods_cost_cents)} · peças ${brl(x.parts_cost_cents)}"><span>Custos (repor)</span><b class="fs-cost">− ${brl(x.costs_cents)}</b></div>
+      <div class="fs-costline"><span>Saídas</span><b class="fs-neg">− ${brl(x.expenses_cents)}</b></div>
+      <div class="fs-costline fs-costnet"><span>Saldo líquido</span><b class="${x.net_cents < 0 ? 'fs-neg' : ''}">${brl(x.net_cents)}</b></div>
+      ${x.costs_unknown_items ? `<small class="nv-help">${x.costs_unknown_items} item(ns) sem preço de custo</small>` : ''}</div>`;
+    box.innerHTML = `<div class="nv-heading"><h2>Custos e saldo líquido</h2><small class="nv-help">Custos = preço de custo do que saiu (mercadorias, peças e brindes): o dinheiro que gira para repor.</small></div>
+      <div class="fs-costgrid">${col('Hoje', d.day)}${col('Semana (desde segunda)', d.week)}${col('Mês', d.month)}</div>`;
   }
 
   function drawClosed(box, data, alive) {
@@ -531,12 +578,10 @@
         <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
         <label class="nv-field">Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
       <p class="nv-help" id="fsSvcProfit"></p>
+      <div class="nv-field fs-gift">Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
       <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>`;
     const read = () => { svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
-    const profit = () => {
-      const p = parseMoney(svc.price), c = parseMoney(svc.cost), out = $('fsSvcProfit'); if (!out) return;
-      out.innerHTML = Number.isFinite(p) && Number.isFinite(c) ? `Lucro do serviço: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b>${p > 0 ? ` (${margin(p, c)}% do preço)` : ''}` : '';
-    };
+    const profit = profitNote;
     box.oninput = box.onchange = read;
     suggestField($('fsSvcModel'), '/store/device-models', read);
     suggestField($('fsSvcSupplier'), '/store/suppliers', read);
@@ -545,7 +590,37 @@
       const dl = $('fsSvcNames'); if (!dl) return; dl.innerHTML = rows.map(r => `<option value="${esc(r.name)}">`).join('');
       $('fsSvcName').onchange = () => { const hit = rows.find(r => r.name.toLowerCase() === $('fsSvcName').value.trim().toLowerCase()); if (hit && !$('fsSvcPrice').value.trim() && hit.last_price_cents) $('fsSvcPrice').value = centsText(hit.last_price_cents); read(); $('fsSale')?.dispatchEvent(new Event('input')); };
     });
-    drawPartPicker(); drawServiceChips(); read();
+    drawPartPicker(); drawGiftPicker(); drawServiceChips(); read();
+  }
+  // Brinde do serviço: escolhe o produto (película…) e, se tiver modelos, o modelo. Preço zero na venda.
+  function drawGiftPicker() {
+    const box = $('fsSvcGift'); if (!box) return;
+    if (svc.gift) {
+      const g = svc.gift;
+      box.innerHTML = `<div class="fs-picked"><div>${FPIcon('tag')} <b>${esc(g.product.name)}${g.variant ? ' · ' + esc(g.variant) : ''}</b><br><small>brinde · custo ${g.product.cost_cents != null ? brl(g.product.cost_cents) : '—'}${g.product.stock_qty != null ? ` · estoque ${g.product.stock_qty}` : ''}</small></div><button type="button" class="nv-button secondary fs-small" id="fsSvcGiftOff">Tirar brinde</button></div>`;
+      $('fsSvcGiftOff').onclick = () => { svc.gift = null; drawGiftPicker(); profitNote(); };
+      return;
+    }
+    box.innerHTML = `<div class="fs-sugg"><input id="fsSvcGiftQ" type="search" placeholder="Película de brinde? Toque e escolha" aria-label="Buscar produto de brinde"><div id="fsSvcGiftList" class="fs-results fs-drop"></div></div>`;
+    const input = $('fsSvcGiftQ'), list = $('fsSvcGiftList'); let timer;
+    const load = async () => {
+      const t = input.value.trim() || 'pelicula'; let rows = [];
+      try { rows = await api('/store/products?q=' + encodeURIComponent(t)); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected || document.activeElement !== input) return;
+      list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(p.name)}</b> <small>${p.cost_cents != null ? 'custo ' + brl(p.cost_cents) : 'sem custo'}${p.stock_qty != null ? ' · estoque ' + p.stock_qty : ''}${p.ask_variant ? ' · pergunta o modelo' : ''}</small></button>`).join('') || '<p class="nv-help">Nenhum produto encontrado.</p>';
+      list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); const p = rows[b.dataset.n];
+        const set = v => { svc.gift = { product: p, variant: v?.name || null }; drawGiftPicker(); profitNote(); };
+        if (p.ask_variant) variantPicker(p, set); else set(null); });
+    };
+    input.onfocus = load; input.oninput = () => { clearTimeout(timer); timer = setTimeout(load, 150); };
+    input.onblur = () => setTimeout(() => { if (list.isConnected) list.innerHTML = ''; }, 150);
+  }
+  // Lucro do serviço já descontando o custo do brinde.
+  function profitNote() {
+    const p = parseMoney(svc.price), c = parseMoney(svc.cost), g = svc.gift?.product?.cost_cents || 0, out = $('fsSvcProfit'); if (!out) return;
+    if (!(Number.isFinite(p) && (Number.isFinite(c) || g))) { out.innerHTML = ''; return; }
+    const cost = (Number.isFinite(c) ? c : 0) + g;
+    out.innerHTML = `Lucro do serviço${g ? ' (já com o brinde)' : ''}: <b class="${p - cost < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - cost)}</b>${p > 0 ? ` (${margin(p, cost)}% do preço)` : ''}`;
   }
   function drawPartPicker() {
     const box = $('fsSvcPart'); if (!box) return;
@@ -593,7 +668,9 @@
     if (String(svc.model || '').trim()) item.device_model = svc.model.trim();
     if (svc.part) item.part_id = svc.part.id;
     if (svc.warranty) item.warranty_days = Number(svc.warranty);
-    return { items: [item], payment_method: method, description: String(svc.note || '').trim() };
+    const items = [item];
+    if (svc.gift) items.push({ product_id: svc.gift.product.id, quantity: 1, gift: true, ...(svc.gift.variant ? { variant_name: svc.gift.variant } : {}) });
+    return { items, payment_method: method, description: String(svc.note || '').trim() };
   }
 
   // Cadastro de peça (tela, bateria…): cada peça tem aparelho, fornecedor, custo e estoque.
@@ -623,7 +700,7 @@
       const body = { name, cost_cents: cost, price_cents: price, supplier: f.elements.supplier.value.trim(), device_model: f.elements.device_model.value.trim() };
       if (!editing) { body.kind = 'part'; body.stock_qty = stock ?? 0; }
       try {
-        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', body);
+        const p = editing ? await adminApi('/store/products/' + initial.id, 'PATCH', body, 'Editar peça já cadastrada pede a senha do admin.') : await api('/store/products', 'POST', body);
         $('editorDialog').close(); feedback(`Peça ${editing ? 'atualizada' : 'cadastrada'}: ${partLabel(p)}.`); onSaved?.(p);
       } catch (err) { st.textContent = err.message; }
     };
@@ -646,7 +723,7 @@
       list.querySelectorAll('[data-p-hist]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pHist); logFilter = { product_id: p.id, name: partLabel(p) }; productsDialog('', 'log'); });
       list.querySelectorAll('[data-p-del]').forEach(b => b.onclick = async () => {
         const p = byId(b.dataset.pDel); if (!confirm(`Excluir a peça "${partLabel(p)}"? Serviços antigos continuam com ela no histórico.`)) return;
-        try { await api('/store/products/' + p.id, 'DELETE'); if (svc.part?.id === p.id) svc.part = null; draw(); } catch (err) { feedback(err.message, true); }
+        try { await adminApi('/store/products/' + p.id, 'DELETE', undefined, 'Excluir peça pede a senha do admin.'); if (svc.part?.id === p.id) svc.part = null; draw(); } catch (err) { if (!err.canceled) feedback(err.message, true); }
       });
     };
     input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 200); };
@@ -702,7 +779,7 @@
     if (p.ask_variant && !variant) { variantPicker(p, v => addToCart(p, quantity, v)); return true; }
     const vname = variant?.name || null;
     const item = cart.find(i => i.id === p.id && (i.variant || null) === vname);
-    const stock = variant ? variant.stock_qty ?? null : p.stock_qty ?? null;
+    const stock = variant && p.variant_stock !== 'total' ? variant.stock_qty ?? null : p.stock_qty ?? null;
     if (item) { item.quantity += quantity; Object.assign(item, { name: p.name, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: stock }); }
     else cart.push({ id: p.id, name: p.name, variant: vname, barcode: p.barcode, price_cents: p.price_cents, cost_cents: p.cost_cents ?? null, stock_qty: stock, quantity });
     drawCart(p.id); return true;
@@ -817,16 +894,21 @@
       <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(initial.barcode || '')}" placeholder="Bipe o produto com o leitor (opcional)"${initial.generated_barcode ? ' readonly' : ''}></label>
       ${initial.generated_barcode ? '<small class="nv-help">Código gerado pelo sistema (não muda, para as etiquetas impressas continuarem valendo).</small>' : ''}
       <label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(initial.name || '')}" placeholder="Ex.: Película 3D Galaxy A12"></label>
-      <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
+      <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.seasonal_base_cents ?? initial.price_cents) : ''}" placeholder="0,00"></label>
       <label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label></div>
       <p class="nv-help" id="fsMargin"></p>
+      ${initial.seasonal_base_cents != null ? `<p class="nv-help fs-warn">Preço de época ativo: hoje vende a <b>${brl(initial.price_cents)}</b>. O preço abaixo é o <b>normal</b>; o de época é recalculado sobre ele.</p>` : ''}
       <label class="fs-check"><input type="checkbox" name="ask_variant"${initial.ask_variant ? ' checked' : ''}> Código geral com modelos (película, capinha…): na venda, pergunta o modelo aplicado</label>
+      <fieldset class="fs-varmode" id="fsVarMode"><legend>Como contar o estoque</legend>
+        <label><input type="radio" name="variant_stock" value="total"${!initial.ask_variant || initial.variant_stock === 'total' ? ' checked' : ''}> No total (contei tudo junto, ex.: 349 capas). O modelo vendido vai para a reposição.</label>
+        <label><input type="radio" name="variant_stock" value="model"${initial.ask_variant && initial.variant_stock === 'model' ? ' checked' : ''}> Por modelo (ex.: 5 do A12, 3 do A32)</label></fieldset>
       <label class="nv-field" id="fsStockField">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
-      <small class="nv-help" id="fsVarHelp">O estoque fica por modelo: use "+ Estoque" na lista de produtos e informe o modelo (ex.: 10 películas Galaxy A12).</small>
+      <small class="nv-help" id="fsVarHelp">O estoque fica por modelo: use "Modelos" → "Lançar vários modelos" na lista de produtos.</small>
       <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsProd'), st = f.querySelector('[role=status]');
-    const syncVar = () => { const on = f.elements.ask_variant.checked; $('fsStockField').hidden = on; $('fsVarHelp').hidden = !on; };
-    f.elements.ask_variant.onchange = syncVar; syncVar();
+    const totalMode = () => f.elements.variant_stock.value === 'total';
+    const syncVar = () => { const on = f.elements.ask_variant.checked; $('fsVarMode').hidden = !on; $('fsStockField').hidden = on && !totalMode(); $('fsVarHelp').hidden = !on || totalMode(); };
+    f.elements.ask_variant.onchange = syncVar; f.querySelectorAll('[name=variant_stock]').forEach(r => r.onchange = syncVar); syncVar();
     const showMargin = () => { const p = parseMoney(f.elements.price.value), c = parseMoney(f.elements.cost.value); const m = Number.isFinite(p) && Number.isFinite(c) ? margin(p, c) : null;
       $('fsMargin').innerHTML = m == null ? 'Com o custo, o caixa mostra até quanto dá para descontar sem prejuízo.' : `Lucro por unidade: <b class="${p - c < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - c)}</b> (${m}% do preço)`; };
     f.oninput = showMargin; showMargin();
@@ -843,13 +925,19 @@
       if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Estoque: use um número inteiro (ou deixe vazio).'; return; }
       if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
       try {
-        const askVariant = f.elements.ask_variant.checked;
-        const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant ? null : stock, ask_variant: askVariant }; if (!initial.generated_barcode) body.barcode = barcode;
-        const p = await api(editing ? '/store/products/' + initial.id : '/store/products', editing ? 'PATCH' : 'POST', body);
+        const askVariant = f.elements.ask_variant.checked, mode = askVariant ? f.elements.variant_stock.value : 'model';
+        const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant && mode === 'model' ? null : stock, ask_variant: askVariant, variant_stock: mode }; if (!initial.generated_barcode) body.barcode = barcode;
+        // Mudou de "por modelo" para "no total": o estoque do produto é o que foi digitado agora.
+        const p = editing ? await adminApi('/store/products/' + initial.id, 'PATCH', body, `Editar "${initial.name}" pede a senha do admin.`) : await api('/store/products', 'POST', body);
         $('editorDialog').close(); feedback(`Produto ${editing ? 'atualizado' : 'cadastrado'}: ${p.name} · ${brl(p.price_cents)}.`);
         if (onSaved) onSaved(p);
       } catch (err) { st.textContent = err.message; }
     };
+  }
+  // Editar produto já cadastrado: pede a senha do admin antes de abrir (e de novo ao salvar, se passar de 15 min).
+  async function editProduct(p, onSaved) {
+    if (!adminGrant || adminGrant.until < Date.now()) { adminGrant = null; if (!(await askAdmin(`Editar "${p.name}" pede a senha do admin.`))) return; }
+    productDialog(p, onSaved);
   }
 
   // ---------------- Código de barras e etiquetas ----------------
@@ -1071,36 +1159,173 @@
   }
   // Entrada de estoque (compra). Produto com modelos: informa o modelo. O custo entra no relatório de compras.
   function stockDialog(p, onDone, variantName = '') {
-    openDialog(`${header('Entrada de estoque')}<form id="fsStock" autocomplete="off"><p class="nv-help"><b>${esc(p.name)}</b>${p.ask_variant ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · vendido e não reposto: <b>${p.restock_pending}</b>` : ''}</p>
-      ${p.ask_variant ? `<label class="nv-field">Modelo<input name="m" maxlength="80" required list="fsStockVars" value="${esc(variantName)}" placeholder="Ex.: Galaxy A12"></label><datalist id="fsStockVars"></datalist>` : ''}
+    const total = p.ask_variant && p.variant_stock === 'total';
+    openDialog(`${header('Entrada de estoque')}<form id="fsStock" autocomplete="off"><p class="nv-help"><b>${esc(p.name)}</b>${p.ask_variant && !total ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · vendido e não reposto: <b>${p.restock_pending}</b>` : ''}</p>
+      ${p.ask_variant ? `<label class="nv-field">Modelo${total ? ' <small class="nv-help">opcional · informe para tirar este modelo da reposição</small>' : ''}<input name="m" maxlength="80"${total ? '' : ' required'} list="fsStockVars" value="${esc(variantName)}" placeholder="Ex.: Galaxy A12"></label><datalist id="fsStockVars"></datalist>
+        <p class="nv-help">Vários modelos de uma vez? Use <button type="button" class="fs-link" id="fsStockMany">Lançar vários modelos</button>.</p>` : ''}
       <div class="fs-row"><label class="nv-field fs-grow">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label>
       <label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
       <small class="nv-help">Para corrigir para menos, use número negativo (ex.: −2). O custo entra no total de compras de estoque do relatório.</small>
       ${p.barcode ? labelChoiceHtml(p.generated_barcode && !p.ask_variant ? 'each' : 'none') : ''}
       <button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsStock');
-    if (p.ask_variant) { api(`/store/products/${p.id}/variants`).then(rows => { const dl = $('fsStockVars'); if (dl) dl.innerHTML = rows.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); (variantName ? f.elements.n : f.elements.m).focus(); }
+    if (p.ask_variant) { $('fsStockMany').onclick = () => modelsDialog(p, onDone); api(`/store/products/${p.id}/variants`).then(rows => { const dl = $('fsStockVars'); if (dl) dl.innerHTML = rows.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); (variantName || total ? f.elements.n : f.elements.m).focus(); }
     else f.elements.n.focus();
     f.onsubmit = async e => {
       e.preventDefault(); const n = Number(f.elements.n.value.replace('−', '-').trim()), st = f.querySelector('[role=status]');
       if (!Number.isInteger(n) || n === 0) { st.textContent = 'Informe a quantidade (número inteiro).'; return; }
       const costRaw = f.elements.cost.value.trim(), cost = costRaw ? parseMoney(costRaw) : null;
       if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Custo inválido.'; return; }
-      const body = { add: n, unit_cost_cents: cost }; if (p.ask_variant) body.variant_name = f.elements.m.value.trim();
-      if (p.ask_variant && !body.variant_name) { st.textContent = 'Informe o modelo.'; return; }
-      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', body); feedback(r.variant ? `Estoque de ${r.name} ${r.variant.name}: ${r.variant.stock_qty}.` : `Estoque de ${r.name}: ${r.stock_qty}.`); $('editorDialog').close(); if (n > 0) await applyLabelChoice(f, r, n); onDone?.(); }
+      const body = { add: n, unit_cost_cents: cost }; if (p.ask_variant && f.elements.m.value.trim()) body.variant_name = f.elements.m.value.trim();
+      if (p.ask_variant && !total && !body.variant_name) { st.textContent = 'Informe o modelo.'; return; }
+      try { const r = await api(`/store/products/${p.id}/stock`, 'POST', body); feedback(r.variant && !total ? `Estoque de ${r.name} ${r.variant.name}: ${r.variant.stock_qty}.` : `Estoque de ${r.name}: ${r.stock_qty}.`); $('editorDialog').close(); if (n > 0) await applyLabelChoice(f, r, n); onDone?.(); }
+      catch (err) { st.textContent = err.message; }
+    };
+  }
+  // "Galaxy A12 = 5", "iPhone 11 x3", "A32: 2", "Moto G8<tab>4" (colado da planilha). Sem separador = 1 (o número faz parte do nome).
+  const parseModelLines = text => {
+    const merged = new Map();
+    for (const raw of String(text || '').split(/\r?\n/)) {
+      const l = raw.trim(); if (!l) continue;
+      const m = l.match(/^(.+?)\s*(?:[=:]|\t|\s[x×]\s*)\s*(-?\d{1,5})\s*(?:un\.?|unid\w*|p[çc]\w*)?$/i);
+      const name = (m ? m[1] : l).replace(/\s+/g, ' ').trim().slice(0, 80), add = m ? Number(m[2]) : 1;
+      if (!name || !add) continue;
+      const k = name.toLowerCase(); merged.set(k, { variant_name: merged.get(k)?.variant_name || name, add: (merged.get(k)?.add || 0) + add });
+    }
+    return [...merged.values()];
+  };
+  // ---------------- Preços: reajuste em lote e preço por época do mês (senha do admin) ----------------
+  const ROUNDING = [['none', 'Sem arredondar'], ['0.10', 'Arredondar para R$ 0,10'], ['0.50', 'Arredondar para R$ 0,50'], ['1.00', 'Arredondar para R$ 1,00']];
+  const signPct = n => (n > 0 ? '+' : '') + String(n).replace('.', ',') + '%';
+  const readPct = v => { const n = Number(String(v || '').replace('%', '').replace(',', '.').replace('−', '-').trim()); return Number.isFinite(n) && n !== 0 && n >= -90 && n <= 500 ? n : null; };
+  // Lista de produtos com caixas de marcar; busca por nome ou código; "marcar todos desta busca".
+  function productPicker(box, selected, onChange) {
+    box.innerHTML = `<div class="fs-row"><input type="search" class="fs-grow" id="fsPkQ" placeholder="Buscar produto (ex.: capa, película)" aria-label="Buscar produto"><button type="button" class="nv-button secondary fs-small" id="fsPkAll">Marcar todos desta busca</button><button type="button" class="nv-button secondary fs-small" id="fsPkNone">Desmarcar todos</button></div>
+      <p class="nv-help" id="fsPkCount"></p><div class="fs-pklist" id="fsPkList"></div>`;
+    const input = $('fsPkQ'), list = $('fsPkList'); let rows = [], timer;
+    const count = () => { $('fsPkCount').textContent = `${selected.size} produto(s) marcado(s).`; onChange?.(); };
+    const draw = async () => {
+      try { rows = await api('/store/products' + (input.value.trim() ? '?q=' + encodeURIComponent(input.value.trim()) : '')); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected) return;
+      list.innerHTML = rows.map(p => `<label class="fs-pk"><input type="checkbox" value="${p.id}"${selected.has(p.id) ? ' checked' : ''}> <span>${esc(p.name)}</span> <small>${brl(p.seasonal_base_cents ?? p.price_cents)}</small></label>`).join('') || '<p class="nv-help">Nenhum produto.</p>';
+      list.querySelectorAll('input').forEach(c => c.onchange = () => { c.checked ? selected.add(c.value) : selected.delete(c.value); count(); });
+    };
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 200); };
+    $('fsPkAll').onclick = () => { rows.forEach(p => selected.add(p.id)); draw(); count(); };
+    $('fsPkNone').onclick = () => { selected.clear(); draw(); count(); };
+    draw(); count();
+  }
+  async function pricesTab(box) {
+    box.innerHTML = `<section class="fs-pricesec"><h3 class="fs-valh">${FPIcon('wallet')} Reajuste em lote</h3>
+      <p class="nv-help">Sobe (ou desce, com número negativo) o preço de venda de todos os produtos ou só dos escolhidos. Pede a senha do admin. Fica registrado e pode ser desfeito.</p>
+      <form id="fsRep" autocomplete="off"><div class="fs-row"><label class="nv-field" style="flex:0 0 150px">Percentual<input name="pct" inputmode="decimal" required placeholder="Ex.: 10 ou -5"></label>
+        <label class="nv-field fs-grow">Arredondamento<select name="round">${ROUNDING.map(([v, t]) => `<option value="${v}"${v === '0.50' ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
+        <fieldset class="fs-varmode"><legend>Quais produtos</legend><label><input type="radio" name="scope" value="all" checked> Todos os produtos (peças de serviço ficam fora)</label><label><input type="radio" name="scope" value="selected"> Escolher produtos</label></fieldset>
+        <div id="fsRepPick" hidden></div>
+        <div class="fs-row"><button class="nv-button secondary" type="submit" data-act="preview">Ver prévia</button><button class="nv-button" type="submit" data-act="apply">Aplicar reajuste</button></div><p role="status" class="nv-help"></p></form>
+      <div id="fsRepOut"></div><h3 class="fs-valh">Reajustes feitos</h3><div id="fsRepHist" class="nv-list"></div></section>
+      <section class="fs-pricesec"><h3 class="fs-valh">${FPIcon('refresh')} Preço por época do mês</h3>
+      <p class="nv-help">Ex.: do dia 1 ao 10 (quando o pessoal recebe) capas +10%; do dia 20 ao 30, películas −10%. Fora do período o preço volta ao normal sozinho. Um produto fica em uma regra por vez.</p>
+      <div id="fsRules" class="nv-list"></div><button type="button" class="nv-button" id="fsRuleNew">+ Nova regra</button></section>`;
+    const f = $('fsRep'), st = f.querySelector('[role=status]'), picked = new Set();
+    let act = 'preview'; f.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { act = b.dataset.act; });
+    f.querySelectorAll('[name=scope]').forEach(r => r.onchange = () => { const sel = f.elements.scope.value === 'selected'; $('fsRepPick').hidden = !sel; if (sel && !$('fsRepPick').innerHTML) productPicker($('fsRepPick'), picked); });
+    const hist = async () => {
+      let rows = []; try { rows = await api('/store/price-batches'); } catch (err) { $('fsRepHist').textContent = err.message; return; }
+      if (!$('fsRepHist')) return;
+      $('fsRepHist').innerHTML = rows.map(b => `<div class="fs-sale${b.undone_at ? ' canceled' : ''}"><div><b>${signPct(b.percent)}</b> · ${b.scope === 'all' ? 'todos' : 'escolhidos'} · ${b.products_count} produto(s)<br><small>${new Date(b.created_at).toLocaleString('pt-BR')} · ${esc(b.created_by_name || '')}${b.undone_at ? ` · desfeito por ${esc(b.undone_by_name || '')}` : ''}</small></div>
+        <div class="fs-sale-end">${b.undone_at ? '' : `<button type="button" class="nv-button secondary fs-small" data-undo="${b.id}">Desfazer</button>`}</div></div>`).join('') || '<p class="nv-help">Nenhum reajuste ainda.</p>';
+      $('fsRepHist').querySelectorAll('[data-undo]').forEach(b => b.onclick = async () => {
+        if (!confirm('Voltar os preços de antes deste reajuste? Produtos com preço mudado depois ficam como estão.')) return;
+        try { const r = await adminApi(`/store/price-batches/${b.dataset.undo}/undo`, 'POST', {}, 'Desfazer reajuste pede a senha do admin.'); feedback(`Reajuste desfeito: ${r.restored} produto(s) voltaram ao preço anterior.`); hist(); } catch (err) { if (!err.canceled) feedback(err.message, true); }
+      });
+    };
+    f.onsubmit = async e => {
+      e.preventDefault(); st.textContent = '';
+      const percent = readPct(f.elements.pct.value); if (percent == null) { st.textContent = 'Percentual de −90 a 500 (diferente de zero).'; return; }
+      const scope = f.elements.scope.value; if (scope === 'selected' && !picked.size) { st.textContent = 'Marque os produtos.'; return; }
+      const body = { percent, rounding: f.elements.round.value, scope, ...(scope === 'selected' ? { product_ids: [...picked] } : {}) };
+      try {
+        if (act === 'apply' && !confirm(`Aplicar ${signPct(percent)} no preço de ${scope === 'all' ? 'TODOS os produtos' : picked.size + ' produto(s)'}?`)) return;
+        const r = await adminApi('/store/products/reprice', 'POST', { ...body, preview: act !== 'apply' }, 'Reajuste de preços pede a senha do admin.');
+        $('fsRepOut').innerHTML = `<p class="nv-help">${act === 'apply' ? `<b>Aplicado</b> em ${r.count} produto(s).` : `Prévia: ${r.count} produto(s). Nada foi mudado ainda.`}</p>
+          <div class="fs-logwrap"><table class="fs-log"><thead><tr><th>Produto</th><th class="n">Antes</th><th class="n">Depois</th></tr></thead><tbody>${r.items.slice(0, 200).map(i => `<tr><td>${esc(i.name)}${i.seasonal ? ' <small class="fs-season">época ativa</small>' : ''}</td><td class="n">${brl(i.old_cents)}</td><td class="n"><b>${brl(i.new_cents)}</b></td></tr>`).join('')}</tbody></table></div>${r.count > 200 ? `<p class="nv-help">… e mais ${r.count - 200}.</p>` : ''}`;
+        if (act === 'apply') { feedback(`Preços reajustados: ${r.count} produto(s).`); hist(); }
+      } catch (err) { if (!err.canceled) st.textContent = err.message; }
+    };
+    const rules = async () => {
+      let d; try { d = await api('/store/price-rules'); } catch (err) { $('fsRules').textContent = err.message; return; }
+      if (!$('fsRules')) return;
+      $('fsRules').innerHTML = d.rules.map(r => `<div class="fs-sale${r.active ? '' : ' canceled'}"><div><b>${esc(r.name)}</b> · <b>${signPct(r.percent)}</b> · dia ${r.day_from} a ${r.day_to}<br><small>${r.products.length} produto(s): ${r.products.slice(0, 4).map(p => esc(p.name)).join(', ')}${r.products.length > 4 ? '…' : ''}</small><br>
+          <small>${!r.active ? 'Desligada' : r.in_window ? `<span class="fs-pos">Valendo hoje (dia ${d.today})</span>` : `Fora do período hoje (dia ${d.today})`}</small></div>
+        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-rule-edit="${r.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-rule-on="${r.id}">${r.active ? 'Desligar' : 'Ligar'}</button><button type="button" class="nv-button secondary fs-small" data-rule-del="${r.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhuma regra ainda.</p>';
+      const byId = id => d.rules.find(r => r.id === id);
+      $('fsRules').querySelectorAll('[data-rule-edit]').forEach(b => b.onclick = () => ruleDialog(byId(b.dataset.ruleEdit)));
+      $('fsRules').querySelectorAll('[data-rule-on]').forEach(b => b.onclick = async () => { const r = byId(b.dataset.ruleOn); try { await adminApi('/store/price-rules/' + r.id, 'PATCH', { active: !r.active }, 'Mudar regra de preço pede a senha do admin.'); rules(); } catch (err) { if (!err.canceled) feedback(err.message, true); } });
+      $('fsRules').querySelectorAll('[data-rule-del]').forEach(b => b.onclick = async () => { if (!confirm('Excluir esta regra? Os preços voltam ao normal.')) return; try { await adminApi('/store/price-rules/' + b.dataset.ruleDel, 'DELETE', undefined, 'Excluir regra de preço pede a senha do admin.'); rules(); } catch (err) { if (!err.canceled) feedback(err.message, true); } });
+    };
+    const ruleDialog = (r = {}) => {
+      const sel = new Set(r.product_ids || []);
+      openDialog(`${header(r.id ? 'Editar regra de preço' : 'Nova regra de preço')}<form id="fsRuleF" autocomplete="off">
+        <label class="nv-field">Nome<input name="name" maxlength="80" required value="${esc(r.name || '')}" placeholder="Ex.: Capas início do mês"></label>
+        <div class="fs-row"><label class="nv-field" style="flex:0 0 120px">Do dia<input name="from" inputmode="numeric" required value="${r.day_from || ''}" placeholder="1"></label><label class="nv-field" style="flex:0 0 120px">Até o dia<input name="to" inputmode="numeric" required value="${r.day_to || ''}" placeholder="10"></label>
+          <label class="nv-field" style="flex:0 0 150px">Percentual<input name="pct" inputmode="decimal" required value="${r.percent != null ? String(r.percent).replace('.', ',') : ''}" placeholder="10 ou -10"></label>
+          <label class="nv-field fs-grow">Arredondamento<select name="round">${ROUNDING.map(([v, t]) => `<option value="${v}"${(r.rounding || '0.50') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
+        <small class="nv-help">"25 a 5" atravessa a virada do mês. Dia 31 vale como último dia nos meses menores.</small>
+        <div class="nv-field">Produtos<div id="fsRulePick"></div></div>
+        <button class="nv-button">Salvar regra</button><p role="status" class="nv-help"></p></form>`);
+      productPicker($('fsRulePick'), sel);
+      const rf = $('fsRuleF'), rst = rf.querySelector('[role=status]');
+      rf.onsubmit = async e => {
+        e.preventDefault();
+        const percent = readPct(rf.elements.pct.value), from = Number(rf.elements.from.value), to = Number(rf.elements.to.value);
+        if (percent == null) { rst.textContent = 'Percentual de −90 a 500 (diferente de zero).'; return; }
+        if (![from, to].every(n => Number.isInteger(n) && n >= 1 && n <= 31)) { rst.textContent = 'Dias de 1 a 31.'; return; }
+        if (!sel.size) { rst.textContent = 'Marque os produtos.'; return; }
+        const body = { name: rf.elements.name.value.trim(), percent, rounding: rf.elements.round.value, day_from: from, day_to: to, product_ids: [...sel] };
+        try { await adminApi(r.id ? '/store/price-rules/' + r.id : '/store/price-rules', r.id ? 'PATCH' : 'POST', body, 'Regra de preço pede a senha do admin.'); $('editorDialog').close(); feedback('Regra salva.'); rules(); }
+        catch (err) { if (!err.canceled) rst.textContent = err.message; }
+      };
+    };
+    $('fsRuleNew').onclick = () => ruleDialog();
+    hist(); rules();
+  }
+
+  // Vários modelos de uma vez: uma linha por modelo, "A12 5" ou "A12 = 5" (sem número = 1). Também aceita colar a lista.
+  // Contado no total: soma tudo ao estoque do produto e tira cada modelo da reposição.
+  function modelsDialog(p, onDone) {
+    const total = p.variant_stock === 'total';
+    openDialog(`${header('Lançar vários modelos · ' + esc(p.name))}<form id="fsMany" autocomplete="off">
+      <p class="nv-help">Um modelo por linha; a quantidade vem depois de <b>=</b> (ou de um x). Ex.:<br><code>Galaxy A12 = 5</code><br><code>iPhone 11 x3</code><br><code>Redmi Note 13</code> (sem quantidade = 1)</p>
+      <label class="nv-field">Modelos e quantidades<textarea name="t" rows="9" required placeholder="Galaxy A12 = 5&#10;Galaxy A32 = 3&#10;iPhone 11 = 2"></textarea></label>
+      <div class="fs-row"><label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
+      <p class="nv-help" id="fsManyInfo"></p><button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
+    const f = $('fsMany'), st = f.querySelector('[role=status]');
+    const parse = () => parseModelLines(f.elements.t.value);
+    f.oninput = () => { const it = parse(); $('fsManyInfo').innerHTML = it.length ? `${it.length} modelo(s), <b>${it.reduce((a, x) => a + x.add, 0)}</b> unidade(s)${total ? ` · estoque total passa de ${p.stock_qty ?? 0} para ${(p.stock_qty ?? 0) + it.reduce((a, x) => a + x.add, 0)}` : ''}.` : ''; };
+    f.elements.t.focus();
+    f.onsubmit = async e => {
+      e.preventDefault(); const items = parse(); if (!items.length) { st.textContent = 'Escreva ao menos um modelo.'; return; }
+      const costRaw = f.elements.cost.value.trim(), cost = costRaw ? parseMoney(costRaw) : null;
+      if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Custo inválido.'; return; }
+      try { const r = await api(`/store/products/${p.id}/stock/models`, 'POST', { items, unit_cost_cents: cost }); $('editorDialog').close();
+        feedback(`${r.name}: ${r.added} unidade(s) em ${items.length} modelo(s)${total ? ` · estoque total ${r.stock_qty}` : ''}.`); onDone?.(); }
       catch (err) { st.textContent = err.message; }
     };
   }
   // Modelos de um produto (película, capinha): estoque e reposição por modelo.
   async function variantsDialog(p, onBack) {
     let rows = []; try { rows = await api(`/store/products/${p.id}/variants`); } catch (err) { feedback(err.message, true); return; }
-    openDialog(`${header('Modelos · ' + esc(p.name))}<div class="fs-row"><button type="button" class="nv-button" id="fsVarAdd">+ Entrada de estoque</button><button type="button" class="nv-button secondary" id="fsVarBack">${FPIcon('back')}Produtos</button></div>
-      <p class="nv-help">Os modelos aparecem aqui ao vender ou ao dar entrada no estoque. Os mais vendidos são sugeridos primeiro no caixa.</p>
-      <div class="nv-list">${rows.map(v => `<div class="fs-sale"><div><b>${esc(v.name)}</b><br><small>Estoque: <b class="${v.stock_qty != null && v.stock_qty <= 0 ? 'fs-neg' : ''}">${v.stock_qty ?? '—'}</b> · vendidas: ${v.sold_count}${v.restock_pending ? ` · <span class="fs-neg">repor ${v.restock_pending}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-fs-vin="${esc(v.name)}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-fs-vdel="${v.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum modelo ainda.</p>'}</div>`);
-    const again = () => variantsDialog(p, onBack);
-    $('fsVarAdd').onclick = () => stockDialog(p, again); $('fsVarBack').onclick = onBack;
+    const total = p.variant_stock === 'total', pending = rows.reduce((a, v) => a + v.restock_pending, 0);
+    openDialog(`${header('Modelos · ' + esc(p.name))}<div class="fs-row"><button type="button" class="nv-button" id="fsVarMany">Lançar vários modelos</button><button type="button" class="nv-button secondary" id="fsVarAdd">+ Entrada de estoque</button>${pending ? `<button type="button" class="nv-button secondary" id="fsVarAllOk">Marcar tudo como reposto (${pending})</button>` : ''}<button type="button" class="nv-button secondary" id="fsVarBack">${FPIcon('back')}Produtos</button></div>
+      <p class="nv-help">${total ? `Estoque contado no total: <b>${p.stock_qty ?? '—'}</b>. Cada venda pergunta o modelo, tira 1 do total e põe o modelo na lista de reposição.` : 'Os modelos aparecem aqui ao vender ou ao dar entrada no estoque.'} Os mais vendidos são sugeridos primeiro no caixa.</p>
+      <div class="nv-list">${rows.map(v => `<div class="fs-sale"><div><b>${esc(v.name)}</b><br><small>${total ? '' : `Estoque: <b class="${v.stock_qty != null && v.stock_qty <= 0 ? 'fs-neg' : ''}">${v.stock_qty ?? '—'}</b> · `}vendidas: ${v.sold_count}${v.restock_pending ? ` · <span class="fs-neg">repor ${v.restock_pending}</span>` : ''}</small></div>
+        <div class="fs-sale-end">${v.restock_pending ? `<button type="button" class="nv-button secondary fs-small" data-fs-vok="${v.id}">Reposto</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-vin="${esc(v.name)}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-fs-vdel="${v.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum modelo ainda.</p>'}</div>`);
+    const again = async () => { try { Object.assign(p, (await api('/store/products?q=' + encodeURIComponent(p.barcode || p.name))).find(x => x.id === p.id) || {}); } catch { /* usa o que tem */ } variantsDialog(p, onBack); };
+    $('fsVarAdd').onclick = () => stockDialog(p, again); $('fsVarBack').onclick = onBack; $('fsVarMany').onclick = () => modelsDialog(p, again);
+    const restocked = async ids => { try { const r = await api(`/store/products/${p.id}/restocked`, 'POST', ids ? { variant_ids: ids } : {}); feedback(`${r.cleared} modelo(s) saíram da reposição.`); again(); } catch (err) { feedback(err.message, true); } };
+    if ($('fsVarAllOk')) $('fsVarAllOk').onclick = () => { if (confirm('Marcar todos os modelos como repostos? O estoque não muda (para somar ao estoque use "Lançar vários modelos").')) restocked(); };
+    document.querySelectorAll('[data-fs-vok]').forEach(b => b.onclick = () => restocked([b.dataset.fsVok]));
     document.querySelectorAll('[data-fs-vin]').forEach(b => b.onclick = () => stockDialog(p, again, b.dataset.fsVin));
     document.querySelectorAll('[data-fs-vdel]').forEach(b => b.onclick = async () => { if (!confirm('Tirar este modelo da lista de sugestões?')) return; try { await api(`/store/products/${p.id}/variants/${b.dataset.fsVdel}`, 'DELETE'); again(); } catch (err) { feedback(err.message, true); } });
   }
@@ -1175,9 +1400,10 @@
       current = { product: p, barcode: code || p.barcode || '' }; sug.innerHTML = '';
       const attach = code && code !== p.barcode;
       formBox.innerHTML = `<form id="fsEnStock" class="fs-picked" style="display:block;margin-top:10px" autocomplete="off">
-        <p><b>${esc(p.name)}</b>${p.ask_variant ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.barcode ? `<br><small>${esc(p.barcode)}</small>` : ''}</p>
+        <div class="fs-row"><p class="fs-grow"><b>${esc(p.name)}</b>${p.ask_variant && p.variant_stock !== 'total' ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.barcode ? `<br><small>${esc(p.barcode)}</small>` : ''}</p><button type="button" class="nv-button secondary fs-small" id="fsEnEdit" title="Editar nome, preços, código e estoque (senha do admin)">${FPIcon('lock')}Editar produto</button></div>
         ${attach ? `<p class="nv-help fs-warn">${p.barcode ? `Este produto tem o código <b>${esc(p.barcode)}</b>. Ao salvar, passa a usar <b>${esc(code)}</b>.` : `O código <b>${esc(code)}</b> será salvo neste produto: da próxima vez o leitor já reconhece.`}</p>` : ''}
-        ${p.ask_variant ? `<label class="nv-field">Modelo<input name="m" maxlength="80" required list="fsEnVars" placeholder="Ex.: Galaxy A12"></label><datalist id="fsEnVars"></datalist>` : ''}
+        ${p.ask_variant ? `<label class="nv-field">Modelo${p.variant_stock === 'total' ? ' <small class="nv-help">opcional</small>' : ''}<input name="m" maxlength="80"${p.variant_stock === 'total' ? '' : ' required'} list="fsEnVars" placeholder="Ex.: Galaxy A12"></label><datalist id="fsEnVars"></datalist>
+          <p class="nv-help">Vários modelos? <button type="button" class="fs-link" id="fsEnMany">Lançar vários modelos de uma vez</button></p>` : ''}
         <div class="fs-row"><label class="nv-field" style="flex:0 0 170px">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 30"></label>
         <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label>
         <label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" value="${centsText(p.price_cents)}"${basic() ? ' readonly' : ''}></label></div>
@@ -1185,6 +1411,8 @@
         <div class="fs-row"><button class="nv-button">Somar ao estoque</button><button type="button" class="nv-button secondary" id="fsEnCancel">Cancelar</button></div><p role="status" class="nv-help"></p></form>`;
       const f = $('fsEnStock'), st = f.querySelector('[role=status]');
       $('fsEnCancel').onclick = cancel; trackQty(f.elements.n);
+      $('fsEnEdit').onclick = () => editProduct(p, np => { feedback('Produto atualizado: ' + np.name + '.'); stockForm({ ...p, ...np }, code); });
+      if ($('fsEnMany')) $('fsEnMany').onclick = () => modelsDialog(p, () => { cancel(); });
       if (p.ask_variant) { api(`/store/products/${p.id}/variants`).then(vs => { const dl = $('fsEnVars'); if (dl) dl.innerHTML = vs.map(v => `<option value="${esc(v.name)}">`).join(''); }).catch(() => {}); f.elements.m.focus(); }
       else f.elements.n.focus();
       f.onsubmit = async e => {
@@ -1193,15 +1421,16 @@
         if (!Number.isInteger(n) || n === 0 || Math.abs(n) > 99999) { st.textContent = 'Informe a quantidade (número inteiro).'; return; }
         const cost = moneyOrNull(f.elements.cost.value, 'Custo', st); if (cost === undefined) return;
         const price = moneyOrNull(f.elements.price.value, 'Preço de venda', st); if (price === undefined) return;
-        const variant = p.ask_variant ? f.elements.m.value.trim() : ''; if (p.ask_variant && !variant) { st.textContent = 'Informe o modelo.'; return; }
+        const variant = p.ask_variant ? f.elements.m.value.trim() : ''; if (p.ask_variant && p.variant_stock !== 'total' && !variant) { st.textContent = 'Informe o modelo.'; return; }
         const btn = f.querySelector('button'); btn.disabled = true;
         try {
           const patch = {}; if (attach) patch.barcode = code; if (price != null && price !== p.price_cents) patch.price_cents = price;
-          let prod = p; if (Object.keys(patch).length) prod = await api('/store/products/' + p.id, 'PATCH', patch);
+          // Só pôr o código num produto que não tinha não pede senha; mudar preço ou trocar código pede a senha do admin.
+          let prod = p; if (Object.keys(patch).length) prod = patch.price_cents != null || p.barcode ? await adminApi('/store/products/' + p.id, 'PATCH', patch, `Mudar ${patch.price_cents != null ? 'o preço' : 'o código'} de "${p.name}" pede a senha do admin.`) : await api('/store/products/' + p.id, 'PATCH', patch);
           const body = { add: n, unit_cost_cents: cost }; if (variant) body.variant_name = variant;
           const r = await api(`/store/products/${p.id}/stock`, 'POST', body);
           if (n > 0) await applyLabelChoice(f, { ...prod, ...r }, n);
-          done(p.name + (variant ? ' ' + variant : ''), n, cost, false, r.variant ? r.variant.stock_qty : r.stock_qty);
+          done(p.name + (variant ? ' ' + variant : ''), n, cost, false, r.variant && p.variant_stock !== 'total' ? r.variant.stock_qty : r.stock_qty);
         } catch (err) { st.textContent = err.message; btn.disabled = false; }
       };
     };
@@ -1308,7 +1537,7 @@
   const stockOnPage = () => !!stockPage?.isConnected;
   const stockHost = () => stockOnPage() ? stockPage : $('editorDialog');
   async function productsDialog(term = '', tab = 'list') {
-    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['labels', FPIcon('tag') + 'Etiquetas'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição'], ['log', FPIcon('receipt') + 'Histórico'], ['value', FPIcon('lock') + 'Valor do estoque']];
+    const tabs = [['list', 'Produtos'], ['entry', FPIcon('inbox') + 'Entrada rápida'], ['labels', FPIcon('tag') + 'Etiquetas'], ['parts', FPIcon('wrench') + 'Peças'], ['suppliers', FPIcon('truck') + 'Fornecedores'], ['gen', FPIcon('tag') + 'Gerar códigos'], ['restock', FPIcon('refresh') + 'Reposição'], ['log', FPIcon('receipt') + 'Histórico'], ['prices', FPIcon('wallet') + 'Preços'], ['value', FPIcon('lock') + 'Valor do estoque']];
     const body = `<div class="fs-tabs" role="tablist">${tabs.map(([k, v]) => `<button type="button" role="tab" data-ptab="${k}" aria-selected="${tab === k}">${v}</button>`).join('')}</div><div id="fsPTab"></div>`;
     if (stockOnPage()) { const d = $('editorDialog'); if (d.open) d.close(); stockPage.innerHTML = body; }
     else openDialog(header('Estoque') + body);
@@ -1317,6 +1546,7 @@
     if (tab === 'labels') return labelsTab(box);
     if (tab === 'log') return logTab(box);
     if (tab === 'value') return valueTab(box);
+    if (tab === 'prices') return pricesTab(box);
     if (tab === 'restock') return restockTab(box);
     if (tab === 'entry') return entryTab(box);
     if (tab === 'parts') return partsTab(box, term);
@@ -1357,18 +1587,18 @@
       if (!list.isConnected) return;
       list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
         return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
-          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant ? 'Estoque por modelo' : `Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
-          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
+          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant && p.variant_stock !== 'total' ? 'Estoque por modelo' : `${p.ask_variant ? 'Pergunta o modelo · ' : ''}Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
+          <div class="fs-sale-end"><b>${brl(p.price_cents)}</b>${p.seasonal_base_cents != null ? `<small class="fs-season" title="Preço de época ativo">época · normal ${brl(p.seasonal_base_cents)}</small>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
       const byId = id => rows.find(p => p.id === id);
-      list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => productDialog(byId(b.dataset.fsEdit), reopen));
+      list.querySelectorAll('[data-fs-edit]').forEach(b => b.onclick = () => editProduct(byId(b.dataset.fsEdit), reopen));
       list.querySelectorAll('[data-fs-stock]').forEach(b => b.onclick = () => stockDialog(byId(b.dataset.fsStock), reopen));
       list.querySelectorAll('[data-fs-vars]').forEach(b => b.onclick = () => variantsDialog(byId(b.dataset.fsVars), reopen));
       list.querySelectorAll('[data-fs-lab]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsLab); labelsDialog(p, 1); });
       list.querySelectorAll('[data-fs-hist]').forEach(b => b.onclick = () => { const p = byId(b.dataset.fsHist); logFilter = { product_id: p.id, name: p.name }; productsDialog('', 'log'); });
       list.querySelectorAll('[data-fs-pdel]').forEach(b => b.onclick = async () => {
         const p = byId(b.dataset.fsPdel); if (!confirm(`Excluir o produto "${p.name}"? As vendas antigas continuam com ele no histórico.`)) return;
-        try { await api('/store/products/' + p.id, 'DELETE'); cart = cart.filter(i => i.id !== p.id); drawCart(); draw(); } catch (err) { feedback(err.message, true); }
+        try { await adminApi('/store/products/' + p.id, 'DELETE', undefined, `Excluir "${p.name}" pede a senha do admin.`); cart = cart.filter(i => i.id !== p.id); drawCart(); draw(); } catch (err) { if (!err.canceled) feedback(err.message, true); }
       });
       if ($('fsProdNewCode')) $('fsProdNewCode').onclick = () => productDialog({ barcode: t }, reopen);
     };
@@ -1459,7 +1689,7 @@
     const reprint = Date.now() - new Date(r.created_at).getTime() > 10 * 60 * 1000;
     const place = [r.city, r.state].filter(Boolean).join('/');
     const items = r.items.length
-      ? `<div class="row small"><span>QTD  ITEM</span><span>VALOR</span></div>` + r.items.map(i => `<div class="it"><div class="row"><span><b>${i.quantity}</b>  ${esc(i.name)}</span><span>${brl(i.total_cents)}</span></div>${i.quantity > 1 ? `<div class="small">${i.quantity} x ${brl(i.total_cents / i.quantity)}</div>` : ''}${i.service && i.warranty_days ? `<div class="small">Garantia: ${i.warranty_days} dias</div>` : ''}</div>`).join('')
+      ? `<div class="row small"><span>QTD  ITEM</span><span>VALOR</span></div>` + r.items.map(i => `<div class="it"><div class="row"><span><b>${i.quantity}</b>  ${esc(i.name)}</span><span>${i.gift ? "BRINDE" : brl(i.total_cents)}</span></div>${i.quantity > 1 && !i.gift ? `<div class="small">${i.quantity} x ${brl(i.total_cents / i.quantity)}</div>` : ''}${i.service && i.warranty_days ? `<div class="small">Garantia: ${i.warranty_days} dias</div>` : ''}</div>`).join('')
       : `<div class="it"><div>${esc(r.description || 'Venda')}</div><div class="row"><span></span><span>${brl(r.total_cents)}</span></div></div>`;
     const l = r.loyalty;
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comprovante venda ${r.sale_number}</title><style>
@@ -1532,7 +1762,7 @@
       <div class="head"><div><h1>${esc(s.store_name)}</h1><div>Relatório de caixa${s.city ? ' · ' + esc(s.city) + (s.state ? '/' + esc(s.state) : '') : ''}</div></div><div class="muted" style="text-align:right">Emitido em ${dt(r.generated_at)}</div></div>
       ${s.status === 'open' ? '<p class="warn"><b>Prévia:</b> caixa ainda aberto. Valores podem mudar até o fechamento.</p>' : ''}
       <p>Abertura: <b>${dt(s.opened_at)}</b> por ${esc(s.opened_by_name)}<br>Fechamento: <b>${s.closed_at ? dt(s.closed_at) + ' por ' + esc(s.closed_by_name || '—') : 'em aberto'}</b></p>
-      <div class="box"><div>Entradas (vendas)<b>${brl(sum.sales_total_cents)}</b><span class="muted">${sum.sales_count} venda(s)</span></div><div>Saídas<b class="neg">${brl(sum.expenses_total_cents)}</b><span class="muted">${sum.expenses_count} lançamento(s)</span></div><div>Saldo do dia<b>${brl(sum.balance_cents)}</b><span class="muted">entradas − saídas</span></div></div>
+      <div class="box"><div>Entradas (vendas)<b>${brl(sum.sales_total_cents)}</b><span class="muted">${sum.sales_count} venda(s)</span></div><div>Saídas<b class="neg">${brl(sum.expenses_total_cents)}</b><span class="muted">${sum.expenses_count} lançamento(s)</span></div><div>Saldo do dia<b>${brl(sum.balance_cents)}</b><span class="muted">entradas − saídas</span></div>${sum.costs_cents != null && !basic() ? `<div>Custos<b class="neg">${brl(sum.costs_cents)}</b><span class="muted">custo do que saiu (repor)</span></div><div>Saldo líquido<b>${brl(sum.net_cents)}</b><span class="muted">entradas − custos − saídas</span></div>` : ''}</div>
       ${(sum.by_seller || []).length ? `<h2>Por vendedor</h2>${table(['Vendedor', '<span class="n">Vendas</span>', '<span class="n">Total</span>'], sum.by_seller.map(v => `<tr><td>${esc(v.name)}</td><td class="n">${v.count}</td><td class="n">${brl(v.total_cents)}</td></tr>`), '')}` : ''}
       <h2>Por forma de pagamento</h2>
       ${table(['Forma', '<span class="n">Entradas</span>', '<span class="n">Saídas</span>', '<span class="n">Saldo</span>'], [...keys.map(k => `<tr><td>${METHODS[k]}</td><td class="n">${brl(sum.by_method[k]?.total_cents || 0)}</td><td class="n">${brl(sum.expenses_by_method[k]?.total_cents || 0)}</td><td class="n">${brl((sum.by_method[k]?.total_cents || 0) - (sum.expenses_by_method[k]?.total_cents || 0))}</td></tr>`), `<tr class="tot"><td>Total</td><td class="n">${brl(sum.sales_total_cents)}</td><td class="n">${brl(sum.expenses_total_cents)}</td><td class="n">${brl(sum.balance_cents)}</td></tr>`], 'Nenhum lançamento.')}
@@ -1722,6 +1952,12 @@
   .fs-sugg{position:relative}.fs-drop{position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:2px;max-height:280px;overflow:auto}.fs-drop:empty{display:none}.fs-drop button,.fs-drop p{background:var(--nv-surface,#fff);box-shadow:0 6px 18px rgba(16,24,40,.08)}.fs-drop p{margin:0;padding:8px 10px;border-radius:10px;border:1px dashed var(--nv-border)}
   .fs-chip.fs-chip-on{border-color:var(--nv-blue);box-shadow:0 0 0 1.5px var(--nv-blue) inset}.fs-tag-svc{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--nv-blue-soft);font-size:12px;font-weight:600}
   #fsSvc .fs-picked{background:var(--nv-surface,#fff)}#fsSvc .nv-field input,#fsSvc .nv-field select{width:100%}
+  .fs-pricesec{margin-bottom:22px}#fsPkQ{min-height:42px;padding:10px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;font:inherit}.fs-pklist{max-height:300px;overflow:auto;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;padding:6px 10px;display:grid;gap:2px}.fs-pk{display:flex;gap:8px;align-items:center;font-size:14px;padding:3px 0}.fs-pk span{flex:1}
+  .fs-costgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.fs-costcol{border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:10px 12px}.fs-costline{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px}.fs-costline span{color:var(--nv-text,#374151)}.fs-costnet{border-top:1px solid var(--nv-border,#e5e7eb);margin-top:4px;padding-top:6px;font-size:15px}.fs-cost{color:#b54708}.fs-costs{margin-bottom:16px}.fs-costs .nv-heading{flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+  @media (max-width:760px){.fs-costgrid{grid-template-columns:1fr}}
+  .fs-varmode{border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;padding:8px 12px;margin:6px 0 10px;display:grid;gap:6px;font-size:14px}.fs-varmode legend{font-size:13px;color:var(--nv-muted);padding:0 4px}
+  .fs-season{display:block;font-size:11px;color:#b54708}.fs-admin-dialog{width:min(420px,calc(100% - 24px))}.fs-admin-dialog h2{display:flex;align-items:center;gap:8px;font-size:18px;margin:0 0 6px}
+  .fs-private .fs-costgrid b{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none}
   .fs-cashbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.fs-kpis{display:flex;gap:24px;flex-wrap:wrap;margin-top:6px}.fs-kpis div{display:flex;flex-direction:column}.fs-kpis small{color:var(--nv-muted)}.fs-kpis b{font-size:22px}
   .fs-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.fs-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.fs-row>*{min-width:0}.fs-grow{flex:1 1 180px}.fs-small{padding:6px 10px!important;font-size:13px!important;min-height:0!important}.fs-small-row{margin-top:6px}.fs-wide{width:100%;margin-top:8px}
   .fs-methods{border:0;padding:0;margin:8px 0;display:flex;gap:6px;flex-wrap:wrap}.fs-methods legend{font-size:13px;color:var(--nv-text);margin-bottom:6px}.fs-methods label{cursor:pointer}.fs-methods input{position:absolute;opacity:0;pointer-events:none}.fs-methods span{display:inline-block;padding:8px 14px;border:1px solid var(--nv-border);border-radius:999px;background:var(--nv-surface)}.fs-methods input:checked+span{background:var(--nv-blue);border-color:var(--nv-blue);color:#fff}.fs-methods input:focus-visible+span{outline:2px solid var(--nv-blue);outline-offset:2px}

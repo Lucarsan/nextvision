@@ -14,12 +14,12 @@ test('histórico do estoque registra cada mudança; fila de etiquetas', { skip }
     const cabo = await api('/store/products', { method: 'POST', body: { name: 'Cabo USB-C', barcode: 'CABO-1', price_cents: 2500, cost_cents: 900, stock_qty: 5 } }, 201);
     await api(`/store/products/${cabo.id}/stock`, { method: 'POST', body: { add: 3, unit_cost_cents: 850 } });
     await api(`/store/products/${cabo.id}/stock`, { method: 'POST', body: { add: -2 } });
-    await api('/store/products/' + cabo.id, { method: 'PATCH', body: { stock_qty: 10 } });
-    await api('/store/products/' + cabo.id, { method: 'PATCH', body: { name: 'Cabo USB-C 1m' } }); // sem mudar estoque: não entra no log
+    await api('/store/products/' + cabo.id, { method: 'PATCH', admin: true, body: { stock_qty: 10 } });
+    await api('/store/products/' + cabo.id, { method: 'PATCH', admin: true, body: { name: 'Cabo USB-C 1m' } }); // sem mudar estoque: não entra no log
     await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
     const sale = (await api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ product_id: cabo.id, quantity: 2 }] } }, 201)).sale;
     await api(`/store/sales/${sale.id}/cancel`, { method: 'POST', body: { reason: 'cliente desistiu' } });
-    await api('/store/products/' + cabo.id, { method: 'DELETE' });
+    await api('/store/products/' + cabo.id, { method: 'DELETE', admin: true });
     await api(`/store/products/${cabo.id}/restore`, { method: 'POST', body: {} });
 
     const log = (await api('/store/stock/log?product_id=' + cabo.id)).rows.reverse();

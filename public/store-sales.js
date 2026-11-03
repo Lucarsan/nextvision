@@ -56,6 +56,9 @@
       d.showModal(); f.elements.login.focus();
     });
   }
+  // Usado também pelo painel principal (Configurações → Relatórios).
+  async function ensureAdmin(reason) { if (adminGrant && adminGrant.until > Date.now()) return true; adminGrant = null; return askAdmin(reason); }
+  window.FPAdmin = { ensure: ensureAdmin, header: () => adminGrant && adminGrant.until > Date.now() ? { 'X-Admin-Token': adminGrant.token } : {}, forget: () => { adminGrant = null; } };
   async function adminApi(path, method, body, reason) {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!adminGrant || adminGrant.until < Date.now()) { adminGrant = null; if (!(await askAdmin(reason))) throw Object.assign(Error('Ação cancelada: precisa da senha do admin.'), { canceled: true }); }
@@ -165,10 +168,9 @@
       return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${esc(x.customer_name || 'Sem cliente')}${svc ? ' <span class="fs-tag-svc">' + FPIcon('wrench') + 'Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">${FPIcon('receipt')}</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
-        <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div>${basic() ? '' : `<div title="Preço de custo das mercadorias, peças e brindes que saíram neste caixa"><small>Custos</small><b class="fs-cost">${brl(sum.costs_cents)}</b></div><div title="Vendas − custos − saídas"><small>Saldo líquido</small><b class="${sum.net_cents < 0 ? 'fs-neg' : ''}">${brl(sum.net_cents)}</b></div>`}</div></div>
+        <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div><div><small>Saídas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div><div><small>Saldo do dia</small><b>${brl(sum.balance_cents)}</b></div><div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div>${basic() ? '' : `<div title="Preço de custo das mercadorias, peças e brindes que saíram neste caixa"><small>Custos</small><b class="fs-cost">${brl(sum.costs_cents)}</b></div>`}</div></div>
         <div class="fs-cashbar-side"><label class="fs-seller" hidden>Vendedor<select id="fsSeller" aria-label="Vendedor da venda"><option value="">…</option></select></label>
         <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar saída</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">${FPIcon('printer')}Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
-      ${basic() ? '' : '<section class="nv-card fs-costs" id="fsCosts" aria-live="polite"></section>'}
       <div class="fs-grid">
         <div class="fs-col-report">
           <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
@@ -197,7 +199,7 @@
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
       </div>`;
-    saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers(); drawCosts(alive);
+    saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
     const sf = $('fsSale');
     const updChange = () => {
       const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
@@ -232,21 +234,6 @@
         + (r.cashback_returned_cents ? ` Voltaram ${brl(r.cashback_returned_cents)} de cashback para o cliente.` : '') + (r.cashback_removed_cents ? ` Saiu o cashback de ${brl(r.cashback_removed_cents)} que a venda gerou${r.cashback_already_spent_cents ? ` (${brl(r.cashback_already_spent_cents)} já tinham sido usados pelo cliente)` : ''}.` : '')); loadCash(box, alive); }
       catch (err) { feedback(err.message, true); }
     });
-  }
-
-  // Custos (o que vai ser reposto) e saldo líquido do dia, da semana e do mês.
-  async function drawCosts(alive) {
-    const box = $('fsCosts'); if (!box) return;
-    let d; try { d = await api('/store/cash/costs'); } catch { box.hidden = true; return; }
-    if (!alive() || !box.isConnected) return;
-    const col = (label, x) => `<div class="fs-costcol"><div class="nv-card-label">${label}</div>
-      <div class="fs-costline"><span>Vendas (${x.sales_count})</span><b class="fs-pos">${brl(x.sales_cents)}</b></div>
-      <div class="fs-costline" title="Mercadorias ${brl(x.goods_cost_cents)} · peças ${brl(x.parts_cost_cents)}"><span>Custos (repor)</span><b class="fs-cost">− ${brl(x.costs_cents)}</b></div>
-      <div class="fs-costline"><span>Saídas</span><b class="fs-neg">− ${brl(x.expenses_cents)}</b></div>
-      <div class="fs-costline fs-costnet"><span>Saldo líquido</span><b class="${x.net_cents < 0 ? 'fs-neg' : ''}">${brl(x.net_cents)}</b></div>
-      ${x.costs_unknown_items ? `<small class="nv-help">${x.costs_unknown_items} item(ns) sem preço de custo</small>` : ''}</div>`;
-    box.innerHTML = `<div class="nv-heading"><h2>Custos e saldo líquido</h2><small class="nv-help">Custos = preço de custo do que saiu (mercadorias, peças e brindes): o dinheiro que gira para repor.</small></div>
-      <div class="fs-costgrid">${col('Hoje', d.day)}${col('Semana (desde segunda)', d.week)}${col('Mês', d.month)}</div>`;
   }
 
   function drawClosed(box, data, alive) {
@@ -1762,7 +1749,7 @@
       <div class="head"><div><h1>${esc(s.store_name)}</h1><div>Relatório de caixa${s.city ? ' · ' + esc(s.city) + (s.state ? '/' + esc(s.state) : '') : ''}</div></div><div class="muted" style="text-align:right">Emitido em ${dt(r.generated_at)}</div></div>
       ${s.status === 'open' ? '<p class="warn"><b>Prévia:</b> caixa ainda aberto. Valores podem mudar até o fechamento.</p>' : ''}
       <p>Abertura: <b>${dt(s.opened_at)}</b> por ${esc(s.opened_by_name)}<br>Fechamento: <b>${s.closed_at ? dt(s.closed_at) + ' por ' + esc(s.closed_by_name || '—') : 'em aberto'}</b></p>
-      <div class="box"><div>Entradas (vendas)<b>${brl(sum.sales_total_cents)}</b><span class="muted">${sum.sales_count} venda(s)</span></div><div>Saídas<b class="neg">${brl(sum.expenses_total_cents)}</b><span class="muted">${sum.expenses_count} lançamento(s)</span></div><div>Saldo do dia<b>${brl(sum.balance_cents)}</b><span class="muted">entradas − saídas</span></div>${sum.costs_cents != null && !basic() ? `<div>Custos<b class="neg">${brl(sum.costs_cents)}</b><span class="muted">custo do que saiu (repor)</span></div><div>Saldo líquido<b>${brl(sum.net_cents)}</b><span class="muted">entradas − custos − saídas</span></div>` : ''}</div>
+      <div class="box"><div>Entradas (vendas)<b>${brl(sum.sales_total_cents)}</b><span class="muted">${sum.sales_count} venda(s)</span></div><div>Saídas<b class="neg">${brl(sum.expenses_total_cents)}</b><span class="muted">${sum.expenses_count} lançamento(s)</span></div><div>Saldo do dia<b>${brl(sum.balance_cents)}</b><span class="muted">entradas − saídas</span></div></div>
       ${(sum.by_seller || []).length ? `<h2>Por vendedor</h2>${table(['Vendedor', '<span class="n">Vendas</span>', '<span class="n">Total</span>'], sum.by_seller.map(v => `<tr><td>${esc(v.name)}</td><td class="n">${v.count}</td><td class="n">${brl(v.total_cents)}</td></tr>`), '')}` : ''}
       <h2>Por forma de pagamento</h2>
       ${table(['Forma', '<span class="n">Entradas</span>', '<span class="n">Saídas</span>', '<span class="n">Saldo</span>'], [...keys.map(k => `<tr><td>${METHODS[k]}</td><td class="n">${brl(sum.by_method[k]?.total_cents || 0)}</td><td class="n">${brl(sum.expenses_by_method[k]?.total_cents || 0)}</td><td class="n">${brl((sum.by_method[k]?.total_cents || 0) - (sum.expenses_by_method[k]?.total_cents || 0))}</td></tr>`), `<tr class="tot"><td>Total</td><td class="n">${brl(sum.sales_total_cents)}</td><td class="n">${brl(sum.expenses_total_cents)}</td><td class="n">${brl(sum.balance_cents)}</td></tr>`], 'Nenhum lançamento.')}

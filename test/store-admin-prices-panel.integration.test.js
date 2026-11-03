@@ -100,9 +100,9 @@ test('painel: capas no total, senha do admin, brinde, custos, preços e históri
     assert.equal((await api('/store/products?q=pelicula'))[0].stock_qty, 503);
 
     // 5) Custos e saldo líquido: capa 6,00 + tela 90,00 + película 1,00 = 97,00.
-    await page.waitForFunction(() => /97,00/.test(document.querySelector('#fsCosts')?.textContent || ''));
-    assert.match(await page.locator('.fs-kpis').innerText(), /Custos[\s\S]*97,00[\s\S]*Saldo líquido[\s\S]*173,00/);
-    assert.match(await page.locator('#fsCosts').innerText(), /Hoje[\s\S]*Semana[\s\S]*Mês/);
+    await page.waitForFunction(() => /Custos[\s\S]*97,00/.test(document.querySelector('.fs-kpis')?.textContent || ''));
+    assert.doesNotMatch(await page.locator('.fs-kpis').innerText(), /Saldo líquido/);
+    assert.equal(await page.locator('#fsCosts').count(), 0, 'sem quadro de custos detalhado no painel');
     await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot(shot('caixa-custos'));
 
     // 6) Preços: reajuste de 10% só nas capas (prévia, aplicar, desfazer).
@@ -133,6 +133,21 @@ test('painel: capas no total, senha do admin, brinde, custos, preços e históri
     await page.screenshot(shot('historico-cliente'));
     await page.locator('#chSearch').fill('bateria');
     assert.equal(await page.locator('#chList .ch-card:visible').count(), 0);
+    // 8) Configurações → Relatórios: fechado até digitar a senha do admin.
+    await page.keyboard.press('Escape');
+    await f.api('/store/reports/settings', { method: 'PATCH', admin: true, body: { report_email: 'pai@example.test', report_daily: true, report_weekly: true, report_monthly: true } });
+    const page2 = await context.newPage(); page2.on('pageerror', e => errors.push(e.message));
+    await page2.goto(f.base + '/loja.html'); await page2.locator('.nv-sidebar [data-view="settings"]').click();
+    await page2.locator('.fp-tabs [data-tab="Relatórios"]').click();
+    await page2.waitForSelector('#reportUnlock');
+    assert.doesNotMatch(await page2.locator('#sectionContent').innerText(), /pai@example\.test/);
+    await page2.screenshot(shot('relatorios-bloqueado'));
+    await page2.locator('#reportUnlock').click();
+    await page2.locator('#fsAdminF [name=login]').fill(FIXTURE_ADMIN.login); await page2.locator('#fsAdminF [name=password]').fill(FIXTURE_ADMIN.password);
+    await page2.locator('#fsAdminF button.nv-button').first().click();
+    await page2.waitForSelector('#reportForm');
+    assert.equal(await page2.locator('#reportForm [name=report_email]').inputValue(), 'pai@example.test');
+    await page2.locator('#reportLock').click(); await page2.waitForSelector('#reportUnlock');
     assert.deepEqual(errors, []);
     void cli; void capa; void pel; void p;
   } finally { await browser?.close(); await f.cleanup(); }

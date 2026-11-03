@@ -541,8 +541,17 @@ async function loadQrCard(card) {
   $('qrForm').onsubmit = async e => { e.preventDefault(); try { await api('/store/qr', 'PATCH', { qr_message: e.currentTarget.elements.qr_message.value.trim() }); $('qrStatus').textContent = 'Mensagem salva.'; } catch (error) { $('qrStatus').textContent = error.message; } };
 }
 // Relatórios por e-mail: diário 18h, semanal no sábado 15h, mensal no último dia 18h.
+// Mostra quanto a loja fatura: ver, mudar o e-mail ou enviar pede a senha do admin.
 async function loadReportsCard(card) {
-  let d; try { d = await api('/store/reports/settings'); } catch (error) { card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">' + safe(error.message) + '</p>'; return; }
+  const adm = window.FPAdmin;
+  const locked = msg => { card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">' + FPIcon('lock') + ' Área restrita: os relatórios mostram o faturamento da loja. Para ver ou mudar, digite a senha do admin.</p>'
+    + (msg ? '<p class="nv-help" style="color:#b42318">' + safe(msg) + '</p>' : '') + '<button type="button" class="nv-button" id="reportUnlock">' + FPIcon('lock') + 'Desbloquear</button>';
+    $('reportUnlock').onclick = async () => { if (adm && await adm.ensure('Relatórios por e-mail pedem a senha do admin.')) loadReportsCard(card); }; };
+  if (!adm) { card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">Disponível com o caixa ligado.</p>'; return; }
+  const h = adm.header(); if (!h['X-Admin-Token']) return locked('');
+  const aapi = async (path, method = 'GET', body) => { const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', ...adm.header() }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+    const data = await r.json().catch(() => ({})); if (!r.ok) { if (data.admin_required) adm.forget(); throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { admin_required: !!data.admin_required }); } return data; };
+  let d; try { d = await aapi('/store/reports/settings'); } catch (error) { if (error.admin_required) return locked('A liberação expirou. Digite a senha de novo.'); card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">' + safe(error.message) + '</p>'; return; }
   const ck = (k, label) => '<label class="nv-check" style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" name="' + k + '"' + (d[k] ? ' checked' : '') + '> ' + label + '</label>';
   const runs = (d.last_runs || []).map(r => '<li>' + safe({ daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal' }[r.kind]) + ' ' + safe(r.period_key) + ': ' + (r.status === 'sent' ? 'enviado' : r.status === 'error' ? '<span style="color:#b42318">erro — ' + safe(r.error || '') + '</span>' : 'enviando') + '</li>').join('');
   card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">Resumo automático com vendas, produtos vendidos, saídas, compras de estoque, produtos novos, reposição e balanço.</p>'
@@ -553,14 +562,16 @@ async function loadReportsCard(card) {
     + '<h3 style="margin:16px 0 6px">Ver ou enviar agora</h3><div class="nv-row">'
     + ['daily', 'weekly', 'monthly'].map(k => '<button type="button" class="nv-button secondary" data-rep-view="' + k + '">Ver ' + { daily: 'hoje', weekly: 'semana', monthly: 'mês' }[k] + '</button>').join('')
     + '<button type="button" class="nv-button secondary" id="reportSendNow">' + FPIcon('send') + 'Enviar o de hoje agora</button></div>'
-    + (runs ? '<h3 style="margin:16px 0 6px">Últimos envios</h3><ul class="nv-help">' + runs + '</ul>' : '');
-  $('reportForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { await api('/store/reports/settings', 'PATCH', { report_email: f.elements.report_email.value.trim(), report_daily: f.elements.report_daily.checked, report_weekly: f.elements.report_weekly.checked, report_monthly: f.elements.report_monthly.checked }); $('reportStatus').textContent = 'Salvo.'; } catch (error) { $('reportStatus').textContent = error.message; } };
+    + (runs ? '<h3 style="margin:16px 0 6px">Últimos envios</h3><ul class="nv-help">' + runs + '</ul>' : '')
+    + '<p class="nv-help" style="margin-top:14px"><button type="button" class="nv-button secondary" id="reportLock">' + FPIcon('lock') + 'Bloquear de novo</button></p>';
+  $('reportLock').onclick = () => { adm.forget(); locked(''); };
+  $('reportForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; try { await aapi('/store/reports/settings', 'PATCH', { report_email: f.elements.report_email.value.trim(), report_daily: f.elements.report_daily.checked, report_weekly: f.elements.report_weekly.checked, report_monthly: f.elements.report_monthly.checked }); $('reportStatus').textContent = 'Salvo.'; } catch (error) { $('reportStatus').textContent = error.message; } };
   card.querySelectorAll('[data-rep-view]').forEach(b => b.onclick = async () => {
     const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para ver o relatório.', true); return; }
-    try { const r = await fetch('/api/store/reports/preview?kind=' + b.dataset.repView, { headers: { Authorization: 'Bearer ' + sessionStorage.getItem('nv_token') } }); const html = await r.text(); if (!r.ok) throw Error(JSON.parse(html).error || 'Erro'); w.document.write(html); w.document.close(); }
+    try { const r = await fetch('/api/store/reports/preview?kind=' + b.dataset.repView, { headers: { Authorization: 'Bearer ' + sessionStorage.getItem('nv_token'), ...adm.header() } }); const html = await r.text(); if (!r.ok) throw Error(JSON.parse(html).error || 'Erro'); w.document.write(html); w.document.close(); }
     catch (error) { w.close(); feedback(error.message, true); }
   });
-  $('reportSendNow').onclick = async () => { try { const r = await api('/store/reports/send', 'POST', { kind: 'daily' }); $('reportStatus').textContent = 'Enviado para ' + r.to + '.'; } catch (error) { $('reportStatus').textContent = error.message; } };
+  $('reportSendNow').onclick = async () => { try { const r = await aapi('/store/reports/send', 'POST', { kind: 'daily' }); $('reportStatus').textContent = 'Enviado para ' + r.to + '.'; } catch (error) { $('reportStatus').textContent = error.message; } };
 }
 function printQrPoster(d) {
   const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir o cartaz.', true); return; }

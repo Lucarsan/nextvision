@@ -1,4 +1,4 @@
--- Modo demonstração: a loja marcada pela central faz os pedidos andarem sozinhos pelas etapas,
+-- (045) Modo demonstração: a loja marcada pela central faz os pedidos andarem sozinhos pelas etapas,
 -- mostra no link do cliente um vídeo de exemplo em cada etapa e põe uma foto final ao concluir.
 -- Usado só em lojas de demonstração (ex.: petteste). Nunca ligar numa loja real.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS demo_mode boolean NOT NULL DEFAULT false;

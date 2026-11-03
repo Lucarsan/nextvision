@@ -394,7 +394,7 @@ app.delete('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)
   await c.query('COMMIT');res.json({ok:true});
  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
 }));
-app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.completed_at,o.external_reference,o.order_number,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,(SELECT count(*) FROM link_visits lv WHERE lv.order_id=o.id)::int link_opens,(SELECT count(DISTINCT lv.visitor_id) FROM link_visits lv WHERE lv.order_id=o.id)::int link_people FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
+app.get('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q("SELECT o.id,o.status,o.step_index,o.camera_id,o.created_at,o.started_at,o.completed_at,o.external_reference,o.order_number,o.source,o.queue_rank,o.share_code,o.customer_id,o.details,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,c.name customer,c.phone customer_phone,c.email customer_email,p.id process_id,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,(SELECT count(*) FROM link_visits lv WHERE lv.order_id=o.id)::int link_opens,(SELECT count(DISTINCT lv.visitor_id) FROM link_visits lv WHERE lv.order_id=o.id)::int link_people FROM orders o LEFT JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.tenant_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC,o.id DESC",[tid(req)])).rows)));
 app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const v=valid(z.object({customer_id:uuid,process_id:uuid,reference:z.string().trim().max(70).default(''),details:orderDetails.default({})}),req,res);if(!v)return;
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
@@ -506,7 +506,7 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
 const photoSignature={'image/png':b=>b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),'image/jpeg':b=>b[0]===255&&b[1]===216&&b[2]===255,'image/webp':b=>b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WEBP'};
 app.post('/api/orders/:id/photos',auth,roles('owner','operator'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Pedido inválido');
- const v=valid(z.object({mime_type:z.enum(['image/png','image/jpeg','image/webp']),base64:z.string().min(10).max(400000)}),req,res);if(!v)return;
+ const v=valid(z.object({mime_type:z.enum(['image/png','image/jpeg','image/webp']),base64:z.string().min(10).max(400000),kind:z.enum(['arrival','final']).default('arrival')}),req,res);if(!v)return;
  const bin=Buffer.from(v.base64,'base64');
  if(!bin.length||bin.length>300000||!photoSignature[v.mime_type](bin))return bad(res,400,'Foto inválida ou maior que 300 KB');
  const c=await db.connect();
@@ -514,9 +514,10 @@ app.post('/api/orders/:id/photos',auth,roles('owner','operator'),route(async(req
   await c.query('BEGIN');
   const o=await c.query('SELECT id FROM orders WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',[req.params.id,tid(req)]);
   if(!o.rowCount){await c.query('ROLLBACK');return bad(res,404,'Pedido não encontrado');}
-  if((await c.query('SELECT count(*)::int n FROM order_photos WHERE order_id=$1',[req.params.id])).rows[0].n>=6){await c.query('ROLLBACK');return bad(res,409,'Limite de 6 fotos por pedido');}
-  const r=await c.query('INSERT INTO order_photos(tenant_id,order_id,mime_type,image_data,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id,created_at',[tid(req),req.params.id,v.mime_type,bin,req.user.id]);
-  await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tid(req),req.user.id,'add_photo','order',req.params.id]);
+  const limit=v.kind==='final'?3:6;
+  if((await c.query('SELECT count(*)::int n FROM order_photos WHERE order_id=$1 AND kind=$2',[req.params.id,v.kind])).rows[0].n>=limit){await c.query('ROLLBACK');return bad(res,409,v.kind==='final'?'Limite de 3 fotos finais por pedido':'Limite de 6 fotos de entrada por pedido');}
+  const r=await c.query('INSERT INTO order_photos(tenant_id,order_id,mime_type,image_data,created_by,kind) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,kind,created_at',[tid(req),req.params.id,v.mime_type,bin,req.user.id,v.kind]);
+  await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tid(req),req.user.id,v.kind==='final'?'add_final_photo':'add_photo','order',req.params.id]);
   await c.query('COMMIT');res.status(201).json(r.rows[0]);
  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
 }));
@@ -529,6 +530,7 @@ app.get('/api/public/orders/:token/photos/:photoId',rateLimit({windowMs:60000,li
  if(!/^[\w-]{16,100}$/.test(req.params.token)||!uuid.safeParse(req.params.photoId).success)return bad(res,404,'Não encontrado');
  const r=await q("SELECT ph.mime_type,ph.image_data FROM order_photos ph JOIN orders o ON o.id=ph.order_id AND o.tenant_id=ph.tenant_id JOIN tenants t ON t.id=o.tenant_id WHERE ph.id=$1 AND (o.public_token_hash=$2 OR o.share_code=$3) AND o.deleted_at IS NULL AND t.status IN ('trial','active')",[req.params.photoId,digestToken(req.params.token),req.params.token]);
  if(!r.rowCount)return bad(res,404,'Foto não encontrada');
+ if(req.query.download==='1')res.attachment('foto-'+req.params.photoId.slice(0,8)+'.'+({'image/png':'png','image/webp':'webp'}[r.rows[0].mime_type]||'jpg'));
  res.type(r.rows[0].mime_type).set('Cache-Control','private, max-age=3600').send(r.rows[0].image_data);
 }));
 // Apaga fotos vencidas pelo prazo de guarda de cada loja.
@@ -698,7 +700,7 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
  const r=await q(`SELECT o.id,o.status,o.step_index,o.camera_id,o.external_reference,
  EXISTS(SELECT 1 FROM cameras available WHERE available.id=o.camera_id AND available.tenant_id=o.tenant_id AND available.enabled AND available.deleted_at IS NULL AND (available.device_id IS NULL OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=available.device_id AND d.tenant_id=available.tenant_id AND d.enabled AND d.revoked_at IS NULL))) camera_available,
- o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id) photos,o.details->>'brand' item_brand,o.details->>'model' item_model,
+ o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,o.details->>'brand' item_brand,o.details->>'model' item_model,o.details->>'pet_name' item_name,
  t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,
  CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN
  (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,

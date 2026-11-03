@@ -662,12 +662,20 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }
   // Serviços pré-cadastrados (botões no modo Serviço). A loja recebe uma lista inicial uma única vez;
   // o que ela excluir não volta.
-  const SERVICE_DEFAULTS = ['Troca de tela', 'Troca de bateria', 'Troca de conector de carga', 'Troca de tampa traseira', 'Troca de vidro da câmera', 'Reparo comum', 'Limpeza / banho químico', 'Software / formatação', 'Diagnóstico'];
+  // Lista inicial por nicho da loja; nicho sem lista começa vazio (a loja cadastra os seus).
+  const SERVICE_DEFAULTS = {
+    electronics: ['Troca de tela', 'Troca de bateria', 'Troca de conector de carga', 'Troca de tampa traseira', 'Troca de vidro da câmera', 'Reparo comum', 'Limpeza / banho químico', 'Software / formatação', 'Diagnóstico'],
+    pet: ['Banho porte P', 'Banho porte M', 'Banho porte G', 'Banho e tosa', 'Tosa higiênica', 'Hidratação', 'Corte de unhas', 'Limpeza de ouvidos'],
+    carwash: ['Lavagem simples', 'Lavagem completa', 'Lavagem de motor', 'Higienização interna', 'Polimento', 'Enceramento'],
+    automotive: ['Troca de óleo', 'Alinhamento e balanceamento', 'Revisão', 'Freios', 'Diagnóstico']
+  };
+  SERVICE_DEFAULTS.general = SERVICE_DEFAULTS.electronics;
   const catalogFields = 'id,name,price_cents,cost_cents,position';
   app.get('/api/store/sales/service-items', ...guard, route(async (req, res) => {
-    const seeded = await q('UPDATE tenants SET service_catalog_seeded=true WHERE id=$1 AND NOT service_catalog_seeded RETURNING id', [tid(req)]);
-    if (seeded.rowCount) await q(`INSERT INTO service_catalog(tenant_id,name,position) SELECT $1,n,o FROM unnest($2::text[]) WITH ORDINALITY AS d(n,o)
-      ON CONFLICT DO NOTHING`, [tid(req), SERVICE_DEFAULTS]);
+    const seeded = await q('UPDATE tenants SET service_catalog_seeded=true WHERE id=$1 AND NOT service_catalog_seeded RETURNING niche', [tid(req)]);
+    const defaults = seeded.rowCount ? (SERVICE_DEFAULTS[seeded.rows[0].niche] || []) : [];
+    if (defaults.length) await q(`INSERT INTO service_catalog(tenant_id,name,position) SELECT $1,n,o FROM unnest($2::text[]) WITH ORDINALITY AS d(n,o)
+      ON CONFLICT DO NOTHING`, [tid(req), defaults]);
     const r = await q(`SELECT ${catalogFields} FROM service_catalog WHERE tenant_id=$1 AND active ORDER BY position,lower(name)`, [tid(req)]);
     res.set('Cache-Control', 'no-store'); res.json(r.rows);
   }));

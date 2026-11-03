@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
+import {demoVideoFor,startDemoLoop} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -146,8 +147,8 @@ app.post('/api/master/tenants',auth,roles('master'),route(async(req,res)=>{
 }));
 app.patch('/api/master/tenants/:id',auth,roles('master'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
- const v=valid(z.object({status:z.enum(['trial','active','past_due','suspended']).optional(),niche:nicheSchema.optional(),camera_limit:z.number().int().min(1).max(128).optional(),sales_enabled:z.boolean().optional()}).strict().refine(v=>v.status!==undefined||v.niche!==undefined||v.camera_limit!==undefined||v.sales_enabled!==undefined),req,res);if(!v)return;
- const r=await q('UPDATE tenants SET status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit),sales_enabled=COALESCE($5,sales_enabled) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id,v.sales_enabled??null]);
+ const v=valid(z.object({status:z.enum(['trial','active','past_due','suspended']).optional(),niche:nicheSchema.optional(),camera_limit:z.number().int().min(1).max(128).optional(),sales_enabled:z.boolean().optional(),demo_mode:z.boolean().optional(),demo_step_seconds:z.number().int().min(10).max(600).optional()}).strict().refine(v=>Object.values(v).some(x=>x!==undefined)),req,res);if(!v)return;
+ const r=await q('UPDATE tenants SET status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit),sales_enabled=COALESCE($5,sales_enabled),demo_mode=COALESCE($6,demo_mode),demo_step_seconds=COALESCE($7,demo_step_seconds) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id,v.sales_enabled??null,v.demo_mode??null,v.demo_step_seconds??null]);
  if(!r.rowCount)return bad(res,404,'Loja não encontrada');await audit(req,'update','tenant',req.params.id,req.params.id);res.json(r.rows[0]);
 }));
 // Logins da loja (dono e vendedores/operadores): listar e ativar/desativar. Desativado não entra e some da lista de vendedores do caixa.
@@ -246,7 +247,7 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
  const result=await q('UPDATE platform_settings SET sales_whatsapp=$1,support_whatsapp=CASE WHEN $2::boolean THEN NULLIF($3,\'\') ELSE support_whatsapp END WHERE id=true RETURNING sales_whatsapp,support_whatsapp',[v.sales_whatsapp,v.support_whatsapp!==undefined,v.support_whatsapp||'']);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,t.whatsapp,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
 }));
 app.patch('/api/store/location',auth,roles('owner'),route(async(req,res)=>{const v=valid(z.object({city:z.string().trim().max(80),state:z.union([z.literal(''),z.string().regex(/^[A-Z]{2}$/)]),whatsapp:z.preprocess(digitsOnly,z.union([z.literal(''),z.string().regex(/^\d{10,15}$/,'WhatsApp inválido: use DDD + número')])).optional()}).strict(),req,res);if(!v)return;const wa=v.whatsapp?(v.whatsapp.length<=11?'55'+v.whatsapp:v.whatsapp):null;const r=await q('UPDATE tenants SET city=$1,state=$2,whatsapp=CASE WHEN $4 THEN $5 ELSE whatsapp END WHERE id=$3 RETURNING city,state,whatsapp',[v.city||null,v.state||null,tid(req),v.whatsapp!==undefined,wa]);await audit(req,'update','tenant_location',tid(req));res.json(r.rows[0]);}));
@@ -700,7 +701,7 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  if(!/^[\w-]{16,100}$/.test(req.params.token))return bad(res,404,'Não encontrado');
  const r=await q(`SELECT o.id,o.status,o.step_index,o.camera_id,o.external_reference,
  EXISTS(SELECT 1 FROM cameras available WHERE available.id=o.camera_id AND available.tenant_id=o.tenant_id AND available.enabled AND available.deleted_at IS NULL AND (available.device_id IS NULL OR EXISTS(SELECT 1 FROM shop_devices d WHERE d.id=available.device_id AND d.tenant_id=available.tenant_id AND d.enabled AND d.revoked_at IS NULL))) camera_available,
- o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,o.details->>'brand' item_brand,o.details->>'model' item_model,o.details->>'pet_name' item_name,
+ o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,t.name store,t.logo_url,t.niche,t.whatsapp store_whatsapp,t.demo_mode,o.order_number,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='arrival') photos,(SELECT coalesce(json_agg(ph.id ORDER BY ph.created_at),'[]'::json) FROM order_photos ph WHERE ph.order_id=o.id AND ph.kind='final') final_photos,o.details->>'brand' item_brand,o.details->>'model' item_model,o.details->>'pet_name' item_name,
  t.loyalty_enabled,t.loyalty_target,t.loyalty_reward,
  CASE WHEN o.customer_id IS NOT NULL AND t.loyalty_enabled THEN
  (SELECT count(*)::int FROM loyalty_checkins l WHERE l.tenant_id=o.tenant_id AND l.customer_id=o.customer_id AND l.redemption_id IS NULL) ELSE NULL END loyalty_checkins,
@@ -723,7 +724,10 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.status IN ('trial','active')`,[digestToken(req.params.token),req.params.token]);
  if(!r.rowCount)return bad(res,404,'Pedido não encontrado');
- res.set('Cache-Control','no-store');res.json(r.rows[0]);
+ const out=r.rows[0];
+ // Loja de demonstração: vídeo de exemplo da etapa no lugar da câmera.
+ if(out.demo_mode&&out.status==='live')out.demo_video=demoVideoFor((out.steps||[])[out.step_index]);
+ res.set('Cache-Control','no-store');res.json(out);
 }));
 // Rota explícita da prévia, independente da resolução do diretório de trabalho.
 app.get('/loja-preview.html',(_req,res)=>res.sendFile('loja-preview.html',{root:new URL('../public/',import.meta.url).pathname}));
@@ -736,4 +740,5 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
 }));
 app.use(express.static('public'));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
+startDemoLoop();
 app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');void ensureEdgeWorker();try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

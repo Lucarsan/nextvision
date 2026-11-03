@@ -99,22 +99,49 @@ test('caixa reconhece produto lido pelo leitor de código de barras', {
     await page.keyboard.type('maria', { delay: 120 });
     assert.equal(await page.locator('#fsSearch').inputValue(), 'maria');
 
-    // Itens frequentes (valor digitado) e produtos do leitor não se misturam na mesma venda.
+    // Itens frequentes e produtos do leitor juntos na mesma venda, nas duas ordens.
     await f.api('/store/sales/quick-items', { method: 'POST', body: { label: 'Conserto rápido', price_cents: 4000 } }, 201);
+    await f.api('/store/sales/quick-items', { method: 'POST', body: { label: 'Xerox', price_cents: 50 } }, 201);
     await page.reload();
     await page.locator('.nv-sidebar [data-view="cash"]').click();
-    await page.locator('[data-fs-quick]').first().click();
+    // 1) Item frequente primeiro, depois o leitor.
+    await page.locator('[data-fs-quick]', { hasText: 'Conserto rápido' }).click();
     assert.equal(await page.locator('#fsSale [name="total"]').inputValue(), '40,00');
     await page.locator('body').click({ position: { x: 5, y: 5 } });
     await scan('7891234567895');
-    await page.waitForFunction(() => /itens frequentes/.test(document.getElementById('panelFeedback')?.textContent || ''));
-    assert.equal(await page.locator('.fs-item').count(), 0);
-    assert.equal(await page.locator('#fsSale [name="total"]').inputValue(), '40,00', 'valor digitado não muda');
-    await page.locator('#fsQuickClear').click();
-    await scan('7891234567895');
     await page.waitForSelector('.fs-item');
-    await page.waitForFunction(() => /soma dos produtos/.test(document.getElementById('fsQuick')?.textContent || ''));
-    assert.equal(await page.locator('[data-fs-quick]').count(), 0, 'botões frequentes somem com produtos na venda');
+    assert.equal(await page.locator('#fsSale [name="total"]').inputValue(), '55,00', 'produto (15) + item (40)');
+    assert.match(await page.locator('#fsTotalLabel').innerText(), /produtos \+ itens/);
+    assert.match(await page.locator("#fsSaleQ").innerText(), /Itens frequentes[\s\S]*40,00/); assert.match(await page.locator("#fsSaleTotals").innerText(), /Total da venda[\s\S]*55,00/);
+    // 2) Mais itens depois do leitor: botões continuam disponíveis; quantidade do item frequente.
+    assert.ok(await page.locator('[data-fs-quick]').count() >= 2, 'botões frequentes continuam com produtos na venda');
+    await page.locator('[data-fs-quick]', { hasText: 'Xerox' }).click();
+    await page.locator('[data-cart-id] .fs-qn').last().fill('10');
+    await page.waitForFunction(() => document.querySelector('#fsSale [name="total"]').value === '60,00');
+    // Desconto vale para a venda toda.
+    await page.locator('#fsDiscount').fill('10%'); await page.locator('#fsDiscount').press('Enter');
+    await page.waitForFunction(() => document.querySelector('#fsSale [name="total"]').value === '54,00');
+    await page.locator('.fs-newsale').screenshot({ path: process.env.SHOT_DIR ? process.env.SHOT_DIR + '/venda-misturada.png' : undefined });
+    await page.getByRole('button', { name: 'Não quis se identificar' }).click();
+    await page.getByRole('button', { name: 'Registrar venda' }).click();
+    await page.waitForFunction(() => /Venda #\d+ registrada: R\$\s*54,00/.test(document.getElementById('panelFeedback')?.textContent || ''));
+    const mixed = (await f.api('/store/cash')).sales[0];
+    assert.equal(mixed.total_cents, 5400);
+    assert.deepEqual(mixed.items.map(i => [i.name, i.quantity]).sort(), [['Conserto rápido', 1], ['Película 3D', 1], ['Xerox', 10]]);
+    assert.equal(mixed.items.reduce((a, i) => a + i.total_cents, 0), 5400, 'desconto distribuído entre todos os itens');
+    assert.match(mixed.description, /Película 3D/); assert.match(mixed.description, /Xerox/);
+    // Tudo limpo depois de registrar.
+    assert.equal(await page.locator('.fs-item').count(), 0); assert.equal(await page.locator('[data-cart-id]').count(), 0);
+    assert.equal(await page.locator('#fsSale [name="total"]').inputValue(), '');
+    // 3) Leitor primeiro, depois item frequente; tirar o produto mantém o item.
+    await scan('7891234567895'); await page.waitForSelector('.fs-item');
+    await page.locator('[data-fs-quick]', { hasText: 'Conserto rápido' }).click();
+    await page.waitForFunction(() => document.querySelector('#fsSale [name="total"]').value === '55,00');
+    await page.locator('[data-fs-del]').first().click();
+    await page.waitForFunction(() => document.querySelector('#fsSale [name="total"]').value === '40,00');
+    assert.equal(await page.locator('[data-cart-id]').count(), 1);
+    await page.locator('#fsQuickClear').click();
+    await page.waitForFunction(() => document.querySelector('#fsSale [name="total"]').value === '' && !document.querySelector('#fsSale [name="total"]').readOnly);
     assert.deepEqual(errors, []);
   } finally { if (browser) await browser.close(); await f.cleanup(); }
 });

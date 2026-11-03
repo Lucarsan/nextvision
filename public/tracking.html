@@ -1,7 +1,7 @@
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#F4F5F7"><title>Ficou Pronto | Acompanhe seu pedido</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#F4F5F7;--card:#FFFFFF;--ink:#16202E;--muted:#5B6576;--line:#E2E6EC;--accent:#F26B1D;--accent-ink:#C2410C;--accent-soft:#FFF1E7;--track:#F1D9C9;--ok:#15803D;--wa:#16A34A;
+:root{--bg:#F4F5F7;--card:#FFFFFF;--ink:#16202E;--muted:#5B6576;--line:#E2E6EC;--accent:#F26B1D;--accent-ink:#C2410C;--accent-soft:#FFF1E7;--track:#F1D9C9;--ok:#15803D;--done:#16A34A;--wa:#16A34A;
 --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;--body:"Figtree",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 *{box-sizing:border-box}html{background:var(--bg)}body{margin:0;font-family:var(--body);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
 main{max-width:520px;margin:0 auto;padding:14px 12px calc(96px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px}
@@ -43,7 +43,7 @@ h2{margin:0;font-size:15px;font-weight:700}
 .seg{display:flex;flex-direction:column;gap:6px;min-width:0}
 .seg b{height:6px;border-radius:3px;background:var(--line);display:block}
 .seg span{font-size:12px;line-height:1.25;color:var(--muted);overflow-wrap:anywhere}
-.seg.done b{background:var(--accent)}.seg.cur b{background:linear-gradient(to right,var(--accent) 55%,var(--track) 55%)}
+.seg.done b{background:var(--done)}.seg.done span{color:var(--ok)}.seg span .ck{white-space:nowrap}.seg span .ck i{font-style:normal;font-size:10px;margin-left:1px}.seg span{font-size:11.5px}.seg.cur b{background:linear-gradient(to right,var(--accent) 55%,var(--track) 55%)}
 .seg.cur span{color:var(--ink);font-weight:700}.seg.paused b{background:repeating-linear-gradient(90deg,var(--accent) 0 6px,var(--track) 6px 10px)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}.chips span{font-size:12px;background:var(--bg);padding:5px 10px;border-radius:999px}
 .state{display:inline-flex;align-self:flex-start;font-size:12px;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:5px 10px;border-radius:999px}
@@ -169,7 +169,7 @@ function heroView(p,steps){
 // Barra de etapas: "Espera" + as etapas do processo.
 function progressView(p,steps,head,compact){
  const idx=Number(p.step_index)||0,all=['Espera'].concat(steps.map(cap));
- const segs=all.map((label,i)=>{let cls='';if(p.status==='completed')cls='done';else if(p.status==='queued')cls=i===0?'cur':'';else{const k=i-1;cls=i===0||k<idx?'done':k===idx?(p.status==='paused'?'cur paused':'cur'):''}return '<div class="seg '+cls+'"><b></b><span>'+safe(label)+(cls==='done'?' ✓':'')+'</span></div>'}).join('');
+ const segs=all.map((label,i)=>{let cls='';if(p.status==='completed')cls='done';else if(p.status==='queued')cls=i===0?'cur':'';else{const k=i-1;cls=i===0||k<idx?'done':k===idx?(p.status==='paused'?'cur paused':'cur'):''}return '<div class="seg '+cls+'"><b></b><span>'+(cls==='done'?(()=>{const w=safe(label).split(' '),last=w.pop();return (w.length?w.join(' ')+' ':'')+'<span class="ck">'+last+'<i aria-hidden="true">\u00a0✓</i></span>'})():safe(label))+'</span></div>'}).join('');
  const chips=[p.item_breed,p.item_size?'Porte '+p.item_size:'',p.process?cap(p.process):'',p.external_reference?'Pedido '+p.external_reference:p.order_number?'Pedido '+p.order_number:''].filter(Boolean);
  const doneAt=p.status==='completed'&&p.completed_at?new Date(p.completed_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
  return '<section class="card status"><span class="state '+head.cls+'">'+safe(head.chip)+'</span>'+(compact?'':'<div><h1>'+safe(head.h)+'</h1><p class="sub">'+safe(head.sub)+'</p></div>')+'<div class="segs" style="grid-template-columns:repeat('+all.length+',minmax(0,1fr))">'+segs+'</div>'

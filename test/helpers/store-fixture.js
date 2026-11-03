@@ -5,6 +5,11 @@ import { once } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+
+// Senha do admin da loja nos testes (a real fica no Render, como hash). Um teste pode definir a sua antes.
+export const FIXTURE_ADMIN = { login: process.env.STOCK_VALUE_LOGIN || 'admin', password: 'fixture-admin-pass' };
+if (!process.env.STOCK_VALUE_PASSWORD_HASH) { process.env.STOCK_VALUE_LOGIN = FIXTURE_ADMIN.login; process.env.STOCK_VALUE_PASSWORD_HASH = bcrypt.hashSync(FIXTURE_ADMIN.password, 4); }
 
 export async function createStoreFixture() {
   const url = new URL(process.env.TEST_DATABASE_URL);
@@ -45,8 +50,18 @@ export async function createStoreFixture() {
     const { port } = listener.address(); await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
     server = spawn(process.execPath, ['src/server.js'], { env: { ...env, JWT_SECRET: secret, PORT: String(port), RESEND_API_KEY: '', EMAIL_FROM: '' }, stdio: ['ignore', 'ignore', 'pipe'] }); if (process.env.FP_DEBUG) server.stderr.pipe(process.stderr); else server.stderr.resume();
-    const request = async (path, { method = 'GET', body, token = ownerToken } = {}) => {
-      const response = await fetch(base + '/api' + path, { method, headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) });
+    // admin: true → manda a liberação da senha do admin (pede uma por usuário e guarda).
+    const adminTokens = new Map();
+    const request = async (path, { method = 'GET', body, token = ownerToken, admin = false } = {}) => {
+      let adminHeader = {};
+      if (admin) {
+        if (!adminTokens.has(token)) {
+          const u = await fetch(base + '/api/store/admin/unlock', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ login: FIXTURE_ADMIN.login, password: FIXTURE_ADMIN.password }), signal: AbortSignal.timeout(10000) });
+          const d = await u.json(); assert.equal(u.status, 200, d.error); adminTokens.set(token, d.admin_token);
+        }
+        adminHeader = { 'X-Admin-Token': adminTokens.get(token) };
+      }
+      const response = await fetch(base + '/api' + path, { method, headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...adminHeader }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) });
       return { status: response.status, data: await response.json() };
     };
     const api = async (path, options, status = 200) => { const result = await request(path, options); assert.equal(result.status, status, result.data.error); return result.data; };

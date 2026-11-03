@@ -55,7 +55,7 @@ export async function reportData(q, tenantId, kind, day) {
        FROM sales x LEFT JOIN customers c ON c.id=x.customer_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} ORDER BY x.created_at`, range),
     q(`SELECT count(*)::int n,COALESCE(sum(total_cents),0)::int total FROM sales WHERE tenant_id=$1 AND canceled_at IS NOT NULL AND ${inRange('created_at')}`, range),
-    q(`SELECT i.name || COALESCE(' ' || i.variant_name,'') name,sum(i.quantity)::int qty,sum(i.total_cents)::int total,
+    q(`SELECT CASE WHEN i.gift THEN 'Brinde: ' ELSE '' END || i.name || COALESCE(' ' || i.variant_name,'') name,sum(i.quantity)::int qty,sum(i.total_cents)::int total,
          sum(CASE WHEN i.unit_cost_cents IS NULL THEN NULL ELSE i.unit_cost_cents*i.quantity END)::int cost,bool_and(i.unit_cost_cents IS NOT NULL) known
        FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND NOT i.service AND ${inRange('x.created_at')}
        GROUP BY 1 ORDER BY 3 DESC,1`, range),
@@ -73,7 +73,7 @@ export async function reportData(q, tenantId, kind, day) {
     q(`SELECT s.closed_at,s.expected_cash_cents,s.counted_cash_cents,u.name who FROM cash_sessions s LEFT JOIN users u ON u.id=s.closed_by
        WHERE s.tenant_id=$1 AND s.status='closed' AND ${inRange('s.closed_at')} ORDER BY s.closed_at`, range),
     q(`SELECT p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
-       UNION ALL SELECT p.name,v.name,v.restock_pending,v.stock_qty,p.cost_cents FROM product_variants v JOIN products p ON p.id=v.product_id
+       UNION ALL SELECT p.name,v.name,v.restock_pending,CASE WHEN p.variant_stock='total' THEN p.stock_qty ELSE v.stock_qty END,p.cost_cents FROM product_variants v JOIN products p ON p.id=v.product_id
        WHERE p.tenant_id=$1 AND p.active AND v.active AND v.restock_pending>0 ORDER BY 1,2`, [tenantId]),
     q(`SELECT COALESCE(sl.name,u.name) name,count(*)::int n,sum(x.total_cents)::int total FROM sales x JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 3 DESC`, range),
@@ -93,6 +93,9 @@ export async function reportData(q, tenantId, kind, day) {
   const expensesTotal = expenses.rows.reduce((a, e) => a + e.amount_cents, 0);
   const itemsTotal = items.rows.reduce((a, i) => a + i.total, 0), itemsCost = items.rows.reduce((a, i) => a + (i.cost || 0), 0);
   const costKnown = items.rows.every(i => i.known);
+  // Custos: preço de custo do que foi vendido (mercadorias, brindes e peças dos serviços). É o que gira para reposição.
+  const servicesCost = services.rows.reduce((a, x) => a + (x.cost || 0), 0);
+  const costsTotal = itemsCost + servicesCost;
   // Gasto por fornecedor: custo das peças usadas nos serviços + compras de estoque com fornecedor cadastrado.
   const bySupplier = new Map();
   const sup = name => { if (!bySupplier.has(name)) bySupplier.set(name, { name, services: 0, services_cost: 0, purchases: 0 }); return bySupplier.get(name); };
@@ -111,7 +114,10 @@ export async function reportData(q, tenantId, kind, day) {
     services: services.rows, services_total: services.rows.reduce((a, x) => a + x.total, 0),
     by_supplier: [...bySupplier.values()].sort((a, b) => (b.services_cost + b.purchases) - (a.services_cost + a.purchases)),
     new_products: newProducts.rows, new_customers: newCustomers.rows[0], sessions: sessions.rows, restock: restock.rows,
-    balance: salesTotal - expensesTotal
+    balance: salesTotal - expensesTotal,
+    costs_total: costsTotal, goods_cost: itemsCost, parts_cost: servicesCost,
+    costs_unknown: items.rows.filter(i => !i.known).length + services.rows.filter(x => !x.known).length,
+    net: salesTotal - costsTotal - expensesTotal
   };
 }
 
@@ -142,8 +148,11 @@ export function reportHtml(d) {
 <table style="width:100%;border-collapse:separate;border-spacing:6px;margin:14px -6px 0"><tr>
 ${kpi(`Vendas (${d.sales.length})`, brl(d.sales_total), '#027a48')}${kpi('Saídas', brl(d.expenses_total), '#b42318')}${kpi('Saldo (vendas − saídas)', brl(d.balance))}
 </tr><tr>
-${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Descontos dados', brl(d.discounts))}
+${kpi('Custos (mercadorias e peças vendidas)', brl(d.costs_total || 0), '#b54708')}${kpi('Saldo líquido (vendas − custos − saídas)', brl(d.net ?? d.balance), (d.net ?? 0) < 0 ? '#b42318' : '#027a48')}${kpi('Compras de estoque', brl(d.purchases_total), '#b54708')}
+</tr><tr>
+${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos produtos', gross == null ? '—' : brl(gross))}${kpi('Descontos dados', brl(d.discounts))}${kpi('Para repor (itens)', (d.restock || []).reduce((a, r) => a + r.pending, 0))}
 </tr></table>
+<p style="font-size:12px;color:#6b7280;margin:0 0 6px">Custos = preço de custo do que saiu (mercadorias ${brl(d.goods_cost || 0)} · peças dos serviços ${brl(d.parts_cost || 0)}).${d.costs_unknown ? ` ${d.costs_unknown} item(ns) sem preço de custo ficaram fora.` : ''}</p>
 ${noCost.length && all.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
 
 ${d.engagement && (d.engagement.links || d.engagement.opens) ? h2('Acompanhamento dos clientes') + `<table style="width:100%;border-collapse:separate;border-spacing:6px;margin:4px -6px 4px"><tr>

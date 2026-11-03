@@ -87,7 +87,7 @@ test('serviços no caixa, peças no estoque, fornecedores e modelos sugeridos', 
     assert.equal((await request('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ service: 'Troca', unit_price_cents: 100, part_id: comum.id }] } })).status, 400);
 
     // Editar a peça: troca fornecedor e modelo.
-    const ed = await api('/store/products/' + tela.id, { method: 'PATCH', body: { supplier: 'Nova Peças', device_model: 'Galaxy A13' } });
+    const ed = await api('/store/products/' + tela.id, { method: 'PATCH', admin: true, body: { supplier: 'Nova Peças', device_model: 'Galaxy A13' } });
     assert.equal(ed.supplier_name, 'Nova Peças'); assert.equal(ed.device_model, 'Galaxy A13');
 
     // Relatório por e-mail: serviços com fornecedor e lucro; compras de peça com fornecedor.

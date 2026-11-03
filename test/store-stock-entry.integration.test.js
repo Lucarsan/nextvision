@@ -25,7 +25,7 @@ test('entrada de estoque: busca por palavras, excluídos e reativação', { skip
 
     // Excluído: não aparece na busca normal; com include_deleted aparece depois dos ativos e pode ser reativado.
     const capa = await api('/store/products', { method: 'POST', body: { name: 'Capinha Galaxy A12', barcode: 'CAPA-A12', price_cents: 3000, stock_qty: 4 } }, 201);
-    await api('/store/products/' + capa.id, { method: 'DELETE' });
+    await api('/store/products/' + capa.id, { method: 'DELETE', admin: true });
     assert.equal((await api('/store/products?q=capinha')).length, 0);
     const withDeleted = await api('/store/products?include_deleted=1&q=capinha a12');
     assert.deepEqual(withDeleted.map(p => [p.id, p.active]), [[capa.id, false]]);
@@ -37,7 +37,7 @@ test('entrada de estoque: busca por palavras, excluídos e reativação', { skip
 
     // Reativar com código que outro produto ativo passou a usar: recusa (409).
     const velho = await api('/store/products', { method: 'POST', body: { name: 'Película velha', barcode: 'PEL-1', price_cents: 1000 } }, 201);
-    await api('/store/products/' + velho.id, { method: 'DELETE' });
+    await api('/store/products/' + velho.id, { method: 'DELETE', admin: true });
     await api('/store/products', { method: 'POST', body: { name: 'Película nova', barcode: 'PEL-1', price_cents: 1200 } }, 201);
     assert.equal((await request(`/store/products/${velho.id}/restore`, { method: 'POST', body: {} })).status, 409);
 

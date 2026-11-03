@@ -287,7 +287,7 @@ test('relatórios por e-mail: conteúdo, configuração, envio e agendamento sem
     assert.deepEqual(d.restock.map(r => [r.name, r.variant, r.pending]), [['Película 3D', 'Galaxy A12', 2]]);
     assert.equal(d.new_products.length, 1);
     const html = reportHtml(d);
-    for (const t of ['Produtos vendidos', 'Saídas lançadas', 'Compras de estoque', 'Produtos novos cadastrados', 'Reposição', 'Película 3D Galaxy A12', 'almoço']) assert.ok(html.includes(t), t);
+    for (const t of ['Produtos vendidos', 'Despesas lançadas', 'Compras de estoque', 'Produtos novos cadastrados', 'Reposição', 'Película 3D Galaxy A12', 'almoço']) assert.ok(html.includes(t), t);
     const m = reportHtml(await reportData(db.query.bind(db), tenant, 'monthly', day));
     assert.match(m, /Total gasto no mês/);
 

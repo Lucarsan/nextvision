@@ -96,15 +96,18 @@ function compressPhoto(file) {
     img.src = url;
   });
 }
-async function uploadPhotos(orderId, files, status) {
-  const list = [...files].slice(0, 6); let sent = 0;
-  for (const file of list) { if (status) status.textContent = 'Enviando foto ' + (sent + 1) + ' de ' + list.length + '…'; await api('/orders/' + orderId + '/photos', 'POST', await compressPhoto(file)); sent++; }
+async function uploadPhotos(orderId, files, status, kind = 'arrival') {
+  const list = [...files].slice(0, kind === 'final' ? 3 : 6); let sent = 0;
+  for (const file of list) { if (status) status.textContent = 'Enviando foto ' + (sent + 1) + ' de ' + list.length + '…'; await api('/orders/' + orderId + '/photos', 'POST', { ...(await compressPhoto(file)), kind }); sent++; }
   return sent;
 }
 const photoUrl = (o, id) => '/api/public/orders/' + encodeURIComponent(o.share_code) + '/photos/' + id;
 function photoStrip(o) {
-  const photos = o.photos || [];
-  return `<div class="fp-photos"><strong>Como chegou</strong><div class="fp-photo-row">${photos.map(id => `<span class="fp-photo"><a href="${photoUrl(o, id)}" target="_blank" rel="noopener"><img src="${photoUrl(o, id)}" alt="Foto do pedido" loading="lazy"></a><button type="button" class="fp-photo-del" data-photo-del="${safe(id)}" data-photo-order="${safe(o.id)}" aria-label="Apagar foto">×</button></span>`).join('')}${photos.length < 6 ? `<label class="fp-photo-add">+ Foto<input type="file" accept="image/*" multiple hidden data-photo-order="${safe(o.id)}"></label>` : ''}</div></div>`;
+  return photoRow(o, o.photos || [], 'arrival') + (o.status !== 'queued' || (o.final_photos || []).length ? photoRow(o, o.final_photos || [], 'final') : '');
+}
+function photoRow(o, photos, kind) {
+  const max = kind === 'final' ? 3 : 6, title = kind === 'final' ? 'Foto final <span class="nv-help">(o cliente vê no link)</span>' : 'Como chegou';
+  return `<div class="fp-photos"><strong>${title}</strong><div class="fp-photo-row">${photos.map(id => `<span class="fp-photo"><a href="${photoUrl(o, id)}" target="_blank" rel="noopener"><img src="${photoUrl(o, id)}" alt="Foto do pedido" loading="lazy"></a><button type="button" class="fp-photo-del" data-photo-del="${safe(id)}" data-photo-order="${safe(o.id)}" aria-label="Apagar foto">×</button></span>`).join('')}${photos.length < max ? `<label class="fp-photo-add">+ Foto<input type="file" accept="image/*" multiple hidden data-photo-order="${safe(o.id)}" data-photo-kind="${kind}"></label>` : ''}</div></div>`;
 }
 function transitionActions(o) {
   const button = (action, label, primary = false) => `<button type="button" class="nv-button ${primary ? '' : 'secondary'}" data-transition-id="${safe(o.id)}" data-action="${action}">${label}</button>`;
@@ -143,8 +146,8 @@ const minutesSince = iso => { const m = Math.max(0, Math.round((Date.now() - new
 const isLastStep = o => o.step_index >= (o.steps || []).length - 1;
 const queuedOrders = () => cachedOrders.filter(o => o.status === 'queued').sort((a, b) => (a.queue_rank ?? Infinity) - (b.queue_rank ?? Infinity) || newest(b, a));
 function finishButtons(o) {
-  const phone = whatsPhone(o);
-  return `<button type="button" class="nv-button fp-whats" data-finish-id="${safe(o.id)}" data-notify="1" ${phone ? '' : 'disabled title="Cliente sem telefone válido cadastrado"'}>Finalizar e avisar no WhatsApp</button><button type="button" class="nv-button secondary" data-finish-id="${safe(o.id)}" data-notify="0">Só finalizar</button>`;
+  const phone = whatsPhone(o), finals = (o.final_photos || []).length;
+  return `<label class="nv-button secondary fp-final-photo">${finals ? 'Foto final ✓' : 'Tirar foto final'}<input type="file" accept="image/*" capture="environment" hidden data-photo-order="${safe(o.id)}" data-photo-kind="final"${finals >= 3 ? ' disabled' : ''}></label><button type="button" class="nv-button fp-whats" data-finish-id="${safe(o.id)}" data-notify="1" ${phone ? '' : 'disabled title="Cliente sem telefone válido cadastrado"'}>Finalizar e avisar no WhatsApp</button><button type="button" class="nv-button secondary" data-finish-id="${safe(o.id)}" data-notify="0">Só finalizar</button>`;
 }
 function liveActions(o) {
   const b = (action, label, primary = false) => `<button type="button" class="nv-button ${primary ? '' : 'secondary'}" data-transition-id="${safe(o.id)}" data-action="${action}">${label}</button>`;
@@ -189,7 +192,7 @@ function orderCard(o) {
     <div class="fp-row-step"><div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span> <strong>${safe(currentStep(o))}</strong></div>${stepsView(o)}</div>
     <div class="fp-row-actions">${transitionActions(o)}<button class="fp-icon-btn" data-delete-order="${safe(o.id)}" aria-label="Excluir pedido" title="Excluir pedido"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div></div>
     <details class="nv-order-details" data-details-id="${safe(o.id)}" ${openedOrders.has(o.id) ? 'open' : ''}><summary>Detalhes do pedido</summary>
-      <dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}</dl>
+      <dl class="nv-detail-grid">${info('Cliente', o.customer)}${info('Contato', o.customer_phone || o.customer_email)}${FP.detailInfo(storeSettings.niche, d).map(([k, v]) => info(k, v)).join('')}${info('Serviço solicitado', d.service)}${info('Observações internas', d.notes)}</dl>${o.share_code ? photoStrip(o) : ''}
       <div class="nv-order-actions"><button class="nv-button secondary" data-edit-order="${safe(o.id)}">Editar pedido</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(trackingUrl(o))}">Ver acompanhamento</a><button class="nv-button secondary" data-copy-order="${safe(o.id)}">Copiar link</button><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(whatsUrl(o))}">${whatsPhone(o) ? 'WhatsApp do cliente' : 'WhatsApp'}</a></div>${photoStrip(o)}
     </details>`;
 }
@@ -418,7 +421,7 @@ document.addEventListener('toggle', e => {
 }, true);
 document.addEventListener('change', async e => {
   const input = e.target; if (input.type !== 'file' || !input.dataset.photoOrder || !input.files.length) return;
-  try { const n = await uploadPhotos(input.dataset.photoOrder, input.files, $('panelFeedback')); $('panelFeedback').hidden = false; await reload(true); feedback(n + ' foto(s) anexada(s).'); }
+  try { const kind = input.dataset.photoKind === 'final' ? 'final' : 'arrival'; const n = await uploadPhotos(input.dataset.photoOrder, input.files, $('panelFeedback'), kind); $('panelFeedback').hidden = false; await reload(true); feedback(kind === 'final' ? (n > 1 ? n + ' fotos finais anexadas. O cliente vê no link.' : 'Foto final anexada. O cliente vê no link.') : n + ' foto(s) anexada(s).'); }
   catch (error) { feedback(error.message, true); } finally { input.value = ''; }
 });
 document.addEventListener('input', e => {

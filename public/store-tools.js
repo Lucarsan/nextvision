@@ -182,13 +182,11 @@
     body.innerHTML = `<div class="ft-bar"><label class="ft-search">${ic('search')}<input id="ftLinkQ" type="search" placeholder="Buscar link ou site" title="Enter abre o primeiro da lista" value="${esc(linkQ)}" autocomplete="off"></label>
       <select id="ftLinkSort" aria-label="Ordenar">${SORTS.map(([k, n]) => `<option value="${k}" ${k === linkSort ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <button type="button" class="nv-button" data-ft-link-new>${ic('plus')} Novo link</button></div>
-      <div class="ft-chips" id="ftCats"></div><div class="ft-links" id="ftLinkList"></div>
-      <details class="ft-import"><summary>Trazer links e dívidas do painel antigo</summary>${importHtml()}</details>`;
+      <div class="ft-chips" id="ftCats"></div><div class="ft-links" id="ftLinkList"></div>`;
     const q = $('ftLinkQ');
     q.oninput = () => { linkQ = q.value; drawLinkList(); };
     q.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const a = $('ftLinkList').querySelector('a.ft-link-main'); if (a) a.click(); } };
     $('ftLinkSort').onchange = e => { linkSort = e.target.value; store.set('linkSort', linkSort); drawLinkList(); };
-    bindImport(body);
     drawLinkList();
     if (matchMedia('(min-width:701px)').matches) q.focus();
   }
@@ -203,7 +201,7 @@
         ${drag ? `<span class="ft-grip" title="Arraste para mudar a ordem">${ic('grip')}</span>` : ''}
         <a class="ft-link-main" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" data-ft-open-link="${l.id}" draggable="false">${favImg(l.url, l.name)}<span class="ft-link-txt"><b>${esc(l.name)}</b><small>${esc(host(l.url))}${l.categories.length ? ' · ' + l.categories.map(esc).join(', ') : ''}</small></span></a>
         <span class="ft-link-tools"><button type="button" class="ft-icon-btn${l.pinned ? ' on' : ''}" data-ft-pin="${l.id}" title="${l.pinned ? 'Desafixar' : 'Fixar no começo'}" aria-pressed="${l.pinned}">${ic('star')}</button><button type="button" class="ft-icon-btn" data-ft-link-edit="${l.id}" title="Editar">${ic('edit')}</button></span></div>`).join('')
-      : `<p class="nv-help">${links.length ? 'Nenhum link encontrado.' : 'Nenhum link ainda. Use “Novo link” ou traga os do painel antigo (abaixo).'}</p>`;
+      : `<p class="nv-help">${links.length ? 'Nenhum link encontrado.' : 'Nenhum link ainda. Use “Novo link”.'}</p>`;
     if (drag) bindDrag($('ftLinkList'), '.ft-link', ids => api('/store/tools/links/order', 'PUT', { ids }).then(() => { ids.forEach((id, i) => { const l = links.find(x => x.id === id); if (l) l.position = i; }); }).catch(e => feedback(e.message, true)));
   }
   function bindDrag(list, sel, save) {
@@ -260,54 +258,6 @@
     d.showModal(); (l ? f.elements.name : f.elements.url).focus();
   }
 
-  // ---------------- Trazer do painel antigo ----------------
-  function importHtml() {
-    return `<div class="ft-import-body"><p class="nv-help">Acrescenta os links e as listas de dívidas do painel antigo. Nada aqui é apagado: links com o mesmo endereço e pessoas com o mesmo nome são pulados. Compras e Telas não são trazidas.</p>
-      <div class="fs-row"><label class="nv-field fs-grow">Arquivo de backup do painel antigo (.json)<input type="file" id="ftImpFile" accept=".json,application/json"></label></div>
-      <div class="fs-row"><label class="nv-field fs-grow">ou endereço do banco do painel antigo<input id="ftImpUrl" inputmode="url" placeholder="https://…firebaseio.com"></label><button type="button" class="nv-button secondary" id="ftImpFetch">Buscar</button></div>
-      <p id="ftImpOut" class="nv-help" role="status"></p></div>`;
-  }
-  // Formato do painel antigo: links [{name,url,categorias|categoria,keywords,fixado,cliques}], listas [{name,telefone,rows:[{nome,texto,data,valor,pago,feito}]}].
-  const arr = v => !v ? [] : Array.isArray(v) ? v.filter(Boolean) : Object.values(v).filter(Boolean);
-  const oldMoney = v => { if (v === null || v === undefined || v === '') return 0; const n = typeof v === 'number' ? Math.round(v * 100) : parseMoney(String(v).includes(',') ? v : String(v).replace(/[^\d.]/g, '').replace(/^(\d*\.\d*).*$/, '$1')); return Number.isFinite(n) ? Math.max(0, Math.min(n, 100000000)) : 0; };
-  const oldDay = v => { const s = String(v || '').trim(); let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); if (m) return `${m[1]}-${m[2]}-${m[3]}`; m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s); return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null; };
-  const cut = (v, n) => String(v ?? '').trim().slice(0, n);
-  function convertOld(data) {
-    const linksIn = arr(data.links).map(l => ({ name: cut(l.name || l.nome || host(l.url) || l.url, 120), url: cut(l.url, 2000), categories: [...new Set((Array.isArray(l.categorias) ? l.categorias : l.categoria ? [l.categoria] : []).map(c => cut(c, 40)).filter(Boolean))].slice(0, 12), keywords: cut(l.keywords, 300), pinned: !!l.fixado, clicks: Math.max(0, Math.floor(Number(l.cliques) || 0)) })).filter(l => l.url);
-    const debtorsIn = arr(data.listas).map(x => ({ name: cut(x.name, 120), phone: cut(x.telefone, 30), items: arr(x.rows).map(r => ({ who: cut(r.nome, 120), description: cut(r.texto, 300), day: oldDay(r.data), amount_cents: oldMoney(r.valor), paid_cents: oldMoney(r.pago), done: !!r.feito })) })).filter(x => x.name);
-    return { links: linksIn, debtors: debtorsIn };
-  }
-  async function runImport(data, out) {
-    if (!data || (!data.links && !data.listas)) { out.textContent = 'Não encontrei links nem listas nesse conteúdo.'; return; }
-    const body = convertOld(data);
-    if (!confirm(`Encontrei ${body.links.length} link(s) e ${body.debtors.length} lista(s) de dívidas. Acrescentar aqui?`)) return;
-    out.textContent = 'Trazendo…';
-    try {
-      const r = await api('/store/tools/import', 'POST', body);
-      out.textContent = `Pronto: ${r.links_added} link(s) e ${r.debtors_added} lista(s) com ${r.items_added} item(ns) acrescentados. Pulados por já existirem: ${r.links_skipped} link(s), ${r.debtors_skipped} lista(s).`;
-      links = await api('/store/tools/links'); if (tab === 'links') drawLinkList(); else { debts = await api('/store/tools/debts'); drawDebtList(); }
-    } catch (e) { out.textContent = e.message; }
-  }
-  function bindImport(root) {
-    const out = root.querySelector('#ftImpOut'); if (!out) return;
-    root.querySelector('#ftImpFile').onchange = async e => {
-      const file = e.target.files[0]; e.target.value = ''; if (!file) return;
-      if (file.size > 5000000) { out.textContent = 'Arquivo grande demais (até 5 MB).'; return; }
-      let data; try { data = JSON.parse(await file.text()); } catch { out.textContent = 'Não consegui ler esse arquivo. Confira se é o backup (.json) do painel antigo.'; return; }
-      runImport(data, out);
-    };
-    root.querySelector('#ftImpFetch').onclick = async () => {
-      let base = root.querySelector('#ftImpUrl').value.trim().replace(/\/+$/, '');
-      if (!/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.(firebaseio\.com|firebasedatabase\.app)$/i.test(base)) { out.textContent = 'Informe o endereço do banco do painel antigo (termina em firebaseio.com).'; return; }
-      out.textContent = 'Buscando…';
-      try {
-        const get = async k => { const r = await fetch(`${base}/${k}.json`, { cache: 'no-store' }); if (!r.ok) throw Error('O painel antigo não respondeu (' + r.status + ').'); return r.json(); };
-        const [l, d] = await Promise.all([get('links'), get('listas')]);
-        runImport({ links: l, listas: d }, out);
-      } catch (e) { out.textContent = e.message || 'Não foi possível buscar.'; }
-    };
-  }
-
   // ---------------- Dívidas ----------------
   let debtQ = '', debtSort = store.get('debtSort') || 'balance';
   function drawDebts() {
@@ -316,11 +266,9 @@
       <div class="ft-bar"><label class="ft-search">${ic('search')}<input id="ftDebtQ" type="search" placeholder="Buscar pessoa, telefone ou item" value="${esc(debtQ)}" autocomplete="off"></label>
         <select id="ftDebtSort" aria-label="Ordenar">${[['balance', 'Maior dívida'], ['az', 'Nome A–Z'], ['recent', 'Mexidas por último'], ['manual', 'Ordem manual']].map(([k, n]) => `<option value="${k}" ${k === debtSort ? 'selected' : ''}>${n}</option>`).join('')}</select>
         <button type="button" class="nv-button" data-ft-debt-new>${ic('plus')} Nova pessoa</button></div>
-      <div class="ft-debts" id="ftDebtList"></div>
-      <details class="ft-import"><summary>Trazer links e dívidas do painel antigo</summary>${importHtml()}</details>`;
+      <div class="ft-debts" id="ftDebtList"></div>`;
     $('ftDebtQ').oninput = e => { debtQ = e.target.value; drawDebtList(); };
     $('ftDebtSort').onchange = e => { debtSort = e.target.value; store.set('debtSort', debtSort); drawDebtList(); };
-    bindImport(body);
     drawDebtList();
   }
   const totals = p => { const total = p.items.reduce((a, i) => a + i.amount_cents, 0), paid = p.items.reduce((a, i) => a + i.paid_cents, 0); return { total, paid, balance: total - paid, open: p.items.filter(i => i.amount_cents - i.paid_cents > 0).length }; };
@@ -643,8 +591,7 @@
   .ft-fav{width:28px;height:28px;border-radius:7px;flex:0 0 auto;object-fit:contain}.ft-fav-letter{display:inline-grid;place-items:center;background:var(--nv-blue-soft,#fff1ea);color:#C2410C;font-weight:800;font-size:13px}.ft-qbtn .ft-fav-letter{font-size:10px;border-radius:5px}
   .ft-link-tools{display:flex;gap:2px}.ft-icon-btn{display:inline-grid;place-items:center;width:34px;height:34px;border:0;border-radius:9px;background:none;color:var(--nv-muted);cursor:pointer;text-decoration:none}.ft-icon-btn:hover{background:var(--nv-bg,#f2f3f5);color:var(--nv-ink)}.ft-icon-btn:disabled{opacity:.3}.ft-icon-btn .fp-ic{width:17px;height:17px}.ft-icon-btn.on{color:#e69500}.ft-icon-btn.on svg{fill:currentColor}
   .ft-danger{color:#b42318!important}.ft-err{color:#b42318;font-size:13px;min-height:1em}.ft-neg{color:#b42318}.ft-pos{color:#027a48}.ft-r{text-align:right}
-  .ft-import{margin-top:18px;border-top:1px solid var(--nv-border);padding-top:12px}.ft-import summary{cursor:pointer;color:var(--nv-muted);font-size:14px}.ft-import-body{padding-top:8px}
-  .ft-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.ft-kpis div{border:1px solid var(--nv-border);border-radius:13px;padding:12px 14px;display:flex;flex-direction:column}.ft-kpis small{color:var(--nv-muted);font-size:12px}.ft-kpis b{font-size:22px;margin-top:4px}
+    .ft-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.ft-kpis div{border:1px solid var(--nv-border);border-radius:13px;padding:12px 14px;display:flex;flex-direction:column}.ft-kpis small{color:var(--nv-muted);font-size:12px}.ft-kpis b{font-size:22px;margin-top:4px}
   .ft-debts{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px}.ft-debt{display:flex;align-items:center;border:1px solid var(--nv-border);border-radius:13px;background:#fff;padding-right:6px}.ft-debt:hover{border-color:var(--nv-blue)}.ft-debt.dragging{opacity:.4}
   .ft-debt-main{flex:1;display:flex;align-items:center;gap:11px;border:0;background:none;padding:12px;text-align:left;font:inherit;cursor:pointer;min-width:0}.ft-avatar{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--nv-lavender,#f3e8ff);color:#C2410C;font-weight:800;font-size:13px;flex:0 0 auto}
   .ft-debt-txt{flex:1;display:flex;flex-direction:column;min-width:0}.ft-debt-txt b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ft-debt-txt small{color:var(--nv-muted);font-size:12px}.ft-debt-val{font-weight:800;white-space:nowrap}.ft-wa{color:#128c7e}

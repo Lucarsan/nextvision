@@ -34,6 +34,7 @@ test('painel: links úteis, atalhos do topo, dívidas e recibo', {
     await page.locator('#ftQuick [data-view="links"]').click();
     await page.waitForSelector('#ftLinkList .ft-link');
     assert.equal(await page.locator('.nv-top h1').textContent(), 'Links úteis');
+    assert.equal(await page.locator('.ft-import').count(), 0, 'sem a seção do painel antigo');
     assert.equal(await page.locator('#ftQuick [data-view="links"]').getAttribute('class'), 'ft-qbtn active');
     // Janelas fecham ao clicar fora (no fundo); clicar dentro não fecha.
     await page.locator('[data-ft-link-new]').click();

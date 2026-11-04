@@ -49,6 +49,17 @@ h2{margin:0;font-size:15px;font-weight:700}
 .state{display:inline-flex;align-self:flex-start;font-size:12px;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:5px 10px;border-radius:999px}
 .state.ok{color:var(--ok);background:#ECFDF5}.state.pause{color:#374151;background:#F3F4F6}
 .done-list{display:flex;flex-direction:column;gap:8px;font-size:14px}.done-list div{display:flex;justify-content:space-between;gap:10px}.done-list .last{font-weight:700}
+.tl{position:relative;display:grid;text-align:center;list-style:none;margin:0;padding:0}
+.tl .ln,.tl .fill{position:absolute;top:10px;height:2px;border-radius:2px}.tl .ln{background:var(--line)}.tl .fill{background:#22C55E;box-shadow:0 0 4px rgba(34,197,94,.5)}
+.st{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+.dot{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--card);border:1.5px solid #D5D9E2;color:#B3BAC6}.dot svg{width:12px;height:12px}
+.st.done .dot{background:#22C55E;border-color:#22C55E;color:#fff;box-shadow:0 0 5px rgba(34,197,94,.55)}
+.st.cur .dot{background:#FF3EA5;border-color:#FF3EA5;color:#fff;animation:pu 1.6s infinite}
+.st.cur.paused .dot{background:#F59E0B;border-color:#F59E0B;animation:none;box-shadow:0 0 5px rgba(245,158,11,.55)}
+@keyframes pu{0%{box-shadow:0 0 0 0 rgba(255,62,165,.45),0 0 6px rgba(255,62,165,.6)}70%{box-shadow:0 0 0 6px rgba(255,62,165,0),0 0 6px rgba(255,62,165,.6)}100%{box-shadow:0 0 0 0 rgba(255,62,165,0),0 0 6px rgba(255,62,165,.6)}}
+.st span{font-size:11.5px;line-height:1.25;color:var(--muted);overflow-wrap:anywhere}.st.done span{color:#15803D}.st.cur span{color:var(--ink);font-weight:700}
+.tl.many .dot{width:18px;height:18px}.tl.many .dot svg{width:10px;height:10px}.tl.many .ln,.tl.many .fill{top:8px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 /* Fila */
 .queue{display:flex;align-items:center;gap:14px}
 .queue .queue-num{font-family:var(--display);font-size:44px;font-weight:800;line-height:1;color:var(--accent);font-variant-numeric:tabular-nums}
@@ -167,13 +178,26 @@ function heroView(p,steps){
  return '<section class="hero"><div class="media contain"><video class="nv-live-player" data-live="1" muted autoplay playsinline controls preload="none"></video><span class="badge"><i></i>AO VIVO</span><span class="msg nv-live-message" role="status">Carregando vídeo autorizado…</span>'+shade+'</div></section>';
 }
 // Barra de etapas: "Espera" + as etapas do processo.
+// Ícone de cada etapa pelo nome (vale para todos os nichos); sem palavra conhecida, o número da etapa.
+const ICONS={hourglass:'<path d="M6 3h12M6 21h12M7 3c0 5.5 10 5 10 9s-10 3.5-10 9M17 3c0 5.5-10 5-10 9s10 3.5 10 9"/>',droplet:'<path d="M12 3c-4 5-6 8.2-6 11a6 6 0 0 0 12 0c0-2.8-2-6-6-11z"/>',wind:'<path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>',scissors:'<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.6 8.6L20 20M8.6 15.4L20 4"/>',check:'<path d="M5 12l5 5 9-10"/>',wrench:'<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-2.4z"/>',sparkle:'<path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/>',clipboard:'<path d="M9 3h6v3H9zM7 4.5H5V21h14V4.5h-2M9 12h6M9 16h4"/>',search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',car:'<path d="M5 16h14M6 16l1.5-5h9L18 16M7 19a1.5 1.5 0 1 0 0-.01M17 19a1.5 1.5 0 1 0 0-.01M4 16v3h16v-3"/>'};
+const PAWI='<path fill="currentColor" stroke="none" d="M12 11c-3 0-6 3.5-6 6 0 1.7 1.3 2.5 2.8 2.5 1.2 0 2.2-.6 3.2-.6s2 .6 3.2.6c1.5 0 2.8-.8 2.8-2.5 0-2.5-3-6-6-6z"/><circle fill="currentColor" stroke="none" cx="6" cy="9" r="2.2"/><circle fill="currentColor" stroke="none" cx="10" cy="5.5" r="2.2"/><circle fill="currentColor" stroke="none" cx="14" cy="5.5" r="2.2"/><circle fill="currentColor" stroke="none" cx="18" cy="9" r="2.2"/>';
+function stepIcon(name,p,i){const n=low(name);let k=null;
+ if(/espera|fila/.test(n))k='hourglass';else if(/banho|lavag|enx[aá]g/.test(n))k='droplet';else if(/secag|seca/.test(n))k='wind';else if(/tosa|corte|finaliza|acabamento|escova/.test(n))k='scissors';
+ else if(/pronto|retirada|entrega|conclu/.test(n))return p.niche==='pet'?PAWI:ICONS.check;else if(/recep|entrada|or[cç]amento|cadastro/.test(n))k='clipboard';else if(/diagn|an[aá]lise|teste|inspe/.test(n))k='search';
+ else if(/troca|reparo|conserto|bancada|montag|tela|bateria|solda|mec[aâ]n/.test(n))k='wrench';else if(/polim|cera|higien|acabam/.test(n))k='sparkle';else if(p.niche==='carwash'||p.niche==='automotive')k='car';
+ return k?ICONS[k]:'<text x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="700" fill="currentColor" stroke="none" font-family="inherit">'+(i)+'</text>'}
+// Linha do tempo: "Espera" + as etapas do processo, com bolinhas e ícones.
 function progressView(p,steps,head,compact){
- const idx=Number(p.step_index)||0,all=['Espera'].concat(steps.map(cap));
- const segs=all.map((label,i)=>{let cls='';if(p.status==='completed')cls='done';else if(p.status==='queued')cls=i===0?'cur':'';else{const k=i-1;cls=i===0||k<idx?'done':k===idx?(p.status==='paused'?'cur paused':'cur'):''}return '<div class="seg '+cls+'"><b></b><span>'+(cls==='done'?(()=>{const w=safe(label).split(' '),last=w.pop();return (w.length?w.join(' ')+' ':'')+'<span class="ck">'+last+'<i aria-hidden="true">\u00a0✓</i></span>'})():safe(label))+'</span></div>'}).join('');
+ const idx=Number(p.step_index)||0,all=['Espera'].concat(steps.map(cap)),n=all.length;
+ const cur=p.status==='completed'?n:p.status==='queued'?0:idx+1;
+ const fillPct=n>1?Math.min(1,cur/(n-1))*(100-100/n):0;
+ const items=all.map((label,i)=>{const done=i<cur,now=i===cur&&p.status!=='completed';const cls=done?'done':now?'cur'+(p.status==='paused'?' paused':''):'';
+  return '<li class="st '+cls+'"><span class="dot" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+stepIcon(label,p,i)+'</svg></span><span>'+safe(label)+'</span><span class="sr">'+(done?' (concluída)':now?(p.status==='paused'?' (pausada)':' (agora)'):'')+'</span></li>'}).join('');
  const chips=[p.item_breed,p.item_size?'Porte '+p.item_size:'',p.process?cap(p.process):'',p.external_reference?'Pedido '+p.external_reference:p.order_number?'Pedido '+p.order_number:''].filter(Boolean);
  const doneAt=p.status==='completed'&&p.completed_at?new Date(p.completed_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
- return '<section class="card status"><span class="state '+head.cls+'">'+safe(head.chip)+'</span>'+(compact?'':'<div><h1>'+safe(head.h)+'</h1><p class="sub">'+safe(head.sub)+'</p></div>')+'<div class="segs" style="grid-template-columns:repeat('+all.length+',minmax(0,1fr))">'+segs+'</div>'
- +(p.status==='completed'?'<div class="done-list">'+steps.map(s=>'<div><span>✓ '+safe(cap(s))+'</span></div>').join('')+(doneAt?'<div class="last"><span>Concluído</span><span>'+safe(doneAt)+'</span></div>':'')+'</div>':'')
+ return '<section class="card status"><span class="state '+head.cls+'">'+safe(head.chip)+'</span>'+(compact?'':'<div><h1>'+safe(head.h)+'</h1><p class="sub">'+safe(head.sub)+'</p></div>')
+ +'<ol class="tl'+(n>6?' many':'')+'" aria-label="Etapas do atendimento" style="grid-template-columns:repeat('+n+',minmax(0,1fr))"><span class="ln" style="left:'+(50/n)+'%;right:'+(50/n)+'%"></span><span class="fill" style="left:'+(50/n)+'%;width:'+fillPct+'%"></span>'+items+'</ol>'
+ +(p.status==='completed'&&doneAt?'<div class="done-list"><div class="last"><span>Concluído</span><span>'+safe(doneAt)+'</span></div></div>':'')
  +(chips.length?'<div class="chips">'+chips.map(c=>'<span>'+safe(c)+'</span>').join('')+'</div>':'')+'</section>';
 }
 function queueView(p){

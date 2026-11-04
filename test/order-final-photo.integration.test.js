@@ -96,8 +96,8 @@ test('foto final no painel e no link do cliente (navegador)', {
     assert.match(await cp.locator('.media.photo .shade strong').textContent(), /Thor ficou pronto!/);
     assert.match(await cp.locator('.actions a[download]').getAttribute('href'), /\?download=1$/);
     assert.ok(await cp.locator('.media.photo img').evaluate(img => img.complete && img.naturalWidth > 0), 'a foto carrega');
-    // A foto final vem antes do quadro de etapas, no topo.
-    assert.ok(await cp.evaluate(() => document.querySelector('#content > .hero')?.nextElementSibling?.querySelector('.tl') !== null));
+    // A linha do tempo vem no topo, logo acima da foto final.
+    assert.ok(await cp.evaluate(() => document.querySelector('#content > .hero')?.previousElementSibling?.querySelector('.tl') !== null));
     await cp.screenshot({ ...shot('cliente-foto-final'), fullPage: true });
     assert.deepEqual(cerrors, []);
   } finally { await browser?.close(); await f.cleanup(); }

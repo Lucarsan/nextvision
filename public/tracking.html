@@ -11,8 +11,7 @@ main{max-width:520px;margin:0 auto;padding:14px 12px calc(28px + env(safe-area-i
 .store-mark img{width:100%;height:100%;object-fit:cover;background:#fff}
 .store b{display:block;font-size:16px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.store span{font-size:13px;color:var(--muted)}
 .wordmark{font-family:var(--display);font-size:14px;font-weight:800;letter-spacing:-.2px;color:var(--ink);white-space:nowrap}.wordmark .p,.wordmark .mark{color:var(--accent)}.wordmark .mark{display:inline-block}
-.olp{display:inline-flex;align-items:center;height:26px}.olp img{height:26px;width:auto;display:block}
-.olp-tw{display:block;overflow:hidden}.olp-tw img{max-width:none}.wordmark.done .mark{animation:pop .6s ease}@keyframes pop{0%{transform:scale(.4)}60%{transform:scale(1.35)}100%{transform:scale(1)}}
+.wordmark.done .mark{animation:pop .6s ease}@keyframes pop{0%{transform:scale(.4)}60%{transform:scale(1.35)}100%{transform:scale(1)}}
 .card{background:var(--card);border-radius:20px;padding:16px}
 h1{margin:0;font-family:var(--display);font-size:24px;line-height:1.1;font-weight:800;letter-spacing:-.4px;text-wrap:balance}
 h2{margin:0;font-size:15px;font-weight:700}
@@ -141,26 +140,10 @@ function headline(p,steps){
  if(i>=steps.length-1)return {h:s+' está na última etapa',sub:cap(step)+'. Falta pouco.',chip:'Etapa '+(i+1)+' de '+steps.length,cls:''};
  return {h:s+' está em '+low(step),sub:'Você é avisado quando ficar pronto.',chip:'Etapa '+(i+1)+' de '+steps.length,cls:''};
 }
-// Logo olhonopet!: a lente aparece sozinha à direita e as letras vão sendo "digitadas" à direita dela,
-// empurrando a lente para a esquerda. Uma vez ao abrir a página; depois fica parada.
-// Fronteiras de cada letra (l h o n o p e t !) como fração da largura das letras.
-const OLP_CUTS=[45,120,214,293,382.5,469,555.5,618,659].map(x=>x/659);
-function typeLogo(wm){
- const lens=wm.querySelector('.olp-l'),box=wm.querySelector('.olp-tw'),img=wm.querySelector('.olp-t');
- if(matchMedia('(prefers-reduced-motion: reduce)').matches||!box.animate)return;
- box.style.width='0px';
- const run=()=>{const full=img.getBoundingClientRect().width;if(!full){box.style.width='';return}
-  lens.animate([{transform:'scale(0) rotate(-140deg)',opacity:0},{transform:'none',opacity:1}],{duration:550,easing:'cubic-bezier(.2,.9,.3,1.25)'});
-  const frames=[{width:'0px',offset:0}].concat(OLP_CUTS.map((f,i)=>({width:(full*f).toFixed(1)+'px',offset:(i+1)/OLP_CUTS.length})));
-  const a=box.animate(frames.map(k=>Object.assign({easing:'step-end'},k)),{duration:1350,delay:650,fill:'forwards'});
-  a.onfinish=()=>{box.style.width='';a.cancel()}};
- if(img.complete&&img.naturalWidth)run();else{img.addEventListener('load',run,{once:true});img.addEventListener('error',()=>{box.style.width=''},{once:true})}
-}
 function topBar(p){
  const initials=String(p.store||'?').split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].toLocaleUpperCase('pt-BR')).join('');
  document.getElementById('storeTop').innerHTML='<span class="store-mark">'+(p.logo_url?'<img alt="" src="'+safe(p.logo_url)+'">':safe(initials))+'</span><div><b>'+safe(cap(p.store||'Estabelecimento'))+'</b><span>'+safe(nicheOf(p).label)+(p.store_city?' · '+safe(p.store_city):'')+'</span></div>';
- const wm=document.getElementById('wordmark'),done=p.status==='completed',pet=p.niche==='pet';
- if(pet){if(!wm.dataset.pet){wm.dataset.pet='1';wm.innerHTML='<span class="olp"><img class="olp-l" src="/brand/olhonopet-lente.png" alt=""><span class="olp-tw"><img class="olp-t" src="/brand/olhonopet-texto.png" alt=""></span></span>';typeLogo(wm)}wm.setAttribute('aria-label','olhonopet.com');document.title=(p.store?cap(p.store)+' | ':'')+'Olho no Pet';return}
+ const wm=document.getElementById('wordmark'),done=p.status==='completed';
  wm.classList.toggle('done',done);wm.querySelector('.mark').textContent=done?'!':'?';
  wm.setAttribute('aria-label',done?'Ficou pronto!':'Ficou pronto?');
  document.title=(done?'Ficou pronto! ':'')+(p.store?cap(p.store)+' | ':'')+'Acompanhe seu pedido';

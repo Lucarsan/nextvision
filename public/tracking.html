@@ -8,8 +8,8 @@ main{max-width:520px;margin:0 auto;padding:14px 12px calc(28px + env(safe-area-i
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 4px 0}
 .store{display:flex;align-items:center;gap:10px;min-width:0}
 .store-mark{width:40px;height:40px;border-radius:12px;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px;flex:none;overflow:hidden}
-.store-mark img{width:100%;height:100%;object-fit:cover;background:#fff}
-.store b{display:block;font-size:16px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.store span{font-size:13px;color:var(--muted)}
+.store-mark:has(img){background:transparent}.store-mark img{width:100%;height:100%;object-fit:cover}
+.store>div{min-width:0}.store b{display:block;font-size:16px;font-weight:700;line-height:1.2;text-wrap:balance}.store span{display:block;font-size:13px;line-height:1.3;color:var(--muted);margin-top:2px}
 .wordmark{font-family:var(--display);font-size:14px;font-weight:800;letter-spacing:-.2px;color:var(--ink);white-space:nowrap}.wordmark .p,.wordmark .mark{color:var(--accent)}.wordmark .mark{display:inline-block}
 .wordmark.done .mark{animation:pop .6s ease}@keyframes pop{0%{transform:scale(.4)}60%{transform:scale(1.35)}100%{transform:scale(1)}}
 .card{background:var(--card);border-radius:20px;padding:16px}
@@ -142,7 +142,7 @@ function headline(p,steps){
 }
 function topBar(p){
  const initials=String(p.store||'?').split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].toLocaleUpperCase('pt-BR')).join('');
- document.getElementById('storeTop').innerHTML='<span class="store-mark">'+(p.logo_url?'<img alt="" src="'+safe(p.logo_url)+'">':safe(initials))+'</span><div><b>'+safe(cap(p.store||'Estabelecimento'))+'</b><span>'+safe(nicheOf(p).label)+(p.store_city?' · '+safe(p.store_city):'')+'</span></div>';
+ document.getElementById('storeTop').innerHTML='<span class="store-mark">'+(p.logo_url?'<img alt="" src="'+safe(p.logo_url)+'">':safe(initials))+'</span><div><b>'+safe(cap(p.store||'Estabelecimento'))+'</b><span>'+(p.store_address?safe(p.store_address):safe(nicheOf(p).label)+(p.store_city?' · '+safe(p.store_city):''))+'</span></div>';
  const wm=document.getElementById('wordmark'),done=p.status==='completed';
  wm.classList.toggle('done',done);wm.querySelector('.mark').textContent=done?'!':'?';
  wm.setAttribute('aria-label',done?'Ficou pronto!':'Ficou pronto?');

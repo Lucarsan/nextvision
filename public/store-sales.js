@@ -189,6 +189,7 @@
             <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
             <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
           <div id="fsSvc" data-only="service"></div>
+          <div id="fsMix" aria-live="polite"></div>
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
           <div id="fsCbBox" aria-live="polite"></div>
@@ -205,7 +206,7 @@
     const sf = $('fsSale');
     const updChange = () => {
       const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
-      drawCashbackBox();
+      drawMix(); drawCashbackBox();
       const out = $('fsChangeOut'), total = payable(), got = parseMoney(sf.elements.received.value);
       if (!cash || !Number.isFinite(got)) { out.textContent = ''; return; }
       if (!Number.isFinite(total) || total <= 0) { out.textContent = 'Informe o valor da venda.'; return; }
@@ -438,33 +439,38 @@
 
   async function submitSale(e, box, alive) {
     e.preventDefault(); const f = e.currentTarget, status = $('fsSaleStatus'), btn = $('fsSaleBtn');
-    const service = saleMode === 'service';
+    // Serviço em edição: entra na venda se estiver completo; se começou a preencher e falta algo, avisa.
+    if (svcFilled() && svcProblem()) { status.textContent = (svcCart.length || productPart() ? 'Serviço em edição: ' : '') + svcProblem(); return; }
+    const services = [...svcCart, ...(pendingSvc() ? [svc] : [])], service = services.length > 0, onlyService = service && !productPart();
     const total = currentTotal();
-    if (service) { const err = serviceError(); if (err) { status.textContent = err; return; } }
-    if (!Number.isFinite(total) || total <= 0) { status.textContent = service ? 'Informe o preço de venda do serviço.' : 'Informe o valor da venda.'; return; }
+    if (!Number.isFinite(total) || total <= 0) { status.textContent = saleMode === 'service' && !service ? 'Informe o serviço e o preço de venda.' : 'Informe o valor da venda.'; return; }
     const received = f.elements.method.value === 'cash' && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
     const toPay = payable();
     if (received != null && (!Number.isFinite(received) || received < toPay)) { status.textContent = 'O valor recebido é menor que o valor a pagar.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     // Produtos e itens frequentes vão juntos como itens; descrição automática fica para o servidor montar com todos.
     const desc = f.elements.description.value.trim();
-    const body = service ? serviceBody(f.elements.method.value)
+    const typed = !cart.length && !quickCart.length ? productPart() : 0;
+    const prodItems = () => [...cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })),
+      ...quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit })), ...(typed ? [{ name: 'Valor avulso', quantity: 1, unit_price_cents: typed }] : [])];
+    const notes = [cart.length && desc === lastAuto || quickCart.length && desc === lastAuto ? '' : desc, ...services.map(x => String(x.note || '').trim())].filter(Boolean).join(' · ').slice(0, 300);
+    const body = service ? { items: [...prodItems(), ...services.flatMap(svcItems)], ...(saleDisc() ? { discount_cents: saleDisc() } : {}), payment_method: f.elements.method.value, description: notes }
       : cart.length || quickCart.length
       ? { items: [...cart.map(i => ({ product_id: i.id, quantity: i.quantity, ...(i.variant ? { variant_name: i.variant } : {}), ...(unitOf(i) !== i.price_cents ? { unit_price_cents: unitOf(i) } : {}) })),
           ...quickCart.map(x => ({ name: x.label, quantity: x.qty, unit_price_cents: x.unit }))],
           ...(saleDisc() ? { discount_cents: saleDisc() } : {}), payment_method: f.elements.method.value, description: cart.length && desc === lastAuto ? '' : desc }
         : { total_cents: total, payment_method: f.elements.method.value, description: desc };
     const noPrice = quickCart.find(x => x.unit == null);
-    if (!service && noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
+    if (noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
     const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0) body.cashback_use_cents = use; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; servicesCache = null; } else { cart = []; cartDiscount = ''; quickCart = []; } if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
-      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${service ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${service ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function drawLast() {
@@ -485,18 +491,47 @@
   // "Produto" é a venda de balcão (leitor, itens frequentes, valor). "Serviço" registra o que foi feito no
   // aparelho: preço cobrado, custo, fornecedor, aparelho e garantia. Peça do estoque é opcional: preenche
   // aparelho, fornecedor e custo, e a venda baixa uma unidade dela.
-  let saleMode = 'product', svc = {}, servicesCache = null, serviceItems = null;
+  // Produtos e serviços somam na MESMA venda: o botão Produto/Serviço só troca o painel de lançamento.
+  // svcCart = serviços já postos na venda; o serviço em edição (svc) entra junto ao registrar, se estiver completo.
+  let saleMode = 'product', svc = {}, servicesCache = null, serviceItems = null, svcCart = [];
   const WARRANTY = [['', 'Sem garantia'], ['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias'], ['180', '6 meses'], ['365', '1 ano']];
   const PART_NAMES = ['Tela', 'Bateria', 'Conector de carga', 'Tampa traseira', 'Vidro da câmera', 'Câmera', 'Alto-falante', 'Microfone', 'Flex', 'Botão'];
+  const svcFilled = () => String(svc.name || '').trim().length > 0;
+  const svcPrice = x => { const raw = String(x.price || '').trim(), v = parseMoney(raw); return raw && Number.isFinite(v) && v >= 0 ? v : NaN; };
+  // Erro do serviço em edição (vazio = pode entrar na venda).
+  const svcProblem = () => serviceError() || (Number.isFinite(svcPrice(svc)) ? '' : 'Informe o preço de venda do serviço.');
+  const pendingSvc = () => svcFilled() && !svcProblem() ? svc : null;
+  const svcCartSum = () => svcCart.reduce((a, x) => a + svcPrice(x), 0);
+  // Parte de produtos: produtos do leitor + itens frequentes (menos o desconto) ou o valor digitado.
+  function productPart() {
+    const f = $('fsSale'); if (!f) return 0;
+    if (cart.length || quickCart.length) return saleGross() - saleDisc();
+    const v = parseMoney(f.elements.total.value); return Number.isFinite(v) && v > 0 ? v : 0;
+  }
   function currentTotal() {
-    const f = $('fsSale'); if (!f) return NaN;
-    return saleMode === 'service' ? parseMoney(svc.price) : parseMoney(f.elements.total.value);
+    if (!$('fsSale')) return NaN;
+    const p = pendingSvc(), t = productPart() + svcCartSum() + (p ? svcPrice(p) : 0);
+    return t > 0 ? t : NaN;
+  }
+  // Resumo da venda quando há serviço junto: cada serviço (com tirar), a parte de produtos e o total.
+  function drawMix() {
+    const box = $('fsMix'); if (!box) return;
+    const prod = productPart(), p = pendingSvc(), n = svcCart.length + (p ? 1 : 0);
+    const btn = $('fsSaleBtn'); if (btn) btn.textContent = n && !prod ? (n > 1 ? 'Registrar serviços' : 'Registrar serviço') : 'Registrar venda';
+    if (!svcCart.length && !(p && prod)) { if (box.dataset.html) { box.innerHTML = ''; box.dataset.html = ''; } return; }
+    const line = (x, i) => `<div class="fs-mix-row">${FPIcon('wrench')}<span class="fs-grow">${esc(x.name.trim())}${x.model ? ` <small>· ${esc(x.model.trim())}</small>` : ''}${x.gift ? ` <small>· brinde: ${esc(x.gift.product.name)}${x.gift.variant ? ' ' + esc(x.gift.variant) : ''}</small>` : ''}${i == null ? ' <small class="fs-var">(em edição)</small>' : ''}</span><b>${brl(svcPrice(x))}</b>${i == null ? '' : `<button type="button" class="fs-cart-del" data-fs-svc-del="${i}" aria-label="Tirar ${esc(x.name.trim())} da venda">${FPIcon('x')}</button>`}</div>`;
+    const html = `<div class="fs-mix"><div class="fs-mix-head">Itens desta venda</div>
+      ${prod ? `<div class="fs-mix-row">${FPIcon('cart')}<span class="fs-grow">${cart.length || quickCart.length ? 'Produtos e itens' : 'Valor avulso'}${saleMode === 'service' ? ' <button type="button" class="fs-link" data-fs-mode-go="product">ver</button>' : ''}</span><b>${brl(prod)}</b></div>` : ''}
+      ${svcCart.map((x, i) => line(x, i)).join('')}${p ? line(p, null) : ''}
+      <div class="fs-pcart-total"><span>Total da venda</span><b>${brl(currentTotal() || 0)}</b></div></div>`;
+    if (box.dataset.html === html) return; box.dataset.html = html; box.innerHTML = html;
+    box.querySelectorAll('[data-fs-svc-del]').forEach(b => b.onclick = () => { svcCart.splice(Number(b.dataset.fsSvcDel), 1); $('fsSale')?.dispatchEvent(new Event('input')); });
+    box.querySelectorAll('[data-fs-mode-go]').forEach(b => b.onclick = () => setMode(b.dataset.fsModeGo, true));
   }
   function setMode(mode, focus) {
     saleMode = mode === 'service' ? 'service' : 'product';
     document.querySelectorAll('[data-fs-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fsMode === saleMode)));
     document.querySelectorAll('#fsSale [data-only]').forEach(n => { n.hidden = n.dataset.only !== saleMode; });
-    const btn = $('fsSaleBtn'); if (btn) btn.textContent = saleMode === 'service' ? 'Registrar serviço' : 'Registrar venda';
     if ($('fsSaleStatus')) $('fsSaleStatus').textContent = '';
     $('fsSale')?.dispatchEvent(new Event('input'));
     if (focus) (saleMode === 'service' ? $('fsSvcName') : $('fsScan'))?.focus();
@@ -587,7 +622,9 @@
         <label class="nv-field">Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
       <p class="nv-help" id="fsSvcProfit"></p>
       <div class="nv-field fs-gift">Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
-      <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>`;
+      <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>
+      <button type="button" class="nv-button secondary fs-wide fs-svc-add" id="fsSvcAdd">${FPIcon('plus') || '+'} Pôr na venda e lançar outro serviço</button>
+      <p class="nv-help fs-svc-tip">Para vender produto junto, toque em <b>Produto</b> (ou bipe o código): o serviço continua na mesma venda.</p>`;
     const read = () => { svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
     const profit = profitNote;
     box.oninput = box.onchange = read;
@@ -599,6 +636,11 @@
       $('fsSvcName').onchange = () => { const hit = rows.find(r => r.name.toLowerCase() === $('fsSvcName').value.trim().toLowerCase()); if (hit && !$('fsSvcPrice').value.trim() && hit.last_price_cents) $('fsSvcPrice').value = centsText(hit.last_price_cents); read(); $('fsSale')?.dispatchEvent(new Event('input')); };
     });
     drawPartPicker(); drawGiftPicker(); drawServiceChips(); read();
+    $('fsSvcAdd').onclick = () => {
+      const err = svcFilled() ? svcProblem() : 'Informe o serviço (ex.: troca de tela).', st = $('fsSaleStatus');
+      if (err) { if (st) st.textContent = err; return; }
+      svcCart.push({ ...svc }); svc = {}; if (st) st.textContent = ''; drawService(); $('fsSale')?.dispatchEvent(new Event('input')); $('fsSvcName')?.focus();
+    };
   }
   // Brinde do serviço: escolhe o produto (película…) e, se tiver modelos, o modelo. Preço zero na venda.
   function drawGiftPicker() {
@@ -669,16 +711,16 @@
     if (c && (!Number.isFinite(parseMoney(c)) || parseMoney(c) < 0)) return 'Preço de custo inválido.';
     return '';
   }
-  function serviceBody(method) {
-    const item = { service: svc.name.trim(), unit_price_cents: parseMoney(svc.price) };
-    const c = String(svc.cost || '').trim(); if (c) item.cost_cents = parseMoney(c);
-    if (String(svc.supplier || '').trim()) item.supplier = svc.supplier.trim();
-    if (String(svc.model || '').trim()) item.device_model = svc.model.trim();
-    if (svc.part) item.part_id = svc.part.id;
-    if (svc.warranty) item.warranty_days = Number(svc.warranty);
+  function svcItems(x) {
+    const item = { service: x.name.trim(), unit_price_cents: svcPrice(x) };
+    const c = String(x.cost || '').trim(); if (c) item.cost_cents = parseMoney(c);
+    if (String(x.supplier || '').trim()) item.supplier = x.supplier.trim();
+    if (String(x.model || '').trim()) item.device_model = x.model.trim();
+    if (x.part) item.part_id = x.part.id;
+    if (x.warranty) item.warranty_days = Number(x.warranty);
     const items = [item];
-    if (svc.gift) items.push({ product_id: svc.gift.product.id, quantity: 1, gift: true, ...(svc.gift.variant ? { variant_name: svc.gift.variant } : {}) });
-    return { items, payment_method: method, description: String(svc.note || '').trim() };
+    if (x.gift) items.push({ product_id: x.gift.product.id, quantity: 1, gift: true, ...(x.gift.variant ? { variant_name: x.gift.variant } : {}) });
+    return items;
   }
 
   // Cadastro de peça (tela, bateria…): cada peça tem aparelho, fornecedor, custo e estoque.
@@ -1633,7 +1675,7 @@
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !t.readOnly && t.value.endsWith(code)) { t.value = t.value.slice(0, -code.length); t.dispatchEvent(new Event('input', { bubbles: true })); }
         if (!sale) { feedback('Abra o caixa para registrar a venda deste produto.', true); beep(false); return; }
         if ($('fsScanResults')) $('fsScanResults').innerHTML = '';
-        if (saleMode === 'service') { setMode('product'); feedback('Produto lido pelo leitor: o caixa passou para "Produto". O serviço digitado continua guardado.'); }
+        if (saleMode === 'service') { setMode('product'); feedback('Produto lido pelo leitor: entrou na mesma venda do serviço.'); }
         handleCode(code);
         return;
       }
@@ -2005,6 +2047,7 @@
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-cb{border:1px solid #f0c36d;background:#fff8e6;border-radius:12px;padding:10px 12px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-cb>div:first-child{display:flex;flex-direction:column}.fs-cb small{color:var(--nv-muted)}.fs-cb .fs-check{margin:0;font-size:14px}.fs-cb-pay{font-size:15px}.fs-cb-pay b{font-size:18px}
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
+  .fs-mix{border:1px solid var(--nv-border);border-radius:12px;margin:8px 0 12px;overflow:hidden}.fs-mix-head{font-size:13px;font-weight:700;padding:8px 10px 4px;color:var(--nv-muted)}.fs-mix-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--nv-border);font-size:14px}.fs-mix-row .fp-ic{width:16px;height:16px;flex:0 0 auto;color:var(--nv-muted)}.fs-mix-row small{color:var(--nv-muted)}.fs-svc-add{margin-top:4px}.fs-svc-tip{margin:6px 0 10px}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
 

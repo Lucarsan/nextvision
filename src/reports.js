@@ -12,6 +12,9 @@ const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const SCHEDULE = { daily: { hour: 18 }, weekly: { hour: 15, weekday: 6 }, monthly: { hour: 18 } };
 const KIND_LABEL = { daily: 'diário', weekly: 'semanal', monthly: 'mensal' };
 const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
+// Pagamento dividido (dinheiro + Pix…): cada parte; venda com uma forma só: a forma com o total.
+const payParts = x => Array.isArray(x.payments) && x.payments.length ? x.payments : [{ method: x.payment_method, amount_cents: x.total_cents }];
+const payLabel = x => payParts(x).map(p => (METHODS[p.method] || p.method) + (Array.isArray(x.payments) && x.payments.length ? ' ' + 'R$ ' + (p.amount_cents / 100).toFixed(2).replace('.', ',') : '')).join(' + ');
 const MOVE = { withdrawal: 'Sangria', deposit: 'Suprimento' };
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -52,7 +55,7 @@ export async function reportData(q, tenantId, kind, day) {
   const inRange = col => `${col} >= ($2::date::timestamp AT TIME ZONE $4) AND ${col} < ($3::date::timestamp AT TIME ZONE $4)`;
   const [t, sales, canceled, items, typed, expenses, moves, buys, newProducts, newCustomers, sessions, restock, bySeller, byDay, services] = await Promise.all([
     q('SELECT name,city,state FROM tenants WHERE id=$1', [tenantId]),
-    q(`SELECT x.sale_number,x.created_at,x.total_cents,x.discount_cents,x.payment_method,x.description,c.name customer,COALESCE(sl.name,u.name) seller
+    q(`SELECT x.sale_number,x.created_at,x.total_cents,x.discount_cents,x.payment_method,x.payments,x.description,c.name customer,COALESCE(sl.name,u.name) seller
        FROM sales x LEFT JOIN customers c ON c.id=x.customer_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} ORDER BY x.created_at`, range),
     q(`SELECT count(*)::int n,COALESCE(sum(total_cents),0)::int total FROM sales WHERE tenant_id=$1 AND canceled_at IS NOT NULL AND ${inRange('created_at')}`, range),
@@ -87,7 +90,7 @@ export async function reportData(q, tenantId, kind, day) {
        GROUP BY lower(i.name),i.device_model,i.supplier_name ORDER BY 5 DESC,1`, range)
   ]);
   const byMethod = {};
-  for (const s of sales.rows) { const m = byMethod[s.payment_method] ||= { n: 0, total: 0 }; m.n++; m.total += s.total_cents; }
+  for (const s of sales.rows) for (const p of payParts(s)) { const m = byMethod[p.method] ||= { n: 0, total: 0 }; m.n++; m.total += p.amount_cents; }
   const expByCat = {};
   for (const e of expenses.rows) { const k = e.category || 'Outros'; expByCat[k] = (expByCat[k] || 0) + e.amount_cents; }
   const salesTotal = sales.rows.reduce((a, s) => a + s.total_cents, 0);
@@ -192,7 +195,7 @@ ${table(['Produto', 'Código', R('Venda'), R('Custo'), R('Estoque')], d.new_prod
 ${h2(`Reposição — vendido e ainda não reposto (${d.restock.length})`)}
 ${table(['Produto', 'Modelo', R('Repor'), R('Estoque atual'), R('Custo estimado')], d.restock.map(r => [esc(r.name), esc(r.variant || ''), `<b>${r.pending}</b>`, r.stock_qty ?? '—', r.cost_cents != null ? brl(r.cost_cents * r.pending) : '—']), 'Nada para repor.')}
 
-${d.kind === 'daily' ? h2('Vendas do dia') + table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', R('Valor')], d.sales.map(s => [s.sale_number, hhmm(s.created_at, d.timezone), esc(s.seller || ''), esc(s.customer || '—'), esc(s.description || ''), esc(METHODS[s.payment_method] || ''), brl(s.total_cents)]), 'Nenhuma venda no dia.') : ''}
+${d.kind === 'daily' ? h2('Vendas do dia') + table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', R('Valor')], d.sales.map(s => [s.sale_number, hhmm(s.created_at, d.timezone), esc(s.seller || ''), esc(s.customer || '—'), esc(s.description || ''), esc(payLabel(s)), brl(s.total_cents)]), 'Nenhuma venda no dia.') : ''}
 
 ${d.sessions.length ? h2('Fechamentos de caixa') + table(['Fechado', 'Por', R('Esperado'), R('Contado'), R('Diferença')], d.sessions.map(s => { const diff = (s.counted_cash_cents ?? 0) - (s.expected_cash_cents ?? 0); return [new Date(s.closed_at).toLocaleString('pt-BR', { timeZone: d.timezone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), esc(s.who || ''), brl(s.expected_cash_cents), brl(s.counted_cash_cents), diff ? `<span style="color:${diff < 0 ? '#b42318' : '#027a48'}">${brl(diff)}</span>` : 'ok']; }), '') : ''}
 

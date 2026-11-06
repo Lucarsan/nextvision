@@ -27,7 +27,7 @@
     }).join('');
     return `<article class="ch-card${x.canceled_at ? ' ch-canceled' : ''}" data-text="${esc([x.description, ...x.items.map(i => [i.name, i.variant, i.device_model].join(' '))].join(' ').toLowerCase())}">
       <div class="ch-top"><div><b>${x.items.some(i => i.service) ? 'Serviço' : 'Compra'} #${x.sale_number}</b> · ${dt(x.created_at)}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}</div><b>${brl(x.total_cents)}</b></div>
-      <small>${METHODS[x.payment_method] || x.payment_method}${x.discount_cents ? ' · desconto ' + brl(x.discount_cents) : ''}${x.cashback_used_cents ? ' · cashback usado ' + brl(x.cashback_used_cents) : ''}${x.seller_name ? ' · atendido por ' + esc(x.seller_name) : ''}${x.canceled_at ? ` · <span class="ch-neg">cancelada: ${esc(x.cancel_reason || '')}</span>` : ''}</small>
+      <small>${Array.isArray(x.payments) && x.payments.length ? x.payments.map(p => `${METHODS[p.method] || p.method} ${brl(p.amount_cents)}`).join(' + ') : METHODS[x.payment_method] || x.payment_method}${x.discount_cents ? ' · desconto ' + brl(x.discount_cents) : ''}${x.cashback_used_cents ? ' · cashback usado ' + brl(x.cashback_used_cents) : ''}${x.seller_name ? ' · atendido por ' + esc(x.seller_name) : ''}${x.canceled_at ? ` · <span class="ch-neg">cancelada: ${esc(x.cancel_reason || '')}</span>` : ''}</small>
       ${items ? `<ul class="ch-items">${items}</ul>` : x.description ? `<p class="ch-desc">${esc(x.description)}</p>` : ''}
       ${items && x.description ? `<p class="ch-desc">${esc(x.description)}</p>` : ''}</article>`;
   }

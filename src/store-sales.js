@@ -13,6 +13,12 @@ const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
 const dayField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const phoneDigits = v => String(v || '').replace(/\D/g, '');
+const METHOD = z.enum(['cash', 'pix', 'debit', 'credit', 'other']);
+// Partes do pagamento de uma venda x (SQL): dividida = cada parte; senão, a forma única com o total.
+export const PAY_PARTS = `SELECT x.payment_method method,x.total_cents::bigint amount WHERE x.payments IS NULL
+  UNION ALL SELECT e->>'method',(e->>'amount_cents')::bigint FROM jsonb_array_elements(x.payments) e`;
+// O mesmo em JS, para uma venda já lida.
+export const payParts = x => Array.isArray(x.payments) && x.payments.length ? x.payments : [{ method: x.payment_method, amount_cents: x.total_cents }];
 
 export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid, audit, uuid }) {
   const tid = req => req.user.tenant_id;
@@ -75,8 +81,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }
 
   async function cashSummary(tenant, sessionId, client = { query: q }) {
-    const totals = await client.query(`SELECT payment_method,count(*)::int n,coalesce(sum(total_cents),0)::bigint total
-      FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY payment_method`, [sessionId, tenant]);
+    // Venda com pagamento dividido entra em cada forma com a sua parte (e conta 1 venda em cada forma).
+    const totals = await client.query(`SELECT p.method payment_method,count(*)::int n,coalesce(sum(p.amount),0)::bigint total
+      FROM sales x CROSS JOIN LATERAL (${PAY_PARTS}) p WHERE x.session_id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL GROUP BY p.method`, [sessionId, tenant]);
+    const nSales = (await client.query('SELECT count(*)::int n FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL', [sessionId, tenant])).rows[0].n;
     const moves = await client.query(`SELECT kind,method,count(*)::int n,coalesce(sum(amount_cents),0)::bigint total FROM cash_movements
       WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL GROUP BY kind,method`, [sessionId, tenant]);
     const s = await client.query('SELECT opening_cents FROM cash_sessions WHERE id=$1', [sessionId]);
@@ -93,7 +101,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const expenses = sum('expense');
     return {
       by_method: by,
-      sales_count: totals.rows.reduce((a, r) => a + r.n, 0),
+      sales_count: nSales,
       sales_total_cents: salesTotal,
       expenses_by_method: expensesBy,
       expenses_count: moves.rows.filter(r => r.kind === 'expense').reduce((a, r) => a + r.n, 0),
@@ -107,7 +115,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }
 
   async function sessionDetail(tenant, sessionId) {
-    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
+    const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.payments,x.description,x.created_at,x.canceled_at,x.cancel_reason,
         x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,COALESCE(sl.name,u.name) seller_name,
         COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents,
             'service',i.service,'gift',i.gift,'device_model',i.device_model,'supplier_name',i.supplier_name,'unit_cost_cents',i.unit_cost_cents,'warranty_days',i.warranty_days) ORDER BY i.position)
@@ -282,7 +290,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!c.rowCount) return bad(res, 404, 'Cliente não encontrado');
     const isOwner = req.user.role === 'owner';
     const [sales, orders, t] = await Promise.all([
-      q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,
+      q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.payment_method,x.payments,x.description,x.created_at,x.canceled_at,x.cancel_reason,
           COALESCE(sl.name,u.name) seller_name,o.order_number,
           COALESCE((SELECT json_agg(json_build_object('name',i.name,'variant',i.variant_name,'quantity',i.quantity,'total_cents',i.total_cents,'service',i.service,'gift',i.gift,
             'device_model',i.device_model,'warranty_days',i.warranty_days,
@@ -296,7 +304,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     ]);
     const ok = sales.rows.filter(x => !x.canceled_at);
     const byMethod = {};
-    for (const x of ok) { const m = byMethod[x.payment_method] ||= { count: 0, total_cents: 0 }; m.count++; m.total_cents += x.total_cents; }
+    for (const x of ok) for (const p of payParts(x)) { const m = byMethod[p.method] ||= { count: 0, total_cents: 0 }; m.count++; m.total_cents += p.amount_cents; }
     const today = (await q(`SELECT to_char((now() AT TIME ZONE $1)::date,'YYYY-MM-DD') d`, [TZ])).rows[0].d;
     const warranties = [];
     for (const x of ok) for (const i of x.items) if (i.warranty_until && i.warranty_until >= today) warranties.push({ sale_number: x.sale_number, name: i.name, device_model: i.device_model, until: i.warranty_until });
@@ -743,12 +751,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
-      payment_method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']),
+      payment_method: METHOD.optional(),
+      // Pagamento dividido (2 a 5 formas diferentes); a soma tem que dar o total cobrado (já com desconto e cashback).
+      payments: z.array(z.object({ method: METHOD, amount_cents: z.number().int().min(1).max(100000000) }).strict()).min(2).max(5).optional(),
       description: z.string().trim().max(300).default(''),
       order_id: uuid.optional(),
       // Saldo de cashback que o cliente quis usar nesta venda (abate do total; o resto é pago na forma escolhida).
       cashback_use_cents: cents.optional()
     }).strict(), req, res); if (!v) return;
+    if (!v.payment_method === !v.payments) return bad(res, 400, 'Escolha a forma de pagamento');
+    if (v.payments && new Set(v.payments.map(p => p.method)).size !== v.payments.length) return bad(res, 400, 'Cada forma de pagamento só pode aparecer uma vez');
     if (v.cashback_use_cents && !v.customer_id) return bad(res, 400, 'Cashback só pode ser usado por cliente já cadastrado');
     if ([v.customer_id, v.new_customer, v.anonymous || undefined].filter(Boolean).length !== 1) return bad(res, 400, 'Escolha o cliente da venda');
     if (v.order_id && !v.customer_id) return bad(res, 400, 'Pedido exige cliente');
@@ -838,9 +850,14 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (v.cashback_use_cents > allowed) { await c.query('ROLLBACK'); return bad(res, 400, allowed ? `O cliente pode usar no máximo ${money(allowed)} de cashback nesta venda. Atualize a venda.` : 'O cliente não tem cashback disponível para esta venda. Atualize a venda.'); }
         cbUsed = v.cashback_use_cents; total -= cbUsed; spread(items, cbUsed);
       }
+      if (v.payments) {
+        const paid = v.payments.reduce((a, p) => a + p.amount_cents, 0);
+        if (paid !== total) { await c.query('ROLLBACK'); return bad(res, 400, `As formas de pagamento somam ${money(paid)}, mas o total a pagar é ${money(total)}. Confira os valores.`); }
+      }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
+      if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
       if (cbUsed) {
         const use = (await c.query('INSERT INTO cashback_uses(tenant_id,customer_id,sale_id,amount_cents) VALUES($1,$2,$3,$4) RETURNING id', [tid(req), customerId, sale.id, cbUsed])).rows[0];
         let left = cbUsed; // consome primeiro o que vence antes
@@ -896,7 +913,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // Comprovante de uma venda (impressora térmica 80 mm). Não é documento fiscal.
   app.get('/api/store/sales/:id/receipt', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
-    const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
+    const r = await q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.payments,x.description,x.created_at,x.canceled_at,x.cancel_reason,x.customer_id,
         c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,COALESCE(sl.name,u.name) seller_name,
         t.name store_name,t.city,t.state,t.whatsapp,
         COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,'') || CASE WHEN i.service AND i.device_model IS NOT NULL THEN ' · ' || i.device_model ELSE '' END,

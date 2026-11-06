@@ -21,6 +21,8 @@
   // Nome do cliente: clicar abre o histórico dele (customer-history.js).
   const custLink = (id, html) => id ? `<span class="fp-cust-link" role="button" tabindex="0" data-customer-history="${esc(id)}" title="Ver o histórico do cliente">${html}</span>` : html;
   const METHODS = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro' };
+  // Pagamento dividido (dinheiro + Pix…): "Dinheiro R$ 50,00 + Pix R$ 30,00"; forma única: só o nome.
+  const payLabel = x => Array.isArray(x.payments) && x.payments.length ? x.payments.map(p => `${METHODS[p.method] || p.method} <span class="fs-payamt">${brl(p.amount_cents)}</span>`).join(' + ') : (METHODS[x.payment_method] || x.payment_method || '');
   const MOVE_LABEL = { expense: 'Despesa', withdrawal: 'Sangria', deposit: 'Suprimento' };
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
   const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\n{cashback}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
@@ -167,7 +169,7 @@
     const s = data.session, sum = data.summary;
     const methods = Object.entries(sum.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('') || '<span class="nv-help">Nenhuma venda ainda.</span>';
     const saleRow = x => { const svc = (x.items || []).find(i => i.service);
-      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}${svc ? ' <span class="fs-tag-svc">' + FPIcon('wrench') + 'Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${METHODS[x.payment_method]}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">${FPIcon('receipt')}</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
+      return `<div class="fs-sale ${x.canceled_at ? 'canceled' : ''}"><div><b>#${x.sale_number}</b> · ${hhmm(x.created_at)} · ${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}${svc ? ' <span class="fs-tag-svc">' + FPIcon('wrench') + 'Serviço</span>' : ''}${x.seller_name ? ` · <span class="fs-seller-tag">${esc(x.seller_name)}</span>` : ''}${x.order_number ? ` · pedido ${esc(x.order_number)}` : ''}<br><small>${payLabel(x)}${x.cashback_used_cents ? ` · <span class="fs-cb-note">cashback −${brl(x.cashback_used_cents)}</span>` : ''}${x.description ? ' · ' + esc(x.description) : ''}${x.canceled_at ? ` · <span class="fs-neg">cancelada por ${esc(x.canceled_by_name || '—')} às ${hhmm(x.canceled_at)}: ${esc(x.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b>${brl(x.total_cents)}</b><button type="button" class="nv-button secondary fs-small" data-fs-receipt="${x.id}" title="Imprimir comprovante" aria-label="Imprimir comprovante da venda ${x.sale_number}">${FPIcon('receipt')}</button>${x.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-cancel="${x.id}">Cancelar</button>`}</div></div>`; };
     box.innerHTML = `
       <section class="nv-card fs-cashbar"><div class="fs-cashbar-info"><div class="nv-card-label">Caixa aberto às ${hhmm(s.opened_at)} por ${esc(s.opened_by_name)}</div>
         <div class="fs-kpis"><div><small>Entradas (${sum.sales_count} vendas)</small><b class="fs-pos">${brl(sum.sales_total_cents)}</b></div>${basic() ? '' : `<div title="Preço de custo das mercadorias, peças e brindes que saíram neste caixa"><small>Custos</small><b class="fs-cost">${brl(sum.costs_cents)}</b></div>`}<div><small>Dinheiro na gaveta</small><b>${brl(sum.expected_cash_cents)}</b></div><div><small>Despesas</small><b class="fs-neg">${brl(sum.expenses_total_cents)}</b></div>${basic() ? '' : `<div title="Entradas − custos − despesas"><small>Saldo do dia</small><b class="${sum.net_cents < 0 ? 'fs-neg' : 'fs-pos'}">${brl(sum.net_cents)}</b></div>`}</div></div>
@@ -196,8 +198,9 @@
           <div class="fs-quick" id="fsQuick" data-only="product"></div>
           <div class="fs-row" data-only="product"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00"></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
-          <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>
-          <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
+          <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}<label title="Parte em uma forma, parte em outra (ex.: dinheiro + Pix)"><input type="radio" name="method" value="split"><span>Dividir</span></label></fieldset>
+          <div id="fsSplit" class="fs-split" hidden></div>
+          <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field"><span id="fsReceivedLabel">Valor recebido</span><input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
           <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> Imprimir comprovante ao registrar</label>
           <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
@@ -205,15 +208,17 @@
     saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
     const sf = $('fsSale');
     const updChange = () => {
-      const cash = sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
-      drawMix(); drawCashbackBox();
-      const out = $('fsChangeOut'), total = payable(), got = parseMoney(sf.elements.received.value);
+      const split = isSplit(); drawMix(); drawCashbackBox(); drawSplit();
+      const cash = split ? cashPart() > 0 : sf.elements.method.value === 'cash'; $('fsChangeBox').hidden = !cash;
+      $('fsReceivedLabel').textContent = split ? 'Recebido em dinheiro' : 'Valor recebido';
+      const out = $('fsChangeOut'), total = split ? cashPart() : payable(), got = parseMoney(sf.elements.received.value);
       if (!cash || !Number.isFinite(got)) { out.textContent = ''; return; }
       if (!Number.isFinite(total) || total <= 0) { out.textContent = 'Informe o valor da venda.'; return; }
       const d = got - total;
       out.innerHTML = d >= 0 ? `Troco: <b>${brl(d)}</b>` : `<span class="fs-neg">Faltam ${brl(-d)}</span>`;
     };
     sf.addEventListener('input', updChange); sf.addEventListener('change', updChange);
+    sf.addEventListener('change', e => { if (e.target.name === 'method' && e.target.value === 'split') $('fsSplit').querySelector('[data-split-v]')?.focus(); });
     setupScanInput(); drawCart(); drawService(); setMode(saleMode); updChange(); setupEye(box);
     box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => setMode(b.dataset.fsMode, true));
     $('fsProducts').onclick = () => productsDialog();
@@ -296,6 +301,48 @@
     const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker(); $('fsSale')?.dispatchEvent(new Event('input'));
     const box = $('fsOrderBox');
     box.innerHTML = c.orders.length ? `<label class="nv-field">É pagamento de um pedido de serviço? (opcional)<select id="fsOrder"><option value="">Não, venda avulsa</option>${c.orders.map(o => `<option value="${o.id}">Pedido ${esc(o.order_number || '')} · ${esc(o.details?.model || o.details?.brand || o.process || '')} · ${o.status === 'completed' ? 'finalizado' : 'em andamento'} · ${dmy(o.created_at)}</option>`).join('')}</select><small>Pedido de serviço já conta no cartão quando é finalizado; a venda dele não conta de novo.</small></label>` : '';
+  }
+
+  // ---------------- Pagamento dividido ----------------
+  // "Dividir": o operador digita o valor de cada forma, menos a última, que fica com o que falta.
+  // A parte em dinheiro é a que conta para troco e para a gaveta.
+  let splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+  const isSplit = () => $('fsSale')?.elements.method.value === 'split';
+  function splitParts() {
+    const t = payable(), head = splitRows.slice(0, -1).map(r => ({ method: r.method, amount_cents: parseMoney(r.amount) }));
+    const used = head.reduce((a, p) => a + (Number.isFinite(p.amount_cents) ? p.amount_cents : 0), 0);
+    return [...head, { method: splitRows[splitRows.length - 1].method, amount_cents: Number.isFinite(t) ? t - used : NaN }];
+  }
+  const cashPart = () => isSplit() ? Math.max(0, splitParts().find(p => p.method === 'cash')?.amount_cents || 0) : 0;
+  function splitError(parts) {
+    if (new Set(parts.map(p => p.method)).size !== parts.length) return 'Cada forma de pagamento só pode aparecer uma vez.';
+    if (parts.slice(0, -1).some(p => !Number.isFinite(p.amount_cents) || p.amount_cents <= 0)) return 'Informe o valor de cada forma de pagamento.';
+    const last = parts[parts.length - 1];
+    if (!Number.isFinite(last.amount_cents)) return 'Informe o valor da venda.';
+    if (last.amount_cents <= 0) return 'Os valores digitados já cobrem o total: tire uma forma ou diminua os valores.';
+    return '';
+  }
+  function drawSplit() {
+    const box = $('fsSplit'); if (!box) return;
+    if (!isSplit()) { box.hidden = true; return; }
+    box.hidden = false;
+    const parts = splitParts(), lastI = splitRows.length - 1;
+    const shape = splitRows.map(r => r.method).join(',');
+    if (box.dataset.shape !== shape) {
+      const opts = sel => Object.entries(METHODS).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${v}</option>`).join('');
+      box.innerHTML = splitRows.map((r, i) => `<div class="fs-split-row"><select data-split-m="${i}" aria-label="Forma ${i + 1}">${opts(r.method)}</select>
+          ${i < lastI ? `<input data-split-v="${i}" inputmode="decimal" placeholder="0,00" value="${esc(r.amount || '')}" aria-label="Valor em ${METHODS[r.method]}">` : `<span class="fs-split-rest" id="fsSplitRest" aria-live="polite"></span>`}
+          ${splitRows.length > 2 ? `<button type="button" class="fs-cart-del" data-split-del="${i}" aria-label="Tirar esta forma">${FPIcon('x')}</button>` : ''}</div>`).join('')
+        + (splitRows.length < 5 ? '<button type="button" class="fs-link" id="fsSplitAdd">+ outra forma</button>' : '') + '<small class="nv-help">A última forma fica com o que falta.</small>';
+      box.dataset.shape = shape;
+      const again = () => { box.dataset.shape = ''; $('fsSale').dispatchEvent(new Event('input')); };
+      box.querySelectorAll('[data-split-m]').forEach(sl => sl.onchange = e => { e.stopPropagation(); splitRows[+sl.dataset.splitM].method = sl.value; again(); });
+      box.querySelectorAll('[data-split-v]').forEach(inp => inp.oninput = () => { splitRows[+inp.dataset.splitV].amount = inp.value; });
+      box.querySelectorAll('[data-split-del]').forEach(b => b.onclick = () => { splitRows.splice(+b.dataset.splitDel, 1); again(); });
+      const add = $('fsSplitAdd'); if (add) add.onclick = () => { const used = new Set(splitRows.map(r => r.method)); const m = Object.keys(METHODS).find(k => !used.has(k)) || 'other'; splitRows.splice(splitRows.length - 1, 0, { method: m, amount: '' }); again(); box.querySelector(`[data-split-v="${splitRows.length - 2}"]`)?.focus(); };
+    }
+    const rest = $('fsSplitRest'), last = parts[lastI];
+    if (rest) rest.innerHTML = !Number.isFinite(last.amount_cents) ? 'informe o valor da venda' : last.amount_cents > 0 ? `<b>${brl(last.amount_cents)}</b> <small>(o que falta)</small>` : `<span class="fs-neg">passou ${brl(-last.amount_cents)} do total</span>`;
   }
 
   // ---------------- Cashback na venda ----------------
@@ -444,9 +491,11 @@
     const services = [...svcCart, ...(pendingSvc() ? [svc] : [])], service = services.length > 0, onlyService = service && !productPart();
     const total = currentTotal();
     if (!Number.isFinite(total) || total <= 0) { status.textContent = saleMode === 'service' && !service ? 'Informe o serviço e o preço de venda.' : 'Informe o valor da venda.'; return; }
-    const received = f.elements.method.value === 'cash' && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
-    const toPay = payable();
-    if (received != null && (!Number.isFinite(received) || received < toPay)) { status.textContent = 'O valor recebido é menor que o valor a pagar.'; return; }
+    const split = isSplit(), parts = split ? splitParts() : null;
+    if (split) { const err = splitError(parts); if (err) { status.textContent = err; return; } }
+    const cashDue = split ? cashPart() : f.elements.method.value === 'cash' ? payable() : 0;
+    const received = cashDue > 0 && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
+    if (received != null && (!Number.isFinite(received) || received < cashDue)) { status.textContent = split ? 'O dinheiro recebido é menor que a parte em dinheiro.' : 'O valor recebido é menor que o valor a pagar.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
     // Produtos e itens frequentes vão juntos como itens; descrição automática fica para o servidor montar com todos.
     const desc = f.elements.description.value.trim();
@@ -462,13 +511,14 @@
         : { total_cents: total, payment_method: f.elements.method.value, description: desc };
     const noPrice = quickCart.find(x => x.unit == null);
     if (noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
+    if (split) { delete body.payment_method; body.payments = parts; }
     const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
     if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0) body.cashback_use_cents = use; }
     else if (saleCustomer?.anonymous) body.anonymous = true;
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - lastSale.sale.total_cents : null;
+    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -1760,7 +1810,7 @@
       ${r.discount_cents ? `<div class="row small"><span>Desconto concedido (já nos valores acima)</span><span>${brl(r.discount_cents)}</span></div>` : ''}
       ${r.cashback_used_cents ? `<div class="row small"><span>Cashback usado (já nos valores acima)</span><span>− ${brl(r.cashback_used_cents)}</span></div>` : ''}
       <div class="row tot"><span>${r.cashback_used_cents ? 'TOTAL PAGO' : 'TOTAL'}</span><span>${brl(r.total_cents)}</span></div>
-      <div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>
+      ${Array.isArray(r.payments) && r.payments.length ? r.payments.map(p => `<div class="row"><span>Pago em ${esc(METHODS[p.method] || p.method)}</span><span>${brl(p.amount_cents)}</span></div>`).join('') : `<div class="row"><span>Pagamento</span><span>${METHODS[r.payment_method]}</span></div>`}
       ${extra.received_cents != null ? `<div class="row"><span>Valor recebido</span><span>${brl(extra.received_cents)}</span></div><div class="row"><span>Troco</span><span>${brl(extra.change_cents)}</span></div>` : ''}
       ${l ? `<div class="hr"></div><div class="c">${l.complete ? `Cartão fidelidade completo! Prêmio: ${esc(l.reward)}` : `Cartão fidelidade: ${l.checkins} de ${l.target}. Faltam ${l.remaining} para ganhar: ${esc(l.reward)}`}</div>` : ''}
       ${r.cashback && (r.cashback_earned_cents || r.cashback.balance_cents) ? `<div class="hr"></div><div class="c">${r.cashback_earned_cents ? `Cashback ganho nesta compra: <b>${brl(r.cashback_earned_cents)}</b><br>` : ''}Saldo de cashback: <b>${brl(r.cashback.balance_cents)}</b>${r.cashback.next_expires_on ? `<br><span class="small">${r.cashback.next_expiring_cents < r.cashback.balance_cents ? brl(r.cashback.next_expiring_cents) + ' vence em' : 'Válido até'} ${ymdShort(r.cashback.next_expires_on)}</span>` : ''}</div>` : ''}
@@ -1836,7 +1886,7 @@
       ${table(['Hora', 'Categoria', 'Descrição', 'Forma', 'Lançado por', '<span class="n">Valor</span>'], expenses.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${esc(m.category)}</td><td>${esc(m.note)}</td><td>${METHODS[m.method]}</td><td>${esc(m.created_by_name)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`), 'Nenhuma despesa.')}
       ${transfers.length ? `<h2>Sangrias e suprimentos</h2>${table(['Hora', 'Tipo', 'Motivo', 'Lançado por', '<span class="n">Valor</span>'], transfers.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${MOVE_LABEL[m.kind]}</td><td>${esc(m.note)}</td><td>${esc(m.created_by_name)}</td><td class="n">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</td></tr>`), '')}` : ''}
       <h2>Vendas (${sales.length}${sales.length ? ` · ${Math.round(100 * linked / sales.length)}% com cliente identificado` : ''})</h2>
-      ${table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.seller_name || '')}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${METHODS[x.payment_method]}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
+      ${table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.seller_name || '')}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${payLabel(x)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
       ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', 'Aparelho', 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents) : '—'}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents) : '—'}</td></tr>`), '')}` : ''}
       ${salesCanceled.length || movesCanceled.length ? `<h2>Cancelamentos</h2>${table(['Item', 'Cancelado por', 'Quando', 'Motivo', '<span class="n">Valor</span>'], [...salesCanceled.map(x => `<tr><td>Venda ${x.sale_number}${x.customer_name ? ' · ' + esc(x.customer_name) : ''}</td><td>${esc(x.canceled_by_name || '—')}</td><td>${hhmm(x.canceled_at)}</td><td>${esc(x.cancel_reason)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), ...movesCanceled.map(m => `<tr><td>${MOVE_LABEL[m.kind]}${m.category ? ' · ' + esc(m.category) : ''}</td><td>${esc(m.canceled_by_name || '—')}</td><td>${hhmm(m.canceled_at)}</td><td>${esc(m.cancel_reason)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`)], '')}` : ''}
       <div class="sign"><div>Responsável pelo caixa</div><div>Conferido por</div></div>
@@ -2036,7 +2086,7 @@
   .fs-neg{color:#b42318}.fs-pos{color:#027a48}.fs-check{display:flex;gap:8px;align-items:center;margin-bottom:8px}.fs-table{overflow:auto}.fs-table table{width:100%;border-collapse:collapse;font-size:14px}.fs-table th,.fs-table td{text-align:left;padding:8px;border-bottom:1px solid var(--nv-border);vertical-align:top}
   .fs-open{max-width:640px}.fs-moves{margin-top:16px}.fs-pill-out{background:#fdecea}.fs-kpis b.fs-pos{color:#027a48}.fs-kpis b.fs-neg{color:#b42318}.fs-change{align-items:center;margin-bottom:4px}.fs-change-out{font-size:20px;padding-top:18px}.fs-quick{margin:4px 0 10px}.fs-quick-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;margin-bottom:6px}.fs-link{background:none;border:0;color:var(--nv-blue,#2563eb);font-size:13px;cursor:pointer;padding:4px}.fs-chips{display:flex;flex-wrap:wrap;gap:8px}.fs-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;background:var(--nv-blue-soft,#eef4ff);cursor:pointer;font-size:14px;min-height:44px;text-align:left}.fs-chip small{font-size:12px;opacity:.75}.fs-chip:active{transform:scale(.97)}.fs-cart{margin-top:10px;border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:4px 10px;background:#fafafa}.fs-cart-row{display:grid;grid-template-columns:minmax(0,1fr) auto 76px 28px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #eee}.fs-cart-name{font-size:14px;font-weight:600;min-width:0;overflow-wrap:anywhere}.fs-cart-name small{display:block;font-weight:400;font-size:12px;opacity:.7}.fs-qq{display:inline-flex;align-items:center;border:1px solid var(--nv-border,#d0d5dd);border-radius:10px;overflow:hidden;background:#fff}.fs-qq button{border:0;background:none;width:34px;height:36px;font-size:18px;cursor:pointer}.fs-qq input{width:52px;height:36px;border:0;text-align:center;font:inherit;font-size:15px;-moz-appearance:textfield}.fs-qq input::-webkit-inner-spin-button{-webkit-appearance:none}.fs-cart-sub{text-align:right;font-size:14px}.fs-cart-del{border:0;background:none;cursor:pointer;color:#b42318;font-size:15px}.fs-cart-foot{display:flex;justify-content:space-between;align-items:center;padding:8px 0 4px;font-size:14px}@media(max-width:420px){.fs-cart-row{grid-template-columns:minmax(0,1fr) auto 28px}.fs-cart-sub{grid-column:1/3;text-align:left;font-size:13px}}.fs-quick-empty{margin:0}
   .fs-private .fs-kpis b,.fs-private .fs-methods-sum b,.fs-private .fs-sale-end>b,.fs-private .fs-opening,.fs-private .fs-lastclose{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none;-webkit-user-select:none}
-  .fs-private .fs-lastclose b{color:transparent!important}
+  .fs-private .fs-lastclose b{color:transparent!important}.fs-private .fs-payamt{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none}
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
@@ -2047,6 +2097,7 @@
   .fs-flash{animation:fsFlash 1s ease-out}@keyframes fsFlash{from{background:var(--nv-blue-soft)}to{background:transparent}}
   .fs-cb{border:1px solid #f0c36d;background:#fff8e6;border-radius:12px;padding:10px 12px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-cb>div:first-child{display:flex;flex-direction:column}.fs-cb small{color:var(--nv-muted)}.fs-cb .fs-check{margin:0;font-size:14px}.fs-cb-pay{font-size:15px}.fs-cb-pay b{font-size:18px}
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
+  .fs-split{border:1px solid var(--nv-border);border-radius:12px;padding:8px 10px;margin:-2px 0 10px;display:grid;gap:6px}.fs-split-row{display:flex;gap:8px;align-items:center}.fs-split-row select,.fs-split-row input{padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:#fff}.fs-split-row select{flex:0 0 130px}.fs-split-row input{flex:1;min-width:0}.fs-split-rest{flex:1;font-size:15px}.fs-split .fs-link{justify-self:start}
   .fs-mix{border:1px solid var(--nv-border);border-radius:12px;margin:8px 0 12px;overflow:hidden}.fs-mix-head{font-size:13px;font-weight:700;padding:8px 10px 4px;color:var(--nv-muted)}.fs-mix-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--nv-border);font-size:14px}.fs-mix-row .fp-ic{width:16px;height:16px;flex:0 0 auto;color:var(--nv-muted)}.fs-mix-row small{color:var(--nv-muted)}.fs-svc-add{margin-top:4px}.fs-svc-tip{margin:6px 0 10px}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

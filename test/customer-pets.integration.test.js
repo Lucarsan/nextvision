@@ -39,3 +39,42 @@ test('pets do tutor: API, pedido e lista de clientes', {
     assert.equal(await del(pet.id), 404);
   } finally { await f.cleanup(); }
 });
+
+// Importação das planilhas de outro sistema (clientes.xls / animais.xls em HTML).
+test('importação de outro sistema: clientes e animais, sem duplicar', {
+  skip: process.env.TEST_DATABASE_URL ? false : 'Set TEST_DATABASE_URL', timeout: 90000
+}, async () => {
+  await import('../public/legacy-import.js'); const L = globalThis.FPLegacy;
+  // Linhas de cliente sem <tr> de abertura, como no arquivo real.
+  const clientes = `<html><table><tr><th>CdCliente</th><th>Nome</th><th>Nascimento</th><th>Email</th><th>CPF</th><th>Endereco</th><th>Numero</th><th>Complemento</th><th>Bairro</th><th>Cidade</th><th>Estado</th><th>CEP</th><th>DataCadastro</th><th>Telefone</th></tr>
+<td>10</td><td>Klany Lopes</td><td>0000-00-00</td><td>KLANY@ME.COM</td><td>529.982.247-25</td><td>RUA LOURDES VIDAL</td><td>999</td><td></td><td>LAGOA REDONDA</td><td>fortaleza</td><td>ce</td><td>60.831-000</td><td>2022-11-05 08:58:11</td><td>5585997802475</td></tr>
+<td>11</td><td>Amauri &amp; Cia</td><td>1980-02-30</td><td>sem-email</td><td>111.111.111-11</td><td></td><td></td><td></td><td></td><td></td><td></td><td>123</td><td>2022-11-06 10:00:00</td><td>85 8864-4736</td></tr></table>`;
+  const animais = `<table><tr><th>CdAnimal</th><th>CdCliente</th><th>Nome</th><th>Especie</th><th>Raca</th><th>Sexo</th><th>Nascimento</th><th>Cor</th><th>Peso</th><th>Porte</th><th>IF(A.Pelagem='G','Longo',IF(A.Pelagem='P','Médio','Curto'))</th><th>Castrado</th><th>Obs</th><th>Planos</th><th>Vacina Raiva</th></tr>
+<tr><td>1</td><td>10</td><td>Malfoy</td><td>CAO</td><td>Yorkshire</td><td>M</td><td>2016-05-24</td><td>Preto</td><td>7.00</td><td>P</td><td>Curto</td><td>Não</td><td>PRENHA</td><td>Pacote Nv2</td><td>2023-02-02</td></tr>
+<tr><td>2</td><td>10</td><td>Amora</td><td>Gato</td><td></td><td>F</td><td>0000-00-00</td><td></td><td>0.00</td><td>Mi</td><td>Longo</td><td>Sim</td><td></td><td></td><td></td></tr>
+<tr><td>3</td><td>99</td><td>Sem dono</td><td>Cão</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr></table>`;
+  const customers = L.mapCustomers(L.parseTable(clientes)), pets = L.mapPets(L.parseTable(animais));
+  assert.deepEqual(customers[0], { ext: '10', name: 'Klany Lopes', phone: '(85) 99780-2475', email: 'klany@me.com', cpf: '52998224725', birth: null, address: 'Rua Lourdes Vidal, 999 - Lagoa Redonda - Fortaleza/CE', cep: '60831000', created: '2022-11-05 08:58:11' });
+  assert.equal(customers[1].name, 'Amauri & Cia'); assert.equal(customers[1].cpf, null); assert.equal(customers[1].email, null); assert.equal(customers[1].birth, null); assert.equal(customers[1].phone, '(85) 8864-4736');
+  assert.equal(pets[0].species, 'Cão'); assert.equal(pets[0].size, 'Pequeno'); assert.equal(pets[0].coat, null); assert.equal(pets[0].neutered, false);
+  assert.equal(pets[0].notes, 'PRENHA\nPlano: Pacote Nv2\nVacina Raiva: 02/02/2023');
+  assert.equal(pets[1].weight, null); assert.equal(pets[1].size, 'Mini'); assert.equal(pets[1].coat, 'Longo'); assert.equal(pets[1].neutered, true);
+
+  const f = await createStoreFixture(); const { api, request } = f;
+  try {
+    const operator = (await f.addOperator(f.tenant)).token;
+    assert.equal((await request('/customers/import-legacy', { method: 'POST', body: { customers }, token: operator })).status, 403);
+    assert.deepEqual(await api('/customers/import-legacy', { method: 'POST', body: { customers } }), { customers: 2, pets: 0, orphan_pets: 0 });
+    assert.deepEqual(await api('/customers/import-legacy', { method: 'POST', body: { pets } }), { customers: 0, pets: 2, orphan_pets: 1 });
+    // Repetir não duplica.
+    assert.deepEqual(await api('/customers/import-legacy', { method: 'POST', body: { customers, pets } }), { customers: 0, pets: 0, orphan_pets: 1 });
+    const list = await api('/customers');
+    const klany = list.find(c => c.name === 'Klany Lopes');
+    assert.equal(klany.source, 'importado'); assert.equal(klany.cpf, '52998224725'); assert.equal(klany.postal_code, '60831000');
+    assert.deepEqual(klany.pets.map(p => p.name), ['Amora', 'Malfoy']);
+    assert.equal(new Date(klany.created_at).toISOString(), '2022-11-05T11:58:11.000Z');
+    // Outra loja importa o mesmo código sem conflito.
+    assert.equal((await request('/customers/import-legacy', { method: 'POST', body: { customers }, token: f.foreignToken })).data.customers, 2);
+    assert.equal((await request('/customers/import-legacy', { method: 'POST', body: { customers: [{ ext: '1', name: 'X', foo: 1 }] } })).status, 400);
+  } finally { await f.cleanup(); }
+});

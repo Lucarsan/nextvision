@@ -382,7 +382,7 @@ function parseCsv(raw) {
 }
 async function loadCustomers(box, version) {
   const customers = await api('/customers'); if(version !== viewVersion) return; cachedCustomers = customers;
-  box.innerHTML = `<section class="nv-card"><div class="nv-heading"><h2>Clientes</h2><button class="nv-button" id="newCustomer">+ Cadastrar cliente</button></div><div class="nv-heading"><input id="customerSearch" type="search" placeholder="Pesquisar por nome, telefone, e-mail ou endereço" aria-label="Pesquisar clientes"><span id="customerCount" class="nv-help"></span></div><div id="customerList" class="nv-customer-list"></div></section><details class="nv-card"><summary>Importar clientes por CSV</summary><p class="nv-help">Colunas: Nome, Email, Telefone e Endereco. Até 300 clientes por arquivo.</p><input id="customerCsv" type="file" accept=".csv,text/csv"><p id="importPreview" role="status"></p><button class="nv-button secondary" id="importConfirm" disabled>Importar lista</button></details>`;
+  box.innerHTML = `<section class="nv-card"><div class="nv-heading"><h2>Clientes</h2><button class="nv-button" id="newCustomer">+ Cadastrar cliente</button></div><div class="nv-heading"><input id="customerSearch" type="search" placeholder="Pesquisar por nome, telefone, e-mail ou endereço" aria-label="Pesquisar clientes"><span id="customerCount" class="nv-help"></span></div><div id="customerList" class="nv-customer-list"></div></section><details class="nv-card"><summary>Importar clientes por CSV</summary><p class="nv-help">Colunas: Nome, Email, Telefone e Endereco. Até 300 clientes por arquivo.</p><input id="customerCsv" type="file" accept=".csv,text/csv"><p id="importPreview" role="status"></p><button class="nv-button secondary" id="importConfirm" disabled>Importar lista</button></details>${window.__fpRole === 'owner' ? `<details class="nv-card"><summary>Importar de outro sistema (clientes e animais)</summary><p class="nv-help">Escolha as planilhas exportadas do sistema antigo: a de clientes e, se tiver, a de animais. Pode repetir a importação: quem já foi importado não é duplicado.</p><div class="nv-field"><label for="legacyClients">Clientes (.xls)</label><input id="legacyClients" type="file" accept=".xls,.html,.htm"></div><div class="nv-field"><label for="legacyPets">Animais (.xls)</label><input id="legacyPets" type="file" accept=".xls,.html,.htm"></div><p id="legacyStatus" role="status"></p><button class="nv-button secondary" id="legacyConfirm" disabled>Importar</button></details>` : ''}`;
   $('customerSearch').oninput = drawCustomers;
   $('newCustomer').onclick = () => {
     openDialog(`${dialogHeader('Cadastrar cliente')}<form id="customerForm">${customerFields()}<button class="nv-button">Cadastrar cliente</button><p role="status"></p></form>`);
@@ -403,6 +403,28 @@ async function loadCustomers(box, version) {
     } catch (error) { $('importPreview').textContent = error.message; }
   };
   $('importConfirm').onclick = async () => { const button = $('importConfirm'); button.disabled = true; try { await api('/customers/import', 'POST', { customers: importRows }); cachedCustomers = await api('/customers'); drawCustomers(); $('importPreview').textContent = 'Importação concluída.'; } catch (error) { $('importPreview').textContent = error.message; button.disabled = false; } };
+  if ($('legacyClients')) {
+    let legacy = { customers: [], pets: [] };
+    const readLegacy = async () => {
+      $('legacyConfirm').disabled = true;
+      try {
+        const read = async input => { const file = input.files[0]; if (!file) return []; if (file.size > 15e6) throw Error('Arquivo grande demais (máx. 15 MB)'); return FPLegacy.parseTable(await file.text()); };
+        legacy = { customers: FPLegacy.mapCustomers(await read($('legacyClients'))), pets: FPLegacy.mapPets(await read($('legacyPets'))) };
+        if (!legacy.customers.length && !legacy.pets.length) throw Error('Nenhum cliente encontrado. Confira se é a planilha exportada do sistema antigo.');
+        $('legacyStatus').textContent = `${legacy.customers.length} clientes e ${legacy.pets.length} animais prontos para importar.`; $('legacyConfirm').disabled = false;
+      } catch (error) { $('legacyStatus').textContent = error.message; }
+    };
+    $('legacyClients').onchange = readLegacy; $('legacyPets').onchange = readLegacy;
+    $('legacyConfirm').onclick = async () => {
+      const button = $('legacyConfirm'); button.disabled = true; const total = { customers: 0, pets: 0, orphan: 0 };
+      try {
+        const send = async (key, list) => { for (let i = 0; i < list.length; i += 300) { $('legacyStatus').textContent = `Importando ${key === 'customers' ? 'clientes' : 'animais'}… ${Math.min(i + 300, list.length)} de ${list.length}`; const r = await api('/customers/import-legacy', 'POST', { [key]: list.slice(i, i + 300) }); total.customers += r.customers; total.pets += r.pets; total.orphan += r.orphan_pets || 0; } };
+        await send('customers', legacy.customers); await send('pets', legacy.pets);
+        cachedCustomers = await api('/customers'); drawCustomers();
+        $('legacyStatus').textContent = `Concluído: ${total.customers} clientes e ${total.pets} animais novos.` + (total.orphan ? ` ${total.orphan} animais sem tutor na planilha de clientes ficaram de fora.` : '') + (total.customers + total.pets === 0 ? ' Nada novo: tudo já estava importado.' : '');
+      } catch (error) { $('legacyStatus').textContent = error.message + ' — pode tentar de novo, nada é duplicado.'; button.disabled = false; }
+    };
+  }
   drawCustomers();
 }
 

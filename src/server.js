@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
+import {registerLegacyImport} from './legacy-import.js';
 import {registerCustomerPets,savePetFromOrder} from './customer-pets.js';
 import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
@@ -47,7 +48,7 @@ const deviceAuth=route(async(req,res,next)=>{
  req.device=result.rows[0];next();
 });
 registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
-registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});
+registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});
 registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});registerStoreTools(app,{q,db,auth,roles,route,bad,valid,audit});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');

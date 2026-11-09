@@ -88,15 +88,16 @@
   };
 
   // Busca de cliente: digita parte do nome, telefone ou CPF e escolhe.
-  function customerPicker(container, customers, onPick) {
-    container.innerHTML = `<div class="fp-combo"><input type="search" class="fp-combo-input" placeholder="Digite o nome, telefone ou CPF do cliente" autocomplete="off" aria-label="Buscar cliente" role="combobox" aria-expanded="false"><input type="hidden" name="customer_id" required><ul class="fp-combo-list" role="listbox" hidden></ul><div class="fp-combo-picked" hidden></div></div>`;
+  function customerPicker(container, customers, onPick, opts = {}) {
+    container.innerHTML = `<div class="fp-combo"><input type="search" class="fp-combo-input" placeholder="${esc(opts.placeholder || 'Digite o nome, telefone ou CPF do cliente')}" autocomplete="off" aria-label="Buscar cliente" role="combobox" aria-expanded="false"><input type="hidden" name="customer_id" required><ul class="fp-combo-list" role="listbox" hidden></ul><div class="fp-combo-picked" hidden></div></div>`;
     const input = container.querySelector('.fp-combo-input'), hidden = container.querySelector('[name="customer_id"]'), list = container.querySelector('.fp-combo-list'), picked = container.querySelector('.fp-combo-picked');
     let active = -1, matches = [];
     const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     const show = () => {
       const q = norm(input.value.trim()), digits = input.value.replace(/\D/g, '');
-      matches = q.length < 1 ? [] : customers.filter(c => norm(c.name).includes(q) || (digits.length >= 3 && (String(c.phone || '').replace(/\D/g, '').includes(digits) || String(c.cpf || '').includes(digits)))).slice(0, 8);
-      list.innerHTML = matches.map((c, i) => `<li role="option" data-i="${i}" class="${i === active ? 'active' : ''}"><strong>${esc(c.name)}</strong><span>${esc(c.phone || c.email || '')}</span></li>`).join('') + (q.length ? `<li role="option" data-new="1" class="fp-combo-new">+ Cadastrar "${esc(input.value.trim())}"</li>` : '');
+      const petHit = c => (c.pets || []).find(p => norm(p.name).includes(q));
+      matches = q.length < 1 ? [] : customers.filter(c => norm(c.name).includes(q) || (q.length >= 2 && petHit(c)) || (digits.length >= 3 && (String(c.phone || '').replace(/\D/g, '').includes(digits) || String(c.cpf || '').includes(digits)))).slice(0, 8);
+      list.innerHTML = matches.map((c, i) => { const pets = (c.pets || []).map(p => p.name); return `<li role="option" data-i="${i}" class="${i === active ? 'active' : ''}"><strong>${esc(c.name)}</strong><span>${esc([c.phone || c.email || '', pets.length ? (pets.length > 3 ? pets.slice(0, 3).join(', ') + ' +' + (pets.length - 3) : pets.join(', ')) : ''].filter(Boolean).join(' · '))}</span></li>`; }).join('') + (q.length ? `<li role="option" data-new="1" class="fp-combo-new">+ Cadastrar "${esc(input.value.trim())}"</li>` : '');
       list.hidden = !q.length; input.setAttribute('aria-expanded', String(!list.hidden));
     };
     const pick = c => { hidden.value = c.id; input.hidden = true; list.hidden = true; picked.hidden = false; picked.innerHTML = `<div><strong>${esc(c.name)}</strong><span>${esc(c.phone || c.email || 'sem contato')}</span></div><button type="button" class="nv-button secondary">Trocar</button>`; picked.querySelector('button').onclick = reset; onPick && onPick(c); };

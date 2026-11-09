@@ -51,6 +51,7 @@
       <p class="nv-help">${c.phone ? (wa ? `<a href="${wa}" target="_blank" rel="noopener">${esc(c.phone)}</a>` : esc(c.phone)) : 'sem telefone'}${c.email ? ' · ' + esc(c.email) : ''}${c.address ? ' · ' + esc(c.address) : ''} · cliente desde ${dmy(String(t.first_at || c.created_at).slice(0, 10))}</p>
       <div class="ch-kpis"><div><small>Total gasto</small><b>${brl(t.spent_cents)}</b></div><div><small>Compras</small><b>${t.sales}</b></div><div><small>Serviços</small><b>${t.services}</b></div><div><small>Pedidos</small><b>${t.orders}</b></div><div><small>Última vez</small><b>${t.last_at ? dmy(String(t.last_at).slice(0, 10)) : '—'}</b></div></div>
       ${Object.keys(t.by_method).length ? `<p class="ch-pills">${Object.entries(t.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k] || k} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</p>` : ''}
+      ${(h.pets || []).length ? `<div class="ch-pets"><b>Pets</b><ul>${h.pets.map(p => `<li><b>${esc(p.name)}</b>${[p.species, p.breed, p.size ? 'porte ' + p.size : '', p.sex === 'F' ? 'fêmea' : p.sex === 'M' ? 'macho' : '', p.birth_date ? 'nasc. ' + dmy(String(p.birth_date).slice(0, 10)) : '', p.weight_kg ? String(p.weight_kg).replace('.', ',') + ' kg' : '', p.color, p.neutered ? 'castrado' : ''].filter(Boolean).map(x => ' · ' + esc(x)).join('')}${p.notes ? `<br><small>${esc(p.notes)}</small>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${h.loyalty?.enabled ? `<p class="nv-help">${icon('gift')} Fidelidade: ${h.loyalty.checkins} de ${h.loyalty.target}${h.loyalty.complete ? ' · <b>prêmio liberado</b>' : ''}</p>` : ''}
       ${h.cashback?.balance_cents ? `<p class="nv-help">Cashback: <b>${brl(h.cashback.balance_cents)}</b>${h.cashback.next_expires_on ? ` (vence ${dmy(h.cashback.next_expires_on)})` : ''}</p>` : ''}
       ${h.warranties.length ? `<div class="ch-warr"><b>Garantias valendo</b><ul>${h.warranties.map(w => `<li>${esc(w.name)}${w.device_model ? ' · ' + esc(w.device_model) : ''} — até <b>${dmy(w.until)}</b> (venda #${w.sale_number})</li>`).join('')}</ul></div>` : ''}
@@ -67,7 +68,7 @@
   .ch-search{width:100%;margin:10px 0;padding:10px 12px;border:1px solid var(--nv-border,#e5e7eb);border-radius:10px;font:inherit}
   .ch-card{border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:10px 12px;margin-bottom:8px}.ch-card small{color:var(--nv-muted)}.ch-canceled{opacity:.6}
   .ch-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}.ch-items{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;font-size:14px}.ch-items li{display:block}.ch-items .fp-ic{width:14px;height:14px;vertical-align:-2px;margin-right:4px}
-  .ch-right{float:right}.ch-desc{margin:6px 0 0;font-size:14px}.ch-ok{color:#027a48}.ch-neg{color:#b42318}.ch-muted{color:var(--nv-muted)}`;
+  .ch-right{float:right}.ch-desc{margin:6px 0 0;font-size:14px}.ch-pets{border:1px solid var(--nv-border,#e5e7eb);border-radius:12px;padding:8px 12px;margin:8px 0;font-size:14px}.ch-pets ul{margin:4px 0 0;padding-left:18px}.ch-ok{color:#027a48}.ch-neg{color:#b42318}.ch-muted{color:var(--nv-muted)}`;
   document.head.appendChild(css);
   window.FPCustomerHistory = { open };
   // Qualquer nome/foto marcado com data-customer-history abre o histórico (clique ou Enter/Espaço).

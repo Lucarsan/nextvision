@@ -289,6 +289,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const c = await q('SELECT id,name,phone,email,address,source,created_at,offers_opt_out FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [req.params.id, tid(req)]);
     if (!c.rowCount) return bad(res, 404, 'Cliente não encontrado');
     const isOwner = req.user.role === 'owner';
+    const pets = (await q(`SELECT id,name,species,breed,sex,birth_date,color,weight_kg,size,coat,temperament,neutered,notes FROM customer_pets WHERE tenant_id=$1 AND customer_id=$2 AND deleted_at IS NULL ORDER BY lower(name)`, [tid(req), req.params.id])).rows;
     const [sales, orders, t] = await Promise.all([
       q(`SELECT x.id,x.sale_number,x.total_cents,x.discount_cents,x.cashback_used_cents,x.payment_method,x.payments,x.description,x.created_at,x.canceled_at,x.cancel_reason,
           COALESCE(sl.name,u.name) seller_name,o.order_number,
@@ -310,7 +311,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     for (const x of ok) for (const i of x.items) if (i.warranty_until && i.warranty_until >= today) warranties.push({ sale_number: x.sale_number, name: i.name, device_model: i.device_model, until: i.warranty_until });
     const salesOn = !!t.rows[0]?.sales_enabled;
     res.set('Cache-Control', 'no-store');
-    res.json({
+    res.json({ pets,
       customer: c.rows[0], today,
       totals: { spent_cents: ok.reduce((a, x) => a + x.total_cents, 0), sales: ok.length, services: ok.reduce((a, x) => a + x.items.filter(i => i.service).length, 0),
         orders: orders.rowCount, first_at: [...sales.rows.map(x => x.created_at), ...orders.rows.map(o => o.created_at)].sort()[0] || null,

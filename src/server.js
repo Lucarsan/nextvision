@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
+import {registerCustomerPets,savePetFromOrder} from './customer-pets.js';
 import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
@@ -46,7 +47,7 @@ const deviceAuth=route(async(req,res,next)=>{
  req.device=result.rows[0];next();
 });
 registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
-registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});
+registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});
 registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});registerStoreTools(app,{q,db,auth,roles,route,bad,valid,audit});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
@@ -342,7 +343,7 @@ async function editCamera(req,res,cameraId,tenantId=null,remove=false){
 }
 app.patch('/api/cameras/:id',auth,roles('master'),route((req,res)=>editCamera(req,res,req.params.id)));
 app.delete('/api/cameras/:id',auth,roles('master'),route((req,res)=>editCamera(req,res,req.params.id,null,true)));
-app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q('SELECT * FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC',[tid(req)])).rows)));
+app.get('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>res.json((await q(`SELECT c.*,COALESCE((SELECT json_agg(json_build_object('id',p.id,'name',p.name,'species',p.species,'breed',p.breed,'size',p.size) ORDER BY lower(p.name)) FROM customer_pets p WHERE p.customer_id=c.id AND p.tenant_id=c.tenant_id AND p.deleted_at IS NULL),'[]'::json) pets FROM customers c WHERE c.tenant_id=$1 AND c.deleted_at IS NULL ORDER BY c.created_at DESC`,[tid(req)])).rows)));
 app.post('/api/customers',auth,roles('owner','operator'),route(async(req,res)=>{const v=valid(z.object({name:z.string().min(2).max(120),email:z.string().email().optional().or(z.literal('')),phone:z.string().max(30).optional(),address:z.string().max(500).optional(),cpf:cpfField,birth_date:birthField,postal_code:cepField}),req,res);if(!v)return;const r=await q('INSERT INTO customers(tenant_id,name,email,phone,address,cpf,birth_date,postal_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[tid(req),v.name,v.email||null,v.phone||null,v.address||null,v.cpf||null,v.birth_date||null,v.postal_code||null]);res.status(201).json(r.rows[0]);}));
 app.post('/api/customers/import',auth,roles('owner','operator'),route(async(req,res)=>{
  const row=z.object({name:z.string().trim().min(2).max(120),email:z.union([z.string().email(),z.literal('')]).default(''),phone:z.string().max(30).default(''),address:z.string().max(500).default('')});
@@ -408,6 +409,7 @@ app.post('/api/orders',auth,roles('owner','operator'),route(async(req,res)=>{
  const token=crypto.randomBytes(12).toString('base64url'),hash=digestToken(token);
  const r=await q("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,external_reference,details) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM customers WHERE deleted_at IS NULL AND id=$2 AND tenant_id=$1) AND EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tid(req),v.customer_id,v.process_id,hash,v.reference||null,JSON.stringify(v.details)]);
  if(!r.rowCount)return bad(res,400,'Cliente ou processo inválido');await audit(req,'create','order',r.rows[0].id);
+ await savePetFromOrder(q,tid(req),v.customer_id,v.details).catch(e=>console.error('Ficha do pet não salva:',e.code||e.message));
  res.status(201).json({...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token});
 }));
 app.patch('/api/orders/:id',auth,roles('owner','operator'),route(async(req,res)=>{

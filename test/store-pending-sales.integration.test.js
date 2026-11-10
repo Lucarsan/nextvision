@@ -61,3 +61,29 @@ test('vendas a receber: guardar, abrir pedido ao vivo, receber depois uma vez s�
     assert.equal((await db.query('SELECT count(*)::int n FROM orders WHERE tenant_id=$1', [tenant])).rows[0].n, 2, 'venda recusada não deixa pedido');
   } finally { await f.cleanup(); }
 });
+
+test('tirar um item da venda a receber (cliente desistiu da tosa)', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, db } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true, niche: 'pet' } });
+    const proc = await api('/processes', { method: 'POST', body: { name: 'Banho', steps: ['Recebido', 'Pronto'] } }, 201);
+    const cli = await api('/customers', { method: 'POST', body: { name: 'Ana Lima', phone: '85988887777' } }, 201);
+    const p = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, discount_cents: 500,
+      items: [{ service: 'Banho de cheiro', unit_price_cents: 5000, device_model: 'Mel' }, { service: 'Tosa higiênica', unit_price_cents: 3000, device_model: 'Mel' }],
+      live_order: { process_id: proc.id, details: { pet_name: 'Mel', service: 'Banho de cheiro + Tosa higiênica' } } } }, 201);
+    assert.equal(p.total_cents, 7500);
+    const basic = await f.addOperator(tenant, 'basic', 'Novato');
+    assert.equal((await request(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', token: basic.token, body: { index: 1 } })).status, 403);
+    assert.equal((await request(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', body: { index: 5 } })).status, 400);
+    const r = await api(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', body: { index: 1 } });
+    assert.equal(r.removed, 'Tosa higiênica'); assert.equal(r.total_cents, 4500);
+    assert.deepEqual(r.payload.items.map(i => i.service), ['Banho de cheiro']);
+    assert.equal((await db.query('SELECT details FROM orders WHERE id=$1', [p.order_id])).rows[0].details.service, 'Banho de cheiro', 'pedido mostra só o que ficou');
+    assert.equal((await request(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', body: { index: 0 } })).status, 400, 'último item: cancelar a venda');
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const paid = await api(`/store/sales/pending/${p.id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);
+    assert.equal(paid.sale.total_cents, 4500); assert.deepEqual(paid.sale.items.map(i => i.name), ['Banho de cheiro']);
+    assert.equal((await request(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', body: { index: 0 } })).status, 409);
+  } finally { await f.cleanup(); }
+});

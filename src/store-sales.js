@@ -865,6 +865,36 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!merged.success) return bad(res, 400, 'Dados da venda inválidos');
     return createSale(req, res, merged.data, req.params.id);
   }));
+  // Tirar um item da venda a receber (ex.: a cliente desistiu da tosa higiênica). Se era o último, cancela-se a venda.
+  app.post('/api/store/sales/pending/:id/remove-item', ...full, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const v = valid(z.object({ index: z.number().int().min(0).max(199) }).strict(), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const p = (await c.query('SELECT id,payload,order_id FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [req.params.id, tid(req)])).rows[0];
+      if (!p) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.'); }
+      const items = Array.isArray(p.payload.items) ? p.payload.items : [];
+      if (!items[v.index]) { await c.query('ROLLBACK'); return bad(res, 400, 'Item não encontrado. Atualize a lista.'); }
+      if (items.length < 2) { await c.query('ROLLBACK'); return bad(res, 400, 'É o único item: para tirar, cancele a venda a receber.'); }
+      const removed = items[v.index], rest = items.filter((_, n) => n !== v.index);
+      // Brinde que ia junto com serviço: se não sobrar serviço, sai também.
+      const left = rest.some(it => it.service) ? rest : rest.filter(it => !it.gift);
+      const ids = [...new Set(left.filter(it => it.product_id).map(it => it.product_id))];
+      const price = new Map((ids.length ? (await c.query('SELECT id,price_cents FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tid(req), ids])).rows : []).map(x => [x.id, x.price_cents]));
+      const gross = left.reduce((a, it) => a + (it.gift ? 0 : (it.unit_price_cents ?? price.get(it.product_id) ?? 0) * (it.quantity || 1)), 0);
+      const payload = { ...p.payload, items: left };
+      if ((payload.discount_cents || 0) >= gross) delete payload.discount_cents; // desconto maior que o que sobrou não vale
+      const total = gross - (payload.discount_cents || 0);
+      if (total < 1) { await c.query('ROLLBACK'); return bad(res, 400, 'Sem valor a receber depois de tirar o item: cancele a venda a receber.'); }
+      await c.query('UPDATE pending_sales SET payload=$1,total_cents=$2 WHERE id=$3', [JSON.stringify(payload), total, p.id]);
+      // O pedido ao vivo passa a mostrar só os serviços que ficaram.
+      if (p.order_id) await c.query(`UPDATE orders SET details=jsonb_set(details,'{service}',to_jsonb($1::text)) WHERE id=$2 AND tenant_id=$3`, [left.filter(it => it.service).map(it => it.service).join(' + ').slice(0, 300), p.order_id, tid(req)]);
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'remove_item', 'pending_sale', p.id]);
+      await c.query('COMMIT');
+      res.json({ ...(await q(PENDING_SELECT + ' WHERE p.id=$1', [p.id])).rows[0], removed: removed.service || removed.name || 'Produto' });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
   app.post('/api/store/sales/pending/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;

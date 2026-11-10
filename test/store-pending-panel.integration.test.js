@@ -48,6 +48,17 @@ test('caixa guarda venda a receber com pedido ao vivo e recebe depois', {
     assert.equal(await page.locator('#fsLiveOn').isChecked(), true);
     await page.screenshot(shot('a-receber-lista'));
 
+    // Tirar um item pelo ×: guarda outra venda com dois serviços e tira o segundo.
+    await f.api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, items: [{ service: 'Banho', unit_price_cents: 4000 }, { service: 'Tosa higiênica', unit_price_cents: 2500 }] } }, 201);
+    await page.locator('.nv-sidebar [data-view="cash"]').click();
+    await page.waitForSelector('[data-pend-rm]');
+    page.once('dialog', d => d.accept());
+    await page.locator('.fs-pend-item', { hasText: 'Tosa higiênica' }).locator('button').click();
+    await page.waitForFunction(() => { const n = document.querySelector('#fsPending'); return n && !n.innerText.includes('Tosa higiênica'); });
+    assert.match(await page.locator('#fsPending').innerText(), /#2[\s\S]*R\$\s*40,00/);
+    await f.api(`/store/sales/pending/${(await f.api('/store/sales/pending')).find(x => x.number === 2).id}/cancel`, { method: 'POST', body: { reason: 'Teste' } });
+    await page.locator('.nv-sidebar [data-view="cash"]').click();
+    await page.waitForFunction(() => { const n = document.querySelector('#fsPending [data-pend-pay]')?.closest('#fsPending'); return n && !n.innerText.includes('#2'); });
     // Receber em dinheiro, com troco.
     await page.locator('[data-pend-pay]').first().click();
     const dlg = page.locator('#editorDialog');

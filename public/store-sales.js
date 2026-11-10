@@ -184,6 +184,7 @@
         <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar despesa</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">${FPIcon('printer')}Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
       <div class="fs-grid">
         <div class="fs-col-report">
+          <section class="nv-card fs-pending" id="fsPending" hidden></section>
           <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
             <div class="nv-list">${data.sales.map(saleRow).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
             <p class="nv-help fs-opening">Troco inicial: ${brl(sum.opening_cents)}</p></section>
@@ -202,6 +203,7 @@
             <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
           <div id="fsSvc" data-only="service"></div>
           <div id="fsMix" aria-live="polite"></div>
+          <div id="fsLiveBox"></div>
           <div class="fs-quick" id="fsQuick" data-only="product"></div>
           <div class="fs-row" data-only="product"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00"></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
@@ -209,10 +211,11 @@
           <div id="fsSplit" class="fs-split" hidden></div>
           <div id="fsChangeBox" class="fs-row fs-change" hidden><label class="nv-field"><span id="fsReceivedLabel">Valor recebido</span><input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" id="fsChangeOut" aria-live="polite"></div></div>
           <label class="fs-check fs-autoprint"><input type="checkbox" id="fsAutoPrint"> Imprimir comprovante ao registrar</label>
-          <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
+          <button class="nv-button fs-wide" id="fsSaleBtn">Registrar venda</button>
+          <button type="button" class="nv-button secondary fs-wide fs-later" id="fsLaterBtn">${FPIcon('inbox')} Pagar depois <small>(fica em "A receber")</small></button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
       </div>`;
-    saleCustomer = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
+    saleCustomer = null; svcPet = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
     const sf = $('fsSale');
     const updChange = () => {
       const split = isSplit(); drawMix(); drawCashbackBox(); drawSplit();
@@ -230,6 +233,8 @@
     box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => setMode(b.dataset.fsMode, true));
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive);
+    $('fsLaterBtn').onclick = () => submitSale({ preventDefault() {}, currentTarget: $('fsSale') }, box, alive, true);
+    drawLiveBox(); drawPending(box, alive);
     const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
     quickCart = []; lastAuto = ''; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
@@ -492,8 +497,8 @@
     sel.onchange = () => { lastSellerId = sel.value; };
   }
 
-  async function submitSale(e, box, alive) {
-    e.preventDefault(); const f = e.currentTarget, status = $('fsSaleStatus'), btn = $('fsSaleBtn');
+  async function submitSale(e, box, alive, later = false) {
+    e.preventDefault(); const f = e.currentTarget, status = $('fsSaleStatus'), btn = later ? $('fsLaterBtn') : $('fsSaleBtn');
     // Serviço em edição: entra na venda se estiver completo; se começou a preencher e falta algo, avisa.
     if (svcFilled() && svcProblem()) { status.textContent = (svcCart.length || productPart() ? 'Serviço em edição: ' : '') + svcProblem(); return; }
     const services = [...svcCart, ...(pendingSvc() ? [svc] : [])], service = services.length > 0, onlyService = service && !productPart();
@@ -501,9 +506,9 @@
     const badSvc = svcCart.find(x => !Number.isFinite(svcPrice(x)));
     if (badSvc) { status.textContent = `Informe o preço de "${badSvc.name.trim()}".`; return; }
     if (!Number.isFinite(total) || total <= 0) { status.textContent = saleMode === 'service' && !service ? 'Informe o serviço e o preço de venda.' : 'Informe o valor da venda.'; return; }
-    const split = isSplit(), parts = split ? splitParts() : null;
+    const split = !later && isSplit(), parts = split ? splitParts() : null;
     if (split) { const err = splitError(parts); if (err) { status.textContent = err; return; } }
-    const cashDue = split ? cashPart() : f.elements.method.value === 'cash' ? payable() : 0;
+    const cashDue = later ? 0 : split ? cashPart() : f.elements.method.value === 'cash' ? payable() : 0;
     const received = cashDue > 0 && f.elements.received.value.trim() ? parseMoney(f.elements.received.value) : null;
     if (received != null && (!Number.isFinite(received) || received < cashDue)) { status.textContent = split ? 'O dinheiro recebido é menor que a parte em dinheiro.' : 'O valor recebido é menor que o valor a pagar.'; return; }
     // Com produtos, o servidor calcula o total pelos preços cadastrados.
@@ -523,18 +528,41 @@
     if (noPrice) { status.textContent = `Informe o preço de "${noPrice.label}".`; return; }
     if (split) { delete body.payment_method; body.payments = parts; }
     const seller = $('fsSeller')?.value; if (seller) body.seller_id = seller;
-    if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0) body.cashback_use_cents = use; }
-    else if (saleCustomer?.anonymous) body.anonymous = true;
+    if (saleCustomer?.id) { body.customer_id = saleCustomer.id; const o = $('fsOrder')?.value; if (o) body.order_id = o; const use = cbUse(); if (use > 0 && !later) body.cashback_use_cents = use; }
+    else if (saleCustomer?.anonymous) { if (later || liveWanted()) { status.textContent = later ? 'Para pagar depois, identifique o cliente.' : 'Para abrir o pedido ao vivo, identifique o cliente.'; return; } body.anonymous = true; }
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
+    // Pedido ao vivo junto (o servidor abre o pedido na mesma transação da venda).
+    if (liveWanted() && !body.order_id) body.live_order = { process_id: $('fsLiveProc').value, details: liveDetails(services) };
+    if (later) {
+      delete body.payment_method; delete body.payments;
+      btn.disabled = true;
+      try {
+        const p = await api('/store/sales/pending', 'POST', body);
+        cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller;
+        lastSale = { pending: p, live_order: p.live_order, customer: { id: p.customer_id, name: p.customer_name, phone: p.customer_phone } };
+        feedback(`Venda guardada em "A receber" (#${p.number}): ${brl(p.total_cents)}.` + (p.live_order ? ` Pedido ${p.live_order.order_number} aberto.` : ''));
+        if (p.live_order) window.FPOrders?.refresh();
+        await loadCash(box, alive);
+      } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
+      return;
+    }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+    try { lastSale = await api('/store/sales', 'POST', body); if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
+  // Bloco do pedido ao vivo aberto junto: link e WhatsApp com a mensagem de pedido criado.
+  function liveBlock(s) {
+    const o = s.live_order; if (!o || !window.FPOrders) return '';
+    const full = { ...o, customer: s.customer?.name, customer_phone: s.customer?.phone, details: o.details || {} };
+    return `<div class="fs-live-done">${FPIcon('camera') || ''}<div><b>Pedido ${esc(o.order_number || '')} aberto</b> <small>· está na fila em Pedidos</small><br><input readonly value="${esc(window.FPOrders.link(full))}" aria-label="Link de acompanhamento"></div>
+      <a class="nv-button fp-whats" target="_blank" rel="noopener" href="${esc(window.FPOrders.whats(full))}">${window.FPOrders.hasPhone(full) ? 'Enviar link no WhatsApp' : 'Enviar no WhatsApp'}</a></div>`;
+  }
   function drawLast() {
     const box = $('fsLast'); if (!box || !lastSale) return; const s = lastSale, c = s.customer;
+    if (s.pending) { box.innerHTML = `<div class="fs-last"><div><b>Guardada em "A receber" #${s.pending.number}</b> · ${brl(s.pending.total_cents)} · ${custLink(c.id, esc(c.name))}<br><small>Quando o cliente vier pagar, toque em "Receber" na lista "A receber" (no topo, à esquerda).</small></div></div>${liveBlock(s)}`; return; }
     const receiptBtn = '<button type="button" class="nv-button secondary" id="fsReceiptNow">' + FPIcon('receipt') + 'Imprimir comprovante</button>';
     const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
     if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
@@ -545,6 +573,97 @@
     wireReceipt();
     if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), { customer_id: c.id, kind: 'status' }); b.innerHTML = FPIcon('check') + 'Enviado'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
+    if (s.live_order) box.insertAdjacentHTML('beforeend', liveBlock(s));
+  }
+
+  // ---------------- Pedido ao vivo junto com a venda ----------------
+  // Abre o pedido (acompanhamento com câmera) do atendimento na mesma hora da venda. Lembra a escolha neste computador.
+  const LIVE_KEY = 'fp_sale_live_order';
+  let processesCache = null;
+  const liveWanted = () => !!$('fsLiveOn')?.checked && !!$('fsLiveProc')?.value && !$('fsOrder')?.value;
+  function liveDetails(services) {
+    const names = services.map(x => String(x.name || '').trim()).filter(Boolean).join(' + ').slice(0, 300);
+    const petName = svcPet?.name || services.map(x => String(x.model || '').trim()).find(Boolean) || '';
+    if (isPet()) return { item_type: 'pet', pet_name: petName.slice(0, 80), species: svcPet?.species || '', breed: svcPet?.breed || '', size: svcPet?.size || '', service: names };
+    const model = services.map(x => String(x.model || '').trim()).find(Boolean) || '';
+    return { model: model.slice(0, 120), service: names };
+  }
+  async function drawLiveBox() {
+    const box = $('fsLiveBox'); if (!box) return;
+    if (!processesCache) { try { processesCache = await api('/processes'); } catch { processesCache = []; } }
+    if (!box.isConnected) return;
+    if (!processesCache.length) { box.innerHTML = ''; return; }
+    let on = false, proc = ''; try { const saved = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}'); on = !!saved.on; proc = saved.proc || ''; } catch { /* sem preferência */ }
+    if (!processesCache.some(p => p.id === proc)) proc = processesCache[0].id;
+    box.innerHTML = `<div class="fs-live"><label class="fs-check"><input type="checkbox" id="fsLiveOn" ${on ? 'checked' : ''}> ${FPIcon('camera') || ''} Abrir pedido ao vivo deste atendimento <small class="nv-help">o cliente acompanha pelo link</small></label>
+      <select id="fsLiveProc" aria-label="Processo do pedido"${processesCache.length > 1 ? '' : ' hidden'}>${processesCache.map(p => `<option value="${p.id}" ${p.id === proc ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>`;
+    const save = () => { try { localStorage.setItem(LIVE_KEY, JSON.stringify({ on: $('fsLiveOn').checked, proc: $('fsLiveProc').value })); } catch { /* só nesta tela */ } };
+    $('fsLiveOn').onchange = save; $('fsLiveProc').onchange = save;
+  }
+
+  // ---------------- A receber ----------------
+  // Vendas guardadas para pagar depois: uma por uma, "Receber" registra a venda no caixa aberto.
+  const ago = d => { const m = Math.max(0, Math.round((Date.now() - new Date(d)) / 60000)); return m < 60 ? `há ${m} min` : m < 1440 ? `há ${Math.floor(m / 60)} h` : `há ${Math.floor(m / 1440)} dia${m >= 2880 ? 's' : ''}`; };
+  const ORDER_STATUS = { queued: 'na fila', live: 'em atendimento', paused: 'pausado', completed: 'pronto' };
+  const pendingItems = p => (p.payload?.items || []).map(i => i.service || i.name || 'Produto').join(' + ') || p.description || 'Valor avulso';
+  async function drawPending(box, alive) {
+    const card = $('fsPending'); if (!card) return;
+    let rows; try { rows = await api('/store/sales/pending'); } catch { return; }
+    if (!alive() || !card.isConnected) return;
+    card.hidden = !rows.length; if (!rows.length) { card.innerHTML = ''; return; }
+    const sum = rows.reduce((a, x) => a + x.total_cents, 0);
+    card.innerHTML = `<div class="nv-heading"><h2>A receber <span class="nv-pill">${rows.length}</span></h2><b>${brl(sum)}</b></div>
+      <div class="nv-list">${rows.map(p => `<div class="fs-sale fs-pend" data-pend="${p.id}"><div><b>#${p.number}</b> · ${custLink(p.customer_id, esc(p.customer_name))}${p.pet_name ? ' · ' + FPIcon('paw') + esc(p.pet_name) : ''}
+        <br><small>${esc(pendingItems(p))}</small><br><small>${ago(p.created_at)}${p.seller_name ? ' · ' + esc(p.seller_name) : ''}${p.order_number ? ` · pedido ${esc(p.order_number)} <span class="fs-tag${p.order_status === 'completed' ? ' fs-tag-ok' : ''}">${ORDER_STATUS[p.order_status] || ''}</span>` : ''}</small></div>
+        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
+    card.querySelectorAll('[data-pend-pay]').forEach(b => b.onclick = () => payPending(rows.find(x => x.id === b.dataset.pendPay), box, alive));
+    card.querySelectorAll('[data-pend-cancel]').forEach(b => b.onclick = async () => {
+      const p = rows.find(x => x.id === b.dataset.pendCancel);
+      const reason = prompt(`Cancelar a venda a receber #${p.number} (${p.customer_name}, ${brl(p.total_cents)})? Motivo:`); if (!reason || reason.trim().length < 3) return;
+      try { await api(`/store/sales/pending/${p.id}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda a receber cancelada.'); drawPending(box, alive); } catch (err) { feedback(err.message, true); }
+    });
+  }
+  function payPending(p, box, alive) {
+    const bal = cbOn() ? p.cashback?.balance_cents || 0 : 0, can = bal ? cbAllowed(p.total_cents, bal) : 0;
+    openDialog(`${header(`Receber #${p.number}`)}
+      <p><b>${esc(p.customer_name)}</b>${p.pet_name ? ' · ' + esc(p.pet_name) : ''}<br><small>${esc(pendingItems(p))}</small></p>
+      <form id="fsPayForm" autocomplete="off"><div class="fs-pcart-total"><span>Total</span><b id="fsPayTotal">${brl(p.total_cents)}</b></div>
+        ${can ? `<label class="fs-check"><input type="checkbox" name="cb"> ${FPIcon('wallet')} Usar cashback: <b>− ${brl(can)}</b> <small>(saldo ${brl(bal)})</small></label>` : ''}
+        <fieldset class="fs-methods"><legend>Pagamento</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 1 ? 'checked' : ''}><span>${v}</span></label>`).join('')}<label><input type="radio" name="method" value="split"><span>Dividir</span></label></fieldset>
+        <div class="fs-row" data-pay-split hidden><label class="nv-field"><select name="m1">${Object.entries(METHODS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label><label class="nv-field fs-grow">Valor<input name="a1" inputmode="decimal" placeholder="0,00"></label>
+          <label class="nv-field"><select name="m2">${Object.entries(METHODS).map(([k, v], i) => `<option value="${k}" ${i === 1 ? 'selected' : ''}>${v}</option>`).join('')}</select></label><span class="fs-split-rest" data-pay-rest></span></div>
+        <div class="fs-row" data-pay-cash hidden><label class="nv-field">Valor recebido<input name="received" inputmode="decimal" placeholder="0,00"></label><div class="fs-change-out" data-pay-change></div></div>
+        <label class="fs-check"><input type="checkbox" name="print" ${autoPrint() ? 'checked' : ''}> Imprimir comprovante</label>
+        <button class="nv-button fs-wide">Confirmar recebimento</button><p class="nv-help" role="status" id="fsPayStatus"></p></form>`);
+    const f = $('fsPayForm'), st = $('fsPayStatus');
+    const due = () => p.total_cents - (f.elements.cb?.checked ? can : 0);
+    const upd = () => {
+      const m = f.elements.method.value, d = due();
+      $('fsPayTotal').textContent = brl(d);
+      f.querySelector('[data-pay-split]').hidden = m !== 'split'; f.querySelector('[data-pay-cash]').hidden = !(m === 'cash' || (m === 'split' && (f.elements.m1.value === 'cash' || f.elements.m2.value === 'cash')));
+      const a1 = parseMoney(f.elements.a1.value); f.querySelector('[data-pay-rest]').textContent = m === 'split' && Number.isFinite(a1) ? 'resto: ' + brl(d - a1) : '';
+      const cashDue = m === 'cash' ? d : m === 'split' ? (f.elements.m1.value === 'cash' ? a1 : f.elements.m2.value === 'cash' ? d - a1 : 0) : 0, r = parseMoney(f.elements.received.value);
+      f.querySelector('[data-pay-change]').innerHTML = Number.isFinite(r) && Number.isFinite(cashDue) && r >= cashDue ? `Troco: <b>${brl(r - cashDue)}</b>` : '';
+    };
+    f.oninput = f.onchange = upd; upd();
+    f.onsubmit = async e => {
+      e.preventDefault(); const m = f.elements.method.value, d = due(), body = {};
+      if (f.elements.cb?.checked) body.cashback_use_cents = can;
+      if (m === 'split') {
+        const a1 = parseMoney(f.elements.a1.value);
+        if (!(a1 > 0 && a1 < d)) { st.textContent = 'Informe o valor da primeira forma (menor que o total).'; return; }
+        if (f.elements.m1.value === f.elements.m2.value) { st.textContent = 'Escolha duas formas diferentes.'; return; }
+        body.payments = [{ method: f.elements.m1.value, amount_cents: a1 }, { method: f.elements.m2.value, amount_cents: d - a1 }];
+      } else body.payment_method = m;
+      const btn = f.querySelector('button.nv-button'); btn.disabled = true;
+      try {
+        const r = await api(`/store/sales/pending/${p.id}/pay`, 'POST', body);
+        $('editorDialog').close(); lastSale = r;
+        if (f.elements.print.checked) printReceipt(r.sale.id);
+        feedback(`Recebido: venda #${r.sale.sale_number} de ${brl(r.sale.total_cents)} (${esc(p.customer_name)}).`);
+        await loadCash(box, alive);
+      } catch (err) { st.textContent = err.message; btn.disabled = false; }
+    };
   }
 
   // ---------------- Serviço (troca de tela, bateria, conserto…) ----------------
@@ -2289,7 +2408,7 @@
   .fs-autoprint{margin:10px 0 0;font-size:14px}
   .fs-costcode{color:#1d4ed8;font-weight:700;letter-spacing:.03em;margin-left:4px;font-variant-numeric:tabular-nums}
   .fs-scan{margin-bottom:10px}.fs-scan input{font-size:16px}.fs-pcart{border:1px solid var(--nv-border);border-radius:12px;margin-top:8px;overflow:hidden}
-  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
+  .fs-basic #fsExpense,.fs-basic #fsExpense2,.fs-basic #fsWithdraw,.fs-basic #fsDeposit,.fs-basic #fsClose,.fs-basic [data-fs-cancel],.fs-basic [data-fs-move-cancel],.fs-basic .fs-full-only,.fs-basic .fs-disc label{display:none!important}.fs-basic .fs-unit[readonly]{border-color:transparent;background:transparent;pointer-events:none}.fs-var{font-weight:600;color:var(--nv-orange,#f25c1f)}.fs-seller-tag{color:var(--nv-muted)}.fs-unit-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--nv-muted);margin-top:3px;white-space:nowrap}.fs-cart-name .fs-unit-wrap{display:flex}input.fs-unit{display:inline-block!important;width:78px!important;min-height:0!important;padding:4px 6px!important;margin:0!important;border:1px solid var(--nv-border)!important;border-radius:8px!important;font:inherit!important;font-size:13px!important;color:var(--nv-ink,#111)!important;background:var(--nv-surface,#fff)!important}input.fs-unit.fs-need{border-color:#b42318!important;background:#fdecea!important}.fs-disc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}.fs-disc label{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}.fs-disc input{width:130px;padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-costsum{padding:6px 10px;font-size:13px;color:var(--nv-muted)}.fs-costsum.fs-below{color:#b42318;background:#fdecea;border-radius:8px}.fs-costline{color:#7a5af8}.fs-prod .fs-sale-end{flex-wrap:wrap;justify-content:flex-end}.fs-item{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--nv-border)}.fs-item small{color:var(--nv-muted)}.fs-qty{display:flex;gap:6px;align-items:center}.fs-qty b{min-width:22px;text-align:center}.fs-item-total{min-width:82px;text-align:right}
   .fs-labchoice{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px 10px;margin:8px 0 10px;display:flex;flex-direction:column;gap:6px}.fs-labchoice legend{font-weight:600;font-size:14px;padding:0 4px}.fs-labchoice label{display:flex;align-items:baseline;gap:8px;font-size:14px}.fs-labchoice small{color:var(--nv-muted)}.fs-labchoice .fs-labqueue{margin:4px 0 0;padding-top:6px;border-top:1px dashed var(--nv-border)}
   .fs-lbrow{align-items:center;gap:10px}.fs-lbchk input{width:20px;height:20px}.fs-lbfoot{align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}.fs-stockpage .fs-tabs{flex-wrap:wrap}
   .fs-valf{max-width:360px}.fs-valhead{align-items:center;gap:8px;flex-wrap:wrap}.fs-valkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:8px 0 12px}.fs-valkpis .nv-card{margin:0}.fs-valkpis .nv-number{font-size:26px}.fs-valkpis small{color:var(--nv-muted);font-size:12px}.fs-valh{font-size:16px;margin:18px 0 4px}.fs-logwrap{overflow-x:auto;margin-top:6px}.fs-log{width:100%;border-collapse:collapse;font-size:14px}.fs-log th,.fs-log td{padding:8px 6px;border-bottom:1px solid var(--nv-border);text-align:left;vertical-align:top}.fs-log th{font-size:12px;color:var(--nv-muted);font-weight:600}.fs-log .n{text-align:right;white-space:nowrap}.fs-log small{color:var(--nv-muted)}.fs-logf{align-items:flex-end;flex-wrap:wrap}
@@ -2302,6 +2421,7 @@
   .fs-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nv-blue-soft,#e8f0fe);color:var(--nv-blue,#2563eb);vertical-align:middle}.fs-vars{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-vars summary{cursor:pointer;font-weight:700}.fs-vars-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:6px 0}.fs-vars-row>span{flex:0 0 100%;font-size:13px;font-weight:700;color:var(--nv-muted)}.fs-vars-row .nv-field{flex:1 1 90px;min-width:80px;margin:0}
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
   .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
+  .fs-later{margin-top:8px}.fs-later small{font-weight:500;opacity:.8}.fs-live{border:1px dashed var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fs-live select{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-live-done{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;margin-top:10px}.fs-live-done>div{flex:1;min-width:200px}.fs-live-done input{width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-size:13px}.fs-pending{border:2px solid var(--nv-orange,#f97316)}.fs-pend .fs-sale-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.fs-tag-ok{background:#dcfce7;color:#166534}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

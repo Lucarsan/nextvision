@@ -24,7 +24,7 @@ export const PAY_PARTS = `SELECT x.payment_method method,x.total_cents::bigint a
 // O mesmo em JS, para uma venda já lida.
 export const payParts = x => Array.isArray(x.payments) && x.payments.length ? x.payments : [{ method: x.payment_method, amount_cents: x.total_cents }];
 
-export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid, audit, uuid }) {
+export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid, audit, uuid, orderDetails, createLiveOrder, savePetFromOrder }) {
   const tid = req => req.user.tenant_id;
   const staff = [auth, roles('owner', 'operator')];
   const enabled = route(async (req, res, next) => {
@@ -751,8 +751,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   // ---------- Vendas ----------
-  app.post('/api/store/sales', ...guard, route(async (req, res) => {
-    const v = valid(z.object({
+  // Corpo da venda (também guardado nas vendas "a receber", sem a forma de pagamento).
+  const saleSchema = z.object({
       customer_id: uuid.optional(),
       new_customer: z.object({ name: z.string().trim().min(2).max(120), phone: z.string().trim().max(30).default('') }).optional(),
       anonymous: z.boolean().default(false),
@@ -775,8 +775,100 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       description: z.string().trim().max(300).default(''),
       order_id: uuid.optional(),
       // Saldo de cashback que o cliente quis usar nesta venda (abate do total; o resto é pago na forma escolhida).
-      cashback_use_cents: cents.optional()
-    }).strict(), req, res); if (!v) return;
+      cashback_use_cents: cents.optional(),
+      // Abrir junto o pedido ao vivo (acompanhamento com câmera) deste atendimento.
+      live_order: z.object({ process_id: uuid, details: (orderDetails || z.object({}).passthrough()).default({}) }).strict().optional()
+    }).strict();
+  app.post('/api/store/sales', ...guard, route(async (req, res) => {
+    const v = valid(saleSchema, req, res); if (!v) return;
+    return createSale(req, res, v, null);
+  }));
+  // ---------- Vendas a receber ----------
+  // O cliente deixa o pet (ou leva algo) e paga depois: a venda fica guardada com itens, cliente, vendedor e
+  // pedido; ao receber, vira uma venda normal no caixa aberto (cashback, fidelidade e estoque nesse momento).
+  const pendingSchema = saleSchema.omit({ payment_method: true, payments: true, cashback_use_cents: true, anonymous: true });
+  const PENDING_SELECT = `SELECT p.id,p.number,p.customer_id,p.order_id,p.seller_id,p.total_cents,p.description,p.payload,p.created_at,
+      c.name customer_name,c.phone customer_phone,o.order_number,o.status order_status,o.details->>'pet_name' pet_name,
+      s.name seller_name,u.name created_by_name
+    FROM pending_sales p JOIN customers c ON c.id=p.customer_id LEFT JOIN orders o ON o.id=p.order_id AND o.deleted_at IS NULL
+    LEFT JOIN users s ON s.id=p.seller_id LEFT JOIN users u ON u.id=p.created_by`;
+  app.post('/api/store/sales/pending', ...guard, route(async (req, res) => {
+    let v = valid(pendingSchema, req, res); if (!v) return;
+    if (!v.customer_id === !v.new_customer) return bad(res, 400, 'Escolha o cliente (venda a receber precisa de cliente)');
+    if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
+    if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os itens');
+    if (req.user.access_level === 'basic' && v.discount_cents) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-pending:'||$1))", [tid(req)]);
+      const sellerId = v.seller_id || req.user.id;
+      if (!(await c.query("SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2 AND active AND role IN ('owner','operator')", [sellerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Vendedor inválido. Atualize a página.'); }
+      let customerId = v.customer_id || null;
+      if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
+      if (v.new_customer) {
+        const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
+        const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
+        customerId = same.rowCount ? same.rows[0].id : (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id;
+      }
+      if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
+      let liveOrder = null;
+      if (v.live_order) {
+        if (v.order_id) { await c.query('ROLLBACK'); return bad(res, 400, 'Escolha: pagamento de um pedido existente ou abrir pedido novo, não os dois.'); }
+        if (!customerId) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido ao vivo precisa de cliente.'); }
+        liveOrder = await createLiveOrder(c, tid(req), customerId, v.live_order.process_id, v.live_order.details);
+        if (!liveOrder) { await c.query('ROLLBACK'); return bad(res, 400, 'Processo do pedido inválido. Atualize a página.'); }
+        await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'order', liveOrder.id]);
+        v = { ...v, order_id: liveOrder.id };
+      }
+      // Total para a lista (o valor final é recalculado ao receber, com os preços dos produtos nesse dia).
+      let total = v.total_cents ?? 0;
+      if (v.items) {
+        const ids = [...new Set(v.items.filter(it => it.product_id).map(it => it.product_id))];
+        const p = ids.length ? await c.query('SELECT id,price_cents FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
+        if (p.rowCount !== ids.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
+        const catIds = [...new Set(v.items.filter(it => it.catalog_id).map(it => it.catalog_id))];
+        if (catIds.length && (await c.query('SELECT count(*)::int n FROM service_catalog WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tid(req), catIds])).rows[0].n !== catIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Serviço cadastrado não encontrado. Atualize a venda.'); }
+        const price = new Map(p.rows.map(x => [x.id, x.price_cents]));
+        total = v.items.reduce((a, it) => a + (it.gift ? 0 : (it.unit_price_cents ?? price.get(it.product_id) ?? 0) * (it.quantity || 1)), 0) - (v.discount_cents || 0);
+      }
+      if (total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, 'Total da venda inválido (confira preços e quantidades)'); }
+      const { new_customer, live_order, ...payload } = v; payload.customer_id = customerId; payload.seller_id = sellerId;
+      const n = (await c.query('SELECT coalesce(max(number),0)+1 n FROM pending_sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
+      const row = (await c.query(`INSERT INTO pending_sales(tenant_id,number,customer_id,order_id,seller_id,payload,total_cents,description,created_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [tid(req), n, customerId, v.order_id || null, sellerId, JSON.stringify(payload), total, v.description || '', req.user.id])).rows[0];
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'pending_sale', row.id]);
+      await c.query('COMMIT');
+      if (liveOrder) await savePetFromOrder?.(q, tid(req), customerId, v.live_order.details).catch(e => console.error('Ficha do pet não salva:', e.code || e.message));
+      res.status(201).json({ ...(await q(PENDING_SELECT + ' WHERE p.id=$1', [row.id])).rows[0], live_order: liveOrder });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
+  app.get('/api/store/sales/pending', ...guard, route(async (req, res) => {
+    const r = await q(PENDING_SELECT + ' WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL ORDER BY p.created_at', [tid(req)]);
+    const cb = await cashbackFor(tid(req), [...new Set(r.rows.map(x => x.customer_id))]);
+    res.set('Cache-Control', 'no-store');
+    res.json(r.rows.map(x => ({ ...x, cashback: cb.get(x.customer_id) })));
+  }));
+  // Receber: forma de pagamento (ou dividido), cashback e vendedor (se mudar). Vira venda no caixa aberto.
+  app.post('/api/store/sales/pending/:id/pay', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const pay = valid(z.object({ payment_method: METHOD.optional(), payments: saleSchema.shape.payments, cashback_use_cents: cents.optional(), seller_id: uuid.optional() }).strict(), req, res); if (!pay) return;
+    const p = (await q('SELECT payload FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL', [req.params.id, tid(req)])).rows[0];
+    if (!p) return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.');
+    const merged = saleSchema.safeParse({ ...p.payload, ...pay });
+    if (!merged.success) return bad(res, 400, 'Dados da venda inválidos');
+    return createSale(req, res, merged.data, req.params.id);
+  }));
+  app.post('/api/store/sales/pending/:id/cancel', ...full, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;
+    const r = await q('UPDATE pending_sales SET canceled_at=now(),canceled_by=$3,cancel_reason=$4 WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL RETURNING id', [req.params.id, tid(req), req.user.id, v.reason]);
+    if (!r.rowCount) return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.');
+    await audit(req, 'cancel', 'pending_sale', req.params.id); res.json({ canceled: true });
+  }));
+
+  // Registra a venda. pendingId: recebimento de uma venda "a receber" (fica paga na mesma transação).
+  async function createSale(req, res, v, pendingId) {
     if (!v.payment_method === !v.payments) return bad(res, 400, 'Escolha a forma de pagamento');
     if (v.payments && new Set(v.payments.map(p => p.method)).size !== v.payments.length) return bad(res, 400, 'Cada forma de pagamento só pode aparecer uma vez');
     if (v.cashback_use_cents && !v.customer_id) return bad(res, 400, 'Cashback só pode ser usado por cliente já cadastrado');
@@ -792,6 +884,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]);
       const s = await c.query(`SELECT id FROM cash_sessions WHERE tenant_id=$1 AND status='open'`, [tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Abra o caixa antes de registrar vendas'); }
+      if (pendingId && !(await c.query('SELECT 1 FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [pendingId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.'); }
       const sellerId = v.seller_id || req.user.id;
       if (!(await c.query("SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2 AND active AND role IN ('owner','operator')", [sellerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Vendedor inválido. Atualize a página.'); }
       let customerId = v.customer_id || null, created = false;
@@ -803,6 +896,15 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; }
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
+      let liveOrder = null;
+      if (v.live_order) {
+        if (v.order_id) { await c.query('ROLLBACK'); return bad(res, 400, 'Escolha: pagamento de um pedido existente ou abrir pedido novo, não os dois.'); }
+        if (!customerId) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido ao vivo precisa de cliente.'); }
+        liveOrder = await createLiveOrder(c, tid(req), customerId, v.live_order.process_id, v.live_order.details);
+        if (!liveOrder) { await c.query('ROLLBACK'); return bad(res, 400, 'Processo do pedido inválido. Atualize a página.'); }
+        await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'order', liveOrder.id]);
+        v = { ...v, order_id: liveOrder.id };
+      }
       // Itens: nome, código e custo vêm do cadastro; o preço é o do cadastro, a não ser que o vendedor
       // tenha mudado (unit_price_cents). O mesmo produto com o mesmo preço soma. O desconto geral é
       // distribuído entre os itens, para cada linha mostrar o valor de fato cobrado.
@@ -927,14 +1029,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         counted = ck.rowCount > 0;
       }
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'sale', sale.id]);
+      if (pendingId) { await c.query('UPDATE pending_sales SET paid_sale_id=$1,paid_at=now() WHERE id=$2', [sale.id, pendingId]); sale.pending_id = pendingId; }
       await c.query('COMMIT');
       const progress = customerId ? (await progressFor(tid(req), [customerId])).get(customerId) : null;
       const customer = customerId ? (await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1', [customerId])).rows[0] : null;
       const cashback = customerId ? (await cashbackFor(tid(req), [customerId])).get(customerId) : null;
-      res.status(201).json({ sale, customer, customer_created: created, loyalty_counted: counted, loyalty: progress,
+      if (liveOrder) await savePetFromOrder?.(q, tid(req), customerId, v.live_order.details).catch(e => console.error('Ficha do pet não salva:', e.code || e.message));
+      res.status(201).json({ sale, customer, customer_created: created, loyalty_counted: counted, loyalty: progress, live_order: liveOrder,
         cashback: cashback && { ...cashback, used_cents: sale.cashback_used_cents, earned_cents: sale.cashback_earned_cents } });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
-  }));
+  }
 
   // Comprovante de uma venda (impressora térmica 80 mm). Não é documento fiscal.
   app.get('/api/store/sales/:id/receipt', ...guard, route(async (req, res) => {

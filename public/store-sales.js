@@ -99,6 +99,12 @@
   // ---------------- Cashback ----------------
   const ymdShort = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
   const cbOn = () => !!config?.cashback_enabled;
+  const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+  const offDays = () => (config?.cashback_off_weekdays || []).map(Number);
+  // Hoje é um dia sem cashback? (dia da semana no fuso da loja, vindo do servidor)
+  const todayDow = () => { try { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: config?.timezone || 'America/Fortaleza', weekday: 'short' }).format(new Date())); } catch { return Number(config?.today_weekday); } };
+  const cbOffToday = () => cbOn() && offDays().includes(todayDow());
+  const offDaysText = () => { const d = offDays().map(n => WEEKDAYS[n] + (n === 0 || n === 6 ? 's' : 's-feiras')); return d.length ? `Não gera cashback ${d.length > 1 ? 'às ' + d.slice(0, -1).join(', ') + ' e ' + d.at(-1) : 'às ' + d[0]}.` : ''; };
   const daysText = d => d % 30 === 0 ? (d === 30 ? '1 mês' : d / 30 + ' meses') : d + ' dias';
   const pctText = p => Number(p).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%';
   // Mesmo cálculo do servidor: limite por compra, saldo disponível e pelo menos R$ 0,01 a pagar.
@@ -106,7 +112,7 @@
   function cashbackRules() {
     if (!cbOn()) return '';
     const min = config.cashback_min_sale_cents ? ` Vale para compras a partir de ${brl(config.cashback_min_sale_cents)}.` : '';
-    return `Como funciona: ${pctText(config.cashback_percent)} do valor de cada compra volta para você em cashback, válido por ${daysText(config.cashback_valid_days)}. Ele pode pagar até ${config.cashback_max_use_percent}% de uma nova compra.${min}` + (config.cashback_rules ? ' ' + config.cashback_rules : '');
+    return `Como funciona: ${pctText(config.cashback_percent)} do valor de cada compra volta para você em cashback, válido por ${daysText(config.cashback_valid_days)}. Ele pode pagar até ${config.cashback_max_use_percent}% de uma nova compra.${min}` + (offDays().length ? ' ' + offDaysText() : '') + (config.cashback_rules ? ' ' + config.cashback_rules : '');
   }
   // Texto do cashback na mensagem do dia: quanto ganhou hoje, saldo em reais e até quando vale.
   function cashbackText(cb) {
@@ -275,7 +281,7 @@
     if (saleCustomer?.id || saleCustomer?.anonymous) {
       const c = saleCustomer;
       box.innerHTML = `<div class="fs-picked"><div><b>${c.anonymous ? 'Venda sem cliente' : custLink(c.id, esc(c.name))}</b>${c.phone ? ' · ' + esc(c.phone) : ''} ${cbBadge(c.cashback)}${progressBar(c.loyalty)}</div><button type="button" class="nv-button secondary fs-small" id="fsChange">Trocar</button></div>`;
-      $('fsChange').onclick = () => { saleCustomer = null; cbWanted = false; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; $('fsSale')?.dispatchEvent(new Event('input')); };
+      $('fsChange').onclick = () => { saleCustomer = null; cbWanted = false; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; if (isPet()) { svcPet = null; drawService(); } $('fsSale')?.dispatchEvent(new Event('input')); };
       drawCashbackBox(); return;
     }
     if (saleCustomer?.isNew) {
@@ -298,7 +304,7 @@
     $('fsAnon').onclick = () => { saleCustomer = { anonymous: true }; drawCustomerPicker(); };
   }
   async function pick(id) {
-    const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker(); $('fsSale')?.dispatchEvent(new Event('input'));
+    const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker(); if (isPet()) { svcPet = null; if (svc.model && !svcCart.length) svc.model = ''; drawService(); } $('fsSale')?.dispatchEvent(new Event('input'));
     const box = $('fsOrderBox');
     box.innerHTML = c.orders.length ? `<label class="nv-field">É pagamento de um pedido de serviço? (opcional)<select id="fsOrder"><option value="">Não, venda avulsa</option>${c.orders.map(o => `<option value="${o.id}">Pedido ${esc(o.order_number || '')} · ${esc(o.details?.model || o.details?.brand || o.process || '')} · ${o.status === 'completed' ? 'finalizado' : 'em andamento'} · ${dmy(o.created_at)}</option>`).join('')}</select><small>Pedido de serviço já conta no cartão quando é finalizado; a venda dele não conta de novo.</small></label>` : '';
   }
@@ -354,12 +360,13 @@
   const payable = () => { const t = currentTotal(); return Number.isFinite(t) ? t - cbUse() : t; };
   function drawCashbackBox() {
     const box = $('fsCbBox'); if (!box) return;
-    const bal = cbBalance(); if (!bal) { box.innerHTML = ''; box.dataset.html = ''; return; }
+    const off = cbOffToday() ? `<p class="nv-help fs-cb-off">${FPIcon('wallet')} Hoje (${WEEKDAYS[todayDow()]}) as compras não geram cashback.</p>` : '';
+    const bal = cbBalance(); if (!bal) { if (box.dataset.html !== off) { box.innerHTML = off; box.dataset.html = off; } return; }
     const cb = saleCustomer.cashback, t = currentTotal(), can = Number.isFinite(t) && t > 0 ? cbAllowed(t, bal) : 0, use = cbUse();
     const when = cb.next_expires_on ? `${cb.next_expiring_cents < bal ? brl(cb.next_expiring_cents) + ' vence em' : 'Vale até'} ${ymdShort(cb.next_expires_on)}` : '';
     const html = `<div class="fs-cb"><div><b class="fs-cb-title">${FPIcon('wallet')}Cashback disponível: ${brl(bal)}</b><small>${when}</small></div>
       <label class="fs-check"><input type="checkbox" id="fsCbUse" ${cbWanted ? 'checked' : ''} ${can ? '' : 'disabled'}> ${can ? `Usar cashback nesta venda: <b>− ${brl(can)}</b>` : 'Informe o valor da venda para usar o cashback'}</label>
-      ${use ? `<div class="fs-cb-pay">A pagar: <b>${brl(t - use)}</b> <small>(${brl(t)} − ${brl(use)} de cashback${bal - use > 0 ? ` · fica ${brl(bal - use)} de saldo` : ''})</small></div>` : can && can < bal ? `<small class="nv-help">Limite: até ${config.cashback_max_use_percent}% do valor da compra.</small>` : ''}</div>`;
+      ${off}${use ? `<div class="fs-cb-pay">A pagar: <b>${brl(t - use)}</b> <small>(${brl(t)} − ${brl(use)} de cashback${bal - use > 0 ? ` · fica ${brl(bal - use)} de saldo` : ''})</small></div>` : can && can < bal ? `<small class="nv-help">Limite: até ${config.cashback_max_use_percent}% do valor da compra.</small>` : ''}</div>`;
     if (box.dataset.html === html) return; // evita redesenhar (e perder o foco) a cada tecla
     box.dataset.html = html; box.innerHTML = html;
     const cbx = $('fsCbUse'); if (cbx) cbx.onchange = () => { cbWanted = cbx.checked; $('fsSale')?.dispatchEvent(new Event('input')); };
@@ -529,7 +536,7 @@
     const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
     if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
     const note = s.loyalty?.enabled ? (s.loyalty_counted ? 'Somou 1 compra no cartão.' : s.sale.order_id ? 'Pagamento de pedido: conta no cartão quando o pedido é finalizado.' : 'Abaixo do valor mínimo: não somou no cartão.') : '';
-    const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
+    const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : s.sale.cashback_off_today ? `Não gerou cashback (${WEEKDAYS[todayDow()]} é dia sem cashback).` : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
     box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${custLink(c.id, esc(c.name))}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">${FPIcon('wallet')} ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
       <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
     wireReceipt();
@@ -544,6 +551,53 @@
   // Produtos e serviços somam na MESMA venda: o botão Produto/Serviço só troca o painel de lançamento.
   // svcCart = serviços já postos na venda; o serviço em edição (svc) entra junto ao registrar, se estiver completo.
   let saleMode = 'product', svc = {}, servicesCache = null, serviceItems = null, svcCart = [];
+  // Pet shop: pet do atendimento (da ficha do cliente) e preço pelas variáveis do serviço cadastrado.
+  // Preço = base + (valor da raça, se a raça do pet estiver na lista; senão acréscimo do porte) + acréscimo da pelagem.
+  let svcPet = null, svcFilter = '';
+  const petsCache = new Map();
+  const isPet = () => window.__fpNiche === 'pet';
+  const normName = n => String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const SIZE_ALIAS = { mini: 'micro', toy: 'micro' };
+  const sameName = (a, b) => { const x = normName(a), y = normName(b); return !!x && (x === y || (SIZE_ALIAS[x] || x) === (SIZE_ALIAS[y] || y)); };
+  function petPrice(item, pet) {
+    if (item.price_cents == null) return null;
+    const r = item.price_rules || {}, parts = [{ label: 'base', cents: item.price_cents }];
+    if (pet) {
+      const find = (list, v) => (list || []).find(x => sameName(x.name, v));
+      const breed = find(r.breed, pet.breed), size = breed ? null : find(r.size, pet.size), coat = find(r.coat, pet.coat);
+      if (breed) parts.push({ label: breed.name, cents: breed.cents });
+      if (size) parts.push({ label: 'porte ' + size.name, cents: size.cents });
+      if (coat) parts.push({ label: 'pelo ' + coat.name, cents: coat.cents });
+    }
+    return { cents: parts.reduce((a, x) => a + x.cents, 0), parts };
+  }
+  const hasRules = i => ['size', 'coat', 'breed'].some(k => (i.price_rules?.[k] || []).length);
+  const petLabel = p => [p.name, p.breed, p.size, p.coat && p.coat !== 'Curto' ? 'pelo ' + p.coat : ''].filter(Boolean).join(' · ');
+  async function customerPets() {
+    const id = saleCustomer?.id; if (!id) return [];
+    if (!petsCache.has(id)) petsCache.set(id, await api('/customers/' + id + '/pets').catch(() => []));
+    return petsCache.get(id);
+  }
+  // Recalcula o preço do serviço escolhido no botão quando muda o pet (se o preço não foi mexido à mão).
+  function repriceSvc() {
+    if (!svc.catalog_id || !svc.autoPrice) return;
+    const item = (serviceItems || []).find(i => i.id === svc.catalog_id); if (!item) return;
+    const pp = petPrice(item, svcPet); if (!pp) return;
+    svc.price = centsText(pp.cents); svc.calc = pp.parts.length > 1 ? pp.parts.map(x => (x.label === 'base' ? 'Base ' : x.label + ' ') + brl(x.cents)).join(' + ') + ' = ' + brl(pp.cents) : '';
+  }
+  async function drawPetPicker() {
+    const box = $('fsSvcPetBox'); if (!box) return;
+    if (!saleCustomer?.id) { box.innerHTML = '<p class="nv-help">Escolha o cliente acima para puxar o pet e o preço pelo porte, pelagem e raça.</p>'; return; }
+    const pets = await customerPets(); if (!box.isConnected) return;
+    if (svcPet && !pets.some(p => p.id === svcPet.id)) svcPet = null;
+    if (!svcPet && pets.length === 1) { svcPet = pets[0]; if (!String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); drawService(); return; }
+    box.innerHTML = pets.length ? `<div class="fs-chips">${pets.map(p => `<button type="button" class="fs-chip${svcPet?.id === p.id ? ' fs-chip-on' : ''}" aria-pressed="${svcPet?.id === p.id}" data-fs-pet="${p.id}"><b>${esc(p.name)}</b><small>${esc([p.breed, p.size, p.coat && p.coat !== 'Curto' ? 'pelo ' + p.coat : ''].filter(Boolean).join(' · ') || 'sem raça/porte na ficha')}</small></button>`).join('')}</div>`
+      : '<p class="nv-help">Este cliente não tem animal na ficha. Digite o nome do pet abaixo (o preço fica o base).</p>';
+    box.querySelectorAll('[data-fs-pet]').forEach(b => b.onclick = () => {
+      svcPet = pets.find(p => p.id === b.dataset.fsPet) || null; svc.model = svcPet?.name || ''; repriceSvc();
+      drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
+    });
+  }
   const WARRANTY = [['', 'Sem garantia'], ['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias'], ['180', '6 meses'], ['365', '1 ano']];
   const PART_NAMES = ['Tela', 'Bateria', 'Conector de carga', 'Tampa traseira', 'Vidro da câmera', 'Câmera', 'Alto-falante', 'Microfone', 'Flex', 'Botão'];
   const svcFilled = () => String(svc.name || '').trim().length > 0;
@@ -616,14 +670,21 @@
     const [items, history] = await Promise.all([loadServiceItems(), servicesCache ? servicesCache : api('/store/sales/services').then(r => (servicesCache = r)).catch(() => [])]);
     if (!box.isConnected) return;
     const last = name => history.find(h => h.name.toLowerCase() === name.toLowerCase())?.last_price_cents ?? null;
-    const priceOf = i => i.price_cents ?? last(i.name);
+    const priceOf = i => (isPet() && i.price_cents != null ? petPrice(i, svcPet).cents : null) ?? i.price_cents ?? last(i.name);
     const current = String(svc.name || '').trim().toLowerCase();
-    box.innerHTML = `<div class="fs-quick-head"><span>Serviços</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar serviço'}</button></div>
-      ${items.length ? `<div class="fs-chips">${items.map(i => { const p = priceOf(i); return `<button type="button" class="fs-chip${i.name.toLowerCase() === current ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${i.name.toLowerCase() === current}"><b>${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; }).join('')}</div>` : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (troca de tela, bateria…) para lançar com um toque.</p>'}`;
+    const chip = i => { const p = priceOf(i); return `<button type="button" class="fs-chip${i.name.toLowerCase() === current ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${i.name.toLowerCase() === current}"><b>${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; };
+    const many = items.length > 14, f = normName(svcFilter), shown = f ? items.filter(i => normName(i.name).includes(f)) : items;
+    const main = shown.filter(i => !i.addon), extra = shown.filter(i => i.addon);
+    const group = (title, list) => list.length ? (extra.length && main.length ? `<div class="fs-chip-group">${title}</div>` : '') + `<div class="fs-chips">${list.map(chip).join('')}</div>` : '';
+    box.innerHTML = `<div class="fs-quick-head"><span>Serviços${isPet() && svcPet ? ` <small class="nv-help">preços para ${esc(svcPet.name)}</small>` : ''}</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar serviço'}</button></div>
+      ${many ? `<input type="search" id="fsSvcFilter" class="fs-svc-filter" placeholder="Filtrar serviços (ex.: banho, tosa, hidratação)" value="${esc(svcFilter)}" aria-label="Filtrar serviços">` : ''}
+      ${items.length ? (group('Principais', main) + group('Adicionais', extra) || '<p class="nv-help">Nenhum serviço com esse nome.</p>') : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (troca de tela, bateria…) para lançar com um toque.</p>'}`;
+    if ($('fsSvcFilter')) $('fsSvcFilter').oninput = e => { svcFilter = e.target.value; const pos = e.target.selectionStart; drawServiceChips().then(() => { const n = $('fsSvcFilter'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }); };
     box.querySelectorAll('[data-fs-svc]').forEach(b => b.onclick = () => {
       const i = items.find(x => x.id === b.dataset.fsSvc); if (!i) return;
       const p = priceOf(i);
-      svc.name = i.name; svc.price = p != null ? centsText(p) : '';
+      svc.name = i.name; svc.price = p != null ? centsText(p) : ''; svc.catalog_id = i.id; svc.autoPrice = p != null; svc.calc = '';
+      if (isPet()) { if (svcPet && !String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); }
       // Custo: o da peça escolhida vale mais; sem peça, usa o custo cadastrado no serviço.
       if (!svc.part) svc.cost = i.cost_cents != null ? centsText(i.cost_cents) : (svc.cost || '');
       drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
@@ -631,25 +692,67 @@
     });
     $('fsSvcManage').onclick = manageServices;
   }
+  // Variáveis de preço no cadastro do serviço (pet shop): porte e pelagem com campos fixos; raças uma por linha.
+  const SIZES = ['Micro', 'Pequeno', 'Médio', 'Grande', 'Gigante'], COATS = ['Médio', 'Longo'];
+  const ruleOf = (list, n) => (list || []).find(x => sameName(x.name, n));
+  const rulesSummary = i => { const r = i.price_rules || {}, out = [];
+    if (r.size?.length) out.push('porte ' + r.size.map(x => x.name + ' +' + centsText(x.cents)).join(', '));
+    if (r.coat?.length) out.push('pelo ' + r.coat.map(x => x.name + ' +' + centsText(x.cents)).join(', '));
+    if (r.breed?.length) out.push(r.breed.length + (r.breed.length > 1 ? ' raças' : ' raça'));
+    return out.join(' · '); };
+  function varsEditor(ed) {
+    const r = ed?.price_rules || {}, val = (list, n) => { const x = ruleOf(list, n); return x ? centsText(x.cents) : ''; };
+    const extraSizes = (r.size || []).filter(x => !SIZES.some(n => sameName(n, x.name))), extraCoats = (r.coat || []).filter(x => !COATS.some(n => sameName(n, x.name)));
+    return `<label class="fs-check"><input type="checkbox" name="addon" ${ed?.addon ? 'checked' : ''}> Serviço adicional (tosa higiênica, hidratação, corte de unhas…) <small class="nv-help">entra na comissão de adicionais</small></label>
+      <details class="fs-vars"${ed && hasRules(ed) ? ' open' : ''}><summary>Variáveis de preço: porte, pelagem e raça</summary>
+        <p class="nv-help">Preço cobrado = preço base + acréscimo do porte + acréscimo da pelagem. Se a raça do pet estiver na lista de raças, vale o valor da raça no lugar do porte. Deixe em branco o que não muda o preço.</p>
+        <div class="fs-vars-row"><span>Porte (acréscimo)</span>${SIZES.map(n => `<label class="nv-field">${n}<input name="size_${normName(n)}" data-size="${n}" inputmode="decimal" placeholder="0,00" value="${val(r.size, n)}"></label>`).join('')}</div>
+        <div class="fs-vars-row"><span>Pelagem (acréscimo)</span>${COATS.map(n => `<label class="nv-field">${n}<input name="coat_${normName(n)}" data-coat="${n}" inputmode="decimal" placeholder="0,00" value="${val(r.coat, n)}"></label>`).join('')}</div>
+        ${extraSizes.length || extraCoats.length ? `<p class="nv-help">Também cadastrado: ${esc([...extraSizes, ...extraCoats].map(x => x.name + ' +' + centsText(x.cents)).join(', '))} (fica como está).</p>` : ''}
+        <label class="nv-field">Raças com valor próprio <small class="nv-help">uma por linha, ex.: Golden Retriever = 80,00</small><textarea name="breeds" rows="5" placeholder="Golden Retriever = 80,00&#10;Labrador Retriever = 35,00">${esc((r.breed || []).map(x => x.name + ' = ' + centsText(x.cents)).join('\n'))}</textarea></label>
+      </details>`;
+  }
+  // Lê as variáveis do formulário; devolve texto de erro se algo estiver inválido.
+  function readVars(f, ed) {
+    const r = ed?.price_rules || {}, money = v => { const t = v.trim(); if (!t) return null; const c = parseMoney(t); return Number.isFinite(c) && c >= 0 ? c : NaN; };
+    const out = { size: (r.size || []).filter(x => !SIZES.some(n => sameName(n, x.name))), coat: (r.coat || []).filter(x => !COATS.some(n => sameName(n, x.name))), breed: [] };
+    for (const inp of f.querySelectorAll('[data-size],[data-coat]')) {
+      const c = money(inp.value); if (c === null) continue; if (Number.isNaN(c)) return `Valor inválido em ${inp.dataset.size ? 'porte' : 'pelagem'} ${inp.dataset.size || inp.dataset.coat}.`;
+      (inp.dataset.size ? out.size : out.coat).push({ name: inp.dataset.size || inp.dataset.coat, cents: c });
+    }
+    for (const [n, line] of f.elements.breeds.value.split('\n').entries()) {
+      if (!line.trim()) continue;
+      const m = line.match(/^(.+?)\s*(?:=|:|;|\t)\s*(?:R\$\s*)?([\d.,]+)\s*$/) || line.match(/^(.+?)\s+(?:R\$\s*)?([\d.,]+)\s*$/);
+      const c = m ? parseMoney(m[2]) : NaN;
+      if (!m || !Number.isFinite(c) || c < 0) return `Raças, linha ${n + 1}: use "Raça = valor" (ex.: Golden Retriever = 80,00).`;
+      out.breed.push({ name: m[1].trim().slice(0, 60), cents: c });
+    }
+    return out;
+  }
   async function manageServices(editId) {
     const items = await loadServiceItems(true);
     const ed = typeof editId === 'string' ? items.find(i => i.id === editId) : null;
     openDialog(`${header('Serviços')}<p class="nv-help">Aparecem como botões no modo "Serviço" do caixa. O preço e o custo vêm preenchidos e podem ser mudados na hora. Sem preço, o botão usa o último valor cobrado.</p>
-      <form id="fsSvcForm" class="fs-row" autocomplete="off"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="Ex.: Troca de tela" value="${esc(ed?.name || '')}"></label>
-      <label class="nv-field">Preço<input name="price" inputmode="decimal" placeholder="0,00" value="${ed?.price_cents != null ? centsText(ed.price_cents) : ''}"></label>
-      <label class="nv-field">Custo (opcional)<input name="cost" inputmode="decimal" placeholder="0,00" value="${ed?.cost_cents != null ? centsText(ed.cost_cents) : ''}"></label>
-      <button class="nv-button">${ed ? 'Salvar' : 'Cadastrar'}</button>${ed ? '<button type="button" class="nv-button secondary" id="fsSvcCancelEdit">Cancelar</button>' : ''}</form><p role="status" class="nv-help" id="fsSvcStatus"></p>
-      <div class="nv-list">${items.map(i => `<div class="fs-sale"><div><b>${esc(i.name)}</b><br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}${i.cost_cents != null ? ' · custo ' + brl(i.cost_cents) : ''}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-svc-edit="${i.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-svc-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum serviço cadastrado.</p>'}</div>`);
+      <form id="fsSvcForm" autocomplete="off"><div class="fs-row"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="${isPet() ? 'Ex.: Banho de cheiro' : 'Ex.: Troca de tela'}" value="${esc(ed?.name || '')}"></label>
+      <label class="nv-field">Preço${isPet() ? ' base' : ''}<input name="price" inputmode="decimal" placeholder="0,00" value="${ed?.price_cents != null ? centsText(ed.price_cents) : ''}"></label>
+      <label class="nv-field">Custo (opcional)<input name="cost" inputmode="decimal" placeholder="0,00" value="${ed?.cost_cents != null ? centsText(ed.cost_cents) : ''}"></label></div>
+      ${isPet() ? varsEditor(ed) : ''}
+      <div class="fs-row"><button class="nv-button">${ed ? 'Salvar' : 'Cadastrar'}</button>${ed ? '<button type="button" class="nv-button secondary" id="fsSvcCancelEdit">Cancelar</button>' : ''}</div></form><p role="status" class="nv-help" id="fsSvcStatus"></p>
+      ${items.length > 14 ? '<input type="search" id="fsSvcListFilter" class="fs-svc-filter" placeholder="Filtrar a lista" aria-label="Filtrar a lista de serviços">' : ''}
+      <div class="nv-list" id="fsSvcList">${items.map(i => `<div class="fs-sale" data-svc-name="${esc(normName(i.name))}"><div><b>${esc(i.name)}</b>${i.addon ? ' <span class="fs-tag">adicional</span>' : ''}<br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}${i.cost_cents != null ? ' · custo ' + brl(i.cost_cents) : ''}${hasRules(i) ? ' · ' + esc(rulesSummary(i)) : ''}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-svc-edit="${i.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-svc-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum serviço cadastrado.</p>'}</div>`);
     const f = $('fsSvcForm'), st = $('fsSvcStatus');
     if (ed) { f.elements.price.focus(); $('fsSvcCancelEdit').onclick = () => manageServices(); }
+    if ($('fsSvcListFilter')) $('fsSvcListFilter').oninput = e => { const t = normName(e.target.value); document.querySelectorAll('#fsSvcList [data-svc-name]').forEach(n => { n.hidden = !!t && !n.dataset.svcName.includes(t); }); };
     f.onsubmit = async e => {
       e.preventDefault();
       const name = f.elements.name.value.trim(), pr = f.elements.price.value.trim(), co = f.elements.cost.value.trim();
       const price = pr ? parseMoney(pr) : null, cost = co ? parseMoney(co) : null;
       if (name.length < 2) { st.textContent = 'Informe o serviço.'; return; }
       if ((pr && !(price >= 0)) || (co && !(cost >= 0))) { st.textContent = 'Preço ou custo inválido.'; return; }
+      const body = { name, price_cents: price, cost_cents: cost };
+      if (isPet()) { const vars = readVars(f, ed); if (typeof vars === 'string') { st.textContent = vars; return; } body.addon = f.elements.addon.checked; body.price_rules = vars; }
       try {
-        await api(ed ? '/store/sales/service-items/' + ed.id : '/store/sales/service-items', ed ? 'PATCH' : 'POST', { name, price_cents: price, cost_cents: cost });
+        await api(ed ? '/store/sales/service-items/' + ed.id : '/store/sales/service-items', ed ? 'PATCH' : 'POST', body);
         await manageServices(); drawServiceChips(); $('fsSvcStatus').textContent = `"${name}" ${ed ? 'salvo' : 'cadastrado'}.`;
       } catch (err) { st.textContent = err.message; }
     };
@@ -662,20 +765,23 @@
   const partLabel = p => p.name + (p.device_model ? ' · ' + p.device_model : '');
   function drawService() {
     const box = $('fsSvc'); if (!box) return;
-    box.innerHTML = `<div class="fs-quick" id="fsSvcQuick"></div>
+    const pet = isPet(), hide = pet ? ' hidden' : '';
+    box.innerHTML = `${pet ? '<div class="nv-field fs-svc-pet">Pet do atendimento<div id="fsSvcPetBox"></div></div>' : ''}<div class="fs-quick" id="fsSvcQuick"></div>
       <div class="fs-sugg"><label class="nv-field">Serviço<input id="fsSvcName" maxlength="120" list="fsSvcNames" placeholder="Ex.: Troca de tela, troca de bateria" value="${esc(svc.name || '')}"></label><datalist id="fsSvcNames"></datalist></div>
-      <div class="nv-field">Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
+      <div class="nv-field"${hide}>Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
       <div class="fs-row"><label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsSvcModel" maxlength="80" placeholder="${FP.ex('item')}" value="${esc(svc.model || '')}"></label>
-        <label class="nv-field fs-grow fs-sugg">Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
+        <label class="nv-field fs-grow fs-sugg"${hide}>Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input id="fsSvcPrice" inputmode="decimal" placeholder="0,00" value="${esc(svc.price || '')}"></label>
         <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
-        <label class="nv-field">Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
-      <p class="nv-help" id="fsSvcProfit"></p>
-      <div class="nv-field fs-gift">Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
+        <label class="nv-field"${hide}>Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
+      ${pet && svc.calc ? `<p class="nv-help fs-svc-calc" id="fsSvcCalc">${esc(svc.calc)}</p>` : ''}<p class="nv-help" id="fsSvcProfit"></p>
+      <div class="nv-field fs-gift"${hide}>Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
       <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>
       <button type="button" class="nv-button secondary fs-wide fs-svc-add" id="fsSvcAdd">${FPIcon('plus') || '+'} Pôr na venda e lançar outro serviço</button>
       <p class="nv-help fs-svc-tip">Para vender produto junto, toque em <b>Produto</b> (ou bipe o código): o serviço continua na mesma venda.</p>`;
-    const read = () => { svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
+    const read = () => { if (svc.autoPrice && $('fsSvcPrice').value !== (svc.price || '')) { svc.autoPrice = false; svc.calc = ''; const k = $('fsSvcCalc'); if (k) k.remove(); }
+      if (svc.catalog_id && normName($('fsSvcName').value) !== normName(svc.name)) { svc.catalog_id = null; svc.autoPrice = false; }
+      svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
     const profit = profitNote;
     box.oninput = box.onchange = read;
     suggestField($('fsSvcModel'), '/store/device-models', read);
@@ -685,11 +791,11 @@
       const dl = $('fsSvcNames'); if (!dl) return; dl.innerHTML = rows.map(r => `<option value="${esc(r.name)}">`).join('');
       $('fsSvcName').onchange = () => { const hit = rows.find(r => r.name.toLowerCase() === $('fsSvcName').value.trim().toLowerCase()); if (hit && !$('fsSvcPrice').value.trim() && hit.last_price_cents) $('fsSvcPrice').value = centsText(hit.last_price_cents); read(); $('fsSale')?.dispatchEvent(new Event('input')); };
     });
-    drawPartPicker(); drawGiftPicker(); drawServiceChips(); read();
+    drawPartPicker(); drawGiftPicker(); drawServiceChips(); if (pet) drawPetPicker(); read();
     $('fsSvcAdd').onclick = () => {
       const err = svcFilled() ? svcProblem() : 'Informe o serviço (ex.: troca de tela).', st = $('fsSaleStatus');
       if (err) { if (st) st.textContent = err; return; }
-      svcCart.push({ ...svc }); svc = {}; if (st) st.textContent = ''; drawService(); $('fsSale')?.dispatchEvent(new Event('input')); $('fsSvcName')?.focus();
+      svcCart.push({ ...svc }); svc = isPet() && svcPet ? { model: svcPet.name } : {}; if (st) st.textContent = ''; drawService(); $('fsSale')?.dispatchEvent(new Event('input')); $('fsSvcName')?.focus();
     };
   }
   // Brinde do serviço: escolhe o produto (película…) e, se tiver modelos, o modelo. Preço zero na venda.
@@ -768,6 +874,7 @@
     if (String(x.model || '').trim()) item.device_model = x.model.trim();
     if (x.part) item.part_id = x.part.id;
     if (x.warranty) item.warranty_days = Number(x.warranty);
+    if (x.catalog_id) item.catalog_id = x.catalog_id;
     const items = [item];
     if (x.gift) items.push({ product_id: x.gift.product.id, quantity: 1, gift: true, ...(x.gift.variant ? { variant_name: x.gift.variant } : {}) });
     return items;
@@ -2013,6 +2120,8 @@
           <label class="nv-field">Pode pagar até (% da compra)<input type="number" min="1" max="100" name="cashback_max_use_percent" ${dis} value="${config.cashback_max_use_percent ?? 30}"></label>
           <label class="nv-field">Validade (dias)<input type="number" min="7" max="730" name="cashback_valid_days" ${dis} value="${config.cashback_valid_days ?? 90}"></label>
           <label class="nv-field">Compra mínima para ganhar<input name="cashback_min" inputmode="decimal" ${dis} value="${config.cashback_min_sale_cents ? centsText(config.cashback_min_sale_cents) : ''}" placeholder="0,00"></label></div>
+        <div class="nv-field">Dias sem cashback <small class="nv-help">ex.: dia de promoção. Nesses dias nenhuma compra gera cashback; usar o saldo continua valendo.</small>
+          <div class="fs-weekdays">${WEEKDAYS.map((d, n) => `<label class="fs-check"><input type="checkbox" name="cb_off" value="${n}" ${dis} ${offDays().includes(n) ? 'checked' : ''}> ${d[0].toUpperCase() + d.slice(1, 3)}</label>`).join('')}</div></div>
         <label class="nv-field">Regras extras (vão na mensagem)<input name="cashback_rules" maxlength="400" ${dis} value="${esc(config.cashback_rules || '')}" placeholder="Ex.: Não vale para aparelhos novos."></label>
         <small class="nv-help">O cashback é calculado sobre o valor pago (sem desconto e sem o cashback usado). Ele fica disponível a partir da próxima compra, é usado primeiro o que vence antes e, se a venda for cancelada, volta ao que era. 90 dias = 3 meses.</small>
         <label class="nv-field">Mensagem de aviso de vencimento<textarea name="cashback_reminder_message" rows="4" maxlength="1000" ${dis}>${esc(config.cashback_reminder_message || DEFAULT_CB_REMINDER)}</textarea></label>
@@ -2025,7 +2134,8 @@
     const f = $('fsCfg');
     const cbForm = () => ({ cashback_enabled: f.elements.cashback_enabled.checked, cashback_percent: parseMoney(f.elements.cashback_percent.value) / 100, cashback_max_use_percent: Number(f.elements.cashback_max_use_percent.value),
       cashback_valid_days: Number(f.elements.cashback_valid_days.value), cashback_min_sale_cents: f.elements.cashback_min.value.trim() ? parseMoney(f.elements.cashback_min.value) : 0,
-      cashback_rules: f.elements.cashback_rules.value.trim(), cashback_reminder_message: f.elements.cashback_reminder_message.value.trim() });
+      cashback_rules: f.elements.cashback_rules.value.trim(), cashback_reminder_message: f.elements.cashback_reminder_message.value.trim(),
+      cashback_off_weekdays: [...f.querySelectorAll('[name=cb_off]:checked')].map(x => Number(x.value)) });
     const ahead = d => { const x = new Date(); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
     const preview = () => { const saved = { ...config }; Object.assign(config, cbForm()); config.status_message = f.elements.status_message.value; config.google_review_url = f.elements.google_review_url.value.trim(); config.loyalty_rules = f.elements.loyalty_rules.value.trim();
       $('fsCbPreview').textContent = config.cashback_enabled ? reminderMessage({ name: 'Maria Silva', expiring_cents: 450, balance_cents: 1250, days_left: 5, expires_on: ahead(5) }) : '(cashback desligado)';
@@ -2050,6 +2160,56 @@
         Object.assign(config, r, { loyalty_enabled: f.elements.loyalty_enabled.checked }); st.textContent = 'Salvo.';
       } catch (err) { st.textContent = err.message.includes('inválidos') ? 'Confira o link (precisa começar com https://) e o prêmio (mínimo 3 letras).' : err.message; }
     };
+  }
+
+  // ---------------- Metas e comissões ----------------
+  let goalMonth = '';
+  const BASES = { addons: 'adicionais', services: 'serviços', all: 'tudo que vendeu' };
+  const monthName = m => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }); };
+  const bar = (v, goal) => { const pct = goal ? Math.min(100, Math.round(100 * v / goal)) : 0; return goal ? `<div class="fs-goal-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>` : ''; };
+  async function loadGoals(box, alive) {
+    const d = await api('/store/sales/performance' + (goalMonth ? '?month=' + goalMonth : '')); if (!alive()) return;
+    goalMonth = d.month;
+    const st = d.store, goal = st.goal_cents, left = goal ? Math.max(0, goal - st.services_cents) : 0;
+    const pace = goal && left && d.days_left ? `Faltam <b>${brl(left)}</b> · ${brl(Math.ceil(left / d.days_left))} por dia nos ${d.days_left} dia${d.days_left > 1 ? 's' : ''} que restam.` : goal && !left ? '<b>Meta batida!</b>' : goal ? `Faltaram ${brl(left)}.` : '';
+    const owner = d.is_owner;
+    box.innerHTML = `<section class="nv-card"><div class="nv-heading"><h2>Metas e comissões</h2><label class="fs-goal-month">Mês <input type="month" id="fsGoalMonth" value="${d.month}"></label></div>
+      <div class="fs-goal-store"><div class="fs-goal-head"><span>Serviços vendidos em ${esc(monthName(d.month))}</span><b>${brl(st.services_cents)}${goal ? ` <small>de ${brl(goal)}</small>` : ''}</b></div>
+        ${bar(st.services_cents, goal)}<p class="nv-help">${goal ? `${Math.round(100 * st.services_cents / goal)}% da meta da loja. ${pace}` : owner ? 'Sem meta da loja para este mês. Defina abaixo.' : 'Sem meta da loja para este mês.'}</p>
+        <div class="fs-goal-stats"><div><b>${st.baths}</b><small>banhos</small></div><div><b>${st.addons}</b><small>adicionais · ${brl(st.addons_cents)}</small></div><div><b>${st.services}</b><small>serviços no total</small></div><div><b>${brl(st.total_cents)}</b><small>vendido no total (serviços e produtos)</small></div></div>
+        ${owner ? `<form id="fsGoalForm" class="fs-row fs-goal-form"><label class="nv-field">Meta da loja (serviços no mês)<input name="goal" inputmode="decimal" placeholder="Ex.: 30.000,00" value="${goal ? (goal / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}"></label><button class="nv-button">Salvar meta</button><span class="nv-help" id="fsGoalStatus" role="status">A meta continua valendo nos meses seguintes até ser mudada.</span></form>` : ''}</div>
+      <h3>${owner ? 'Por pessoa' : 'Você'}</h3>
+      <div class="fs-goal-people">${d.people.map(p => `<div class="fs-goal-person" data-user="${p.user_id}">
+        <div class="fs-goal-head"><span><b>${esc(p.name)}</b>${p.active ? '' : ' <small>(inativo)</small>'}</span><b>${brl(p.services_cents)}${p.goal_cents ? ` <small>de ${brl(p.goal_cents)}</small>` : ''}</b></div>
+        ${bar(p.services_cents, p.goal_cents)}
+        <p class="nv-help">${p.baths} banho${p.baths === 1 ? '' : 's'} · ${p.addons} adiciona${p.addons === 1 ? 'l' : 'is'} (${brl(p.addons_cents)}) · ${p.sales} venda${p.sales === 1 ? '' : 's'} (${brl(p.total_cents)})</p>
+        <p class="fs-goal-comm">${p.commission_percent ? `Comissão: <b>${brl(p.commission_cents)}</b> <small>(${String(p.commission_percent).replace('.', ',')}% sobre ${BASES[p.commission_base]})</small>` : '<small>Sem comissão</small>'}
+          ${owner ? `<button type="button" class="fs-link" data-goal-edit="${p.user_id}">${FPIcon('edit')} Ajustar</button>` : ''}</p>
+        <form class="fs-row fs-goal-edit" data-goal-form="${p.user_id}" hidden>
+          <label class="nv-field">Comissão (%)<input name="pct" inputmode="decimal" value="${String(p.commission_percent || 0).replace('.', ',')}"></label>
+          <label class="nv-field">Sobre<select name="base">${Object.entries(BASES).map(([k, v]) => `<option value="${k}" ${p.commission_base === k ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>
+          <label class="nv-field">Meta pessoal (serviços no mês)<input name="goal" inputmode="decimal" placeholder="opcional" value="${p.goal_cents ? (p.goal_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}"></label>
+          <button class="nv-button">Salvar</button><span class="nv-help" role="status"></span></form></div>`).join('') || '<p class="nv-help">Nenhuma venda neste mês.</p>'}</div>
+      <p class="nv-help">Conta o que aparece como <b>Vendedor</b> em cada venda do caixa (vendas canceladas não contam). Serviços = itens de serviço já com desconto e cashback usado. Adicional = serviço marcado como adicional no cadastro (Caixa → Serviço → Editar). Banhos = serviços com "banho" no nome.</p></section>`;
+    $('fsGoalMonth').onchange = e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) { goalMonth = e.target.value; loadGoals(box, alive); } };
+    // "30.000" (ponto de milhar, sem vírgula) também vale 30 mil.
+    const money = v => { let t = v.trim(); if (!t) return null; if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, ''); const c = parseMoney(t); return Number.isFinite(c) && c >= 0 ? c : NaN; };
+    if ($('fsGoalForm')) $('fsGoalForm').onsubmit = async e => {
+      e.preventDefault(); const c = money(e.currentTarget.elements.goal.value), out = $('fsGoalStatus');
+      if (Number.isNaN(c)) { out.textContent = 'Valor da meta inválido.'; return; }
+      try { await api('/store/sales/goals', 'PUT', { month: goalMonth, target_cents: c || null }); await loadGoals(box, alive); } catch (err) { out.textContent = err.message; }
+    };
+    box.querySelectorAll('[data-goal-edit]').forEach(b => b.onclick = () => { const f = box.querySelector(`[data-goal-form="${b.dataset.goalEdit}"]`); f.hidden = !f.hidden; if (!f.hidden) f.elements.pct.focus(); });
+    box.querySelectorAll('[data-goal-form]').forEach(f => f.onsubmit = async e => {
+      e.preventDefault(); const out = f.querySelector('[role=status]'), pct = parseMoney(f.elements.pct.value || '0') / 100, g = money(f.elements.goal.value);
+      if (!(pct >= 0 && pct <= 100)) { out.textContent = 'Comissão deve ficar entre 0 e 100%.'; return; }
+      if (Number.isNaN(g)) { out.textContent = 'Meta inválida.'; return; }
+      try {
+        await api('/store/sales/commission/' + f.dataset.goalForm, 'PATCH', { commission_percent: Math.round(pct * 100) / 100, commission_base: f.elements.base.value });
+        await api('/store/sales/goals', 'PUT', { month: goalMonth, user_id: f.dataset.goalForm, target_cents: g || null });
+        await loadGoals(box, alive);
+      } catch (err) { out.textContent = err.message; }
+    });
   }
 
   // ---------------- Integração com o painel ----------------
@@ -2099,27 +2259,32 @@
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
   .fs-split{border:1px solid var(--nv-border);border-radius:12px;padding:8px 10px;margin:-2px 0 10px;display:grid;gap:6px}.fs-split-row{display:flex;gap:8px;align-items:center}.fs-split-row select,.fs-split-row input{padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:#fff}.fs-split-row select{flex:0 0 130px}.fs-split-row input{flex:1;min-width:0}.fs-split-rest{flex:1;font-size:15px}.fs-split .fs-link{justify-self:start}
   .fs-mix{border:1px solid var(--nv-border);border-radius:12px;margin:8px 0 12px;overflow:hidden}.fs-mix-head{font-size:13px;font-weight:700;padding:8px 10px 4px;color:var(--nv-muted)}.fs-mix-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--nv-border);font-size:14px}.fs-mix-row .fp-ic{width:16px;height:16px;flex:0 0 auto;color:var(--nv-muted)}.fs-mix-row small{color:var(--nv-muted)}.fs-svc-add{margin-top:4px}.fs-svc-tip{margin:6px 0 10px}
+  .fs-chip-group{font-size:12px;font-weight:700;color:var(--nv-muted);margin:8px 0 4px;text-transform:uppercase;letter-spacing:.03em}.fs-svc-filter{width:100%;margin:0 0 8px;padding:8px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-svc-calc{margin:-4px 0 6px;color:var(--nv-blue,#2563eb);font-weight:600}.fs-svc-pet .fs-chips{margin-top:4px}
+  .fs-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nv-blue-soft,#e8f0fe);color:var(--nv-blue,#2563eb);vertical-align:middle}.fs-vars{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-vars summary{cursor:pointer;font-weight:700}.fs-vars-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:6px 0}.fs-vars-row>span{flex:0 0 100%;font-size:13px;font-weight:700;color:var(--nv-muted)}.fs-vars-row .nv-field{flex:1 1 90px;min-width:80px;margin:0}
+  .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
+  .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
 
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
     const phone = document.querySelector('.nv-phone-nav');
     if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }
 
   window.FPSales = {
     enabled: () => !!config?.enabled,
-    titles: { cash: 'Caixa', stock: 'Estoque', messages: 'Mensagens' },
-    moreItems: () => config?.enabled ? [['stock', 'Estoque'], ['messages', 'Mensagens'], ['cameras', 'Câmeras']] : [],
+    titles: { cash: 'Caixa', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
+    moreItems: () => config?.enabled ? [['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
     async load(view, box, alive) {
       box.classList.remove('fs-private');
       if (!config?.enabled) { box.innerHTML = '<section class="nv-card">Recurso não habilitado para esta loja.</section>'; return; }
       if (view === 'cash') return loadCash(box, alive);
       // Estoque pelo menu: as mesmas abas da janela do Caixa, sem precisar abrir o caixa.
       if (view === 'stock') { box.innerHTML = '<section class="nv-card fs-stockpage" id="fsStockPage"></section>'; stockPage = $('fsStockPage'); return productsDialog('', 'list'); }
+      if (view === 'goals') return loadGoals(box, alive);
       return loadMessages(box, alive);
     }
   };

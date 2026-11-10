@@ -251,7 +251,7 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
  const result=await q('UPDATE platform_settings SET sales_whatsapp=$1,support_whatsapp=CASE WHEN $2::boolean THEN NULLIF($3,\'\') ELSE support_whatsapp END WHERE id=true RETURNING sales_whatsapp,support_whatsapp',[v.sales_whatsapp,v.support_whatsapp!==undefined,v.support_whatsapp||'']);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.address,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,t.waiting_camera_id,to_char(t.auto_close_time,\'HH24:MI\') auto_close_time,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.address,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,t.waiting_camera_id,to_char(t.auto_close_time,\'HH24:MI\') auto_close_time,t.recordings_enabled,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
 }));
 // Encerramento automático diário (dono): horário em que pedidos esquecidos em andamento são finalizados.
@@ -260,6 +260,12 @@ app.patch('/api/store/auto-close',auth,roles('owner'),route(async(req,res)=>{
  const v=valid(z.object({time:z.union([z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/,'Horário inválido'),z.null()])}).strict(),req,res);if(!v)return;
  const r=await q(`UPDATE tenants SET auto_close_time=$1::time,auto_close_last_date=CASE WHEN $1::time IS NOT NULL AND (now() AT TIME ZONE '${STORE_TZ}')::time>=$1::time THEN (now() AT TIME ZONE '${STORE_TZ}')::date ELSE NULL END WHERE id=$2 RETURNING to_char(auto_close_time,'HH24:MI') auto_close_time`,[v.time,tid(req)]);
  await audit(req,'update_auto_close','tenant',tid(req));res.json(r.rows[0]);
+}));
+// Gravação dos atendimentos (dono): desligada, o cliente só acompanha ao vivo e não aparece vídeo para baixar.
+app.patch('/api/store/recordings',auth,roles('owner'),route(async(req,res)=>{
+ const v=valid(z.object({enabled:z.boolean()}).strict(),req,res);if(!v)return;
+ const r=await q('UPDATE tenants SET recordings_enabled=$1 WHERE id=$2 RETURNING recordings_enabled',[v.enabled,tid(req)]);
+ await audit(req,'update_recordings','tenant',tid(req));res.json(r.rows[0]);
 }));
 // Câmera da área de espera (dono): mostrada a todos os pedidos que estão na fila.
 app.patch('/api/store/waiting-camera',auth,roles('owner'),route(async(req,res)=>{
@@ -512,7 +518,8 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
   if(['pause','advance','back','complete','resume'].includes(v.action)){
    await c.query("UPDATE recordings SET status='finalizing',ended_at=COALESCE(ended_at,now()),updated_at=now() WHERE order_id=$1 AND tenant_id=$2 AND step_index=$3 AND status IN ('pending','recording','paused')",[o.id,tid(req),o.step_index]);
   }
-  if(status==='live'&&camera&&['start','advance','back','resume','reopen'].includes(v.action)&&(await c.query('SELECT 1 FROM cameras WHERE id=$1 AND tenant_id=$2 AND enabled AND deleted_at IS NULL',[camera,tid(req)])).rowCount){
+  // Loja com gravação desligada (tenants.recordings_enabled): só ao vivo, nenhum vídeo é gravado.
+  if(status==='live'&&camera&&['start','advance','back','resume','reopen'].includes(v.action)&&(await c.query('SELECT 1 FROM cameras ca JOIN tenants t ON t.id=ca.tenant_id WHERE ca.id=$1 AND ca.tenant_id=$2 AND ca.enabled AND ca.deleted_at IS NULL AND t.recordings_enabled',[camera,tid(req)])).rowCount){
    await c.query("INSERT INTO recordings(tenant_id,order_id,step_index,camera_id,status,visit_index) SELECT $1,$2,$3,$4,'pending',COALESCE(max(visit_index),-1)+1 FROM recordings WHERE order_id=$2 AND step_index=$3",[tid(req),o.id,index,camera]);
   }
   const upd=await c.query("UPDATE orders SET camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $5 THEN NULL WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() WHEN $6 THEN NULL ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index",[status,index,o.id,status==='queued'?null:camera,unstart,reopen]);
@@ -683,7 +690,7 @@ app.get('/api/public/orders/:token/recordings/:id/download',rateLimit({windowMs:
  JOIN cameras c ON c.id=rec.camera_id AND c.tenant_id=rec.tenant_id
  LEFT JOIN shop_devices d ON d.id=COALESCE(rec.device_id,c.device_id) AND d.tenant_id=rec.tenant_id
  LEFT JOIN store_media sm ON sm.tenant_id=o.tenant_id
- WHERE rec.id=$3 AND (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.status IN ('trial','active')
+ WHERE rec.id=$3 AND (o.public_token_hash=$1 OR o.share_code=$2) AND o.deleted_at IS NULL AND t.status IN ('trial','active') AND t.recordings_enabled
  AND rec.status IN ('upload_pending','ready') AND rec.started_at IS NOT NULL AND rec.ended_at > rec.started_at + interval '2 seconds'`,[digestToken(token),token,id]);
  if(!r.rowCount)return bad(res,404,'Gravação não encontrada');
  const rec=r.rows[0];
@@ -715,7 +722,7 @@ app.post('/api/master/edge-video/publish',auth,roles('master'),route(async(req,r
 app.get('/api/public/orders/:token/recordings',rateLimit({windowMs:60000,limit:60}),route(async(req,res)=>{
  const token=req.params.token;
  if(!/^[\w-]{16,100}$/.test(token))return bad(res,404,'Não encontrado');
- const r=await q("SELECT rec.id,rec.step_index,rec.visit_index,rec.status,rec.started_at,rec.ended_at FROM recordings rec JOIN orders o ON o.id=rec.order_id AND o.tenant_id=rec.tenant_id JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND t.status IN ('trial','active') AND o.deleted_at IS NULL ORDER BY rec.step_index,rec.visit_index",[digestToken(token),token]);
+ const r=await q("SELECT rec.id,rec.step_index,rec.visit_index,rec.status,rec.started_at,rec.ended_at FROM recordings rec JOIN orders o ON o.id=rec.order_id AND o.tenant_id=rec.tenant_id JOIN tenants t ON t.id=o.tenant_id WHERE (o.public_token_hash=$1 OR o.share_code=$2) AND t.status IN ('trial','active') AND t.recordings_enabled AND o.deleted_at IS NULL ORDER BY rec.step_index,rec.visit_index",[digestToken(token),token]);
  res.set('Cache-Control','no-store');res.json(r.rows);
 }));
 app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(async(req,res)=>{
@@ -741,7 +748,7 @@ app.get('/api/public/orders/:token',rateLimit({windowMs:60000,limit:90}),route(a
  (SELECT coalesce(json_agg(json_build_object('id',rec.id,'step_index',rec.step_index,'visit_index',rec.visit_index,
  'started_at',rec.started_at,'ended_at',rec.ended_at,'seconds',round(extract(epoch FROM rec.ended_at-rec.started_at))::int,
  'expires_at',rec.ended_at+make_interval(days => t.retention_days)) ORDER BY rec.step_index,rec.visit_index),'[]'::json)
- FROM recordings rec WHERE rec.order_id=o.id AND rec.tenant_id=o.tenant_id AND rec.status IN ('upload_pending','ready')
+ FROM recordings rec WHERE t.recordings_enabled AND rec.order_id=o.id AND rec.tenant_id=o.tenant_id AND rec.status IN ('upload_pending','ready')
  AND rec.started_at IS NOT NULL AND rec.ended_at > rec.started_at + interval '2 seconds'
  AND rec.ended_at > now() - make_interval(days => t.retention_days)) recordings
  FROM orders o JOIN tenants t ON t.id=o.tenant_id

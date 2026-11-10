@@ -8,9 +8,13 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { registerStockValue } from './stock-value.js';
 import { registerStoreAdmin, newPrice } from './store-admin.js';
+import { registerStorePerformance } from './store-performance.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
+// Dia da semana agora no fuso da loja (0=domingo … 6=sábado).
+const WEEKDAY = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export const weekdayNow = (d = new Date()) => WEEKDAY[new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(d)];
 const dayField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const phoneDigits = v => String(v || '').replace(/\D/g, '');
 const METHOD = z.enum(['cash', 'pix', 'debit', 'credit', 'other']);
@@ -31,6 +35,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   const guard = [...staff, enabled];
   const owner = [auth, roles('owner'), enabled];
   registerStockValue(app, { q, route, bad, valid, audit, guard, tid });
+  registerStorePerformance(app, { q, route, bad, valid, audit, guard, owner, tid, uuid });
   const { adminOnly } = registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard, tid, uuid });
   // Operador novato (access_level 'basic') não cancela venda, não lança saídas/sangria/suprimento,
   // não fecha o caixa e não dá desconto nem muda preço.
@@ -56,7 +61,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // Saldo = lotes não estornados, com sobra e ainda dentro da validade (último dia válido = expires_on, no fuso da loja).
   // Datas saem como texto 'AAAA-MM-DD' para não mudarem de dia ao virar JSON.
   const CB_ACTIVE = `reversed_at IS NULL AND remaining_cents>0 AND expires_on>=(now() AT TIME ZONE '${TZ.replace(/'/g, '')}')::date`;
-  const CB_CONFIG = 'cashback_enabled,cashback_percent,cashback_max_use_percent,cashback_valid_days,cashback_min_sale_cents,cashback_rules,cashback_reminder_message';
+  const CB_CONFIG = 'cashback_enabled,cashback_percent,cashback_max_use_percent,cashback_valid_days,cashback_min_sale_cents,cashback_rules,cashback_reminder_message,cashback_off_weekdays';
   const cbShape = r => ({ balance_cents: r?.balance_cents || 0, next_expires_on: r?.next_on || null, next_expiring_cents: r?.next_cents || 0 });
   async function cashbackFor(tenant, ids, client = { query: q }) {
     if (!ids.length) return new Map();
@@ -140,7 +145,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
-    res.json({ enabled: true, timezone: TZ, role: req.user.role, access_level: req.user.access_level, ...rest, cashback_percent: Number(rest.cashback_percent) });
+    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, cashback_percent: Number(rest.cashback_percent) });
   }));
   // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
   app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {
@@ -151,8 +156,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       cashback_valid_days: z.number().int().min(7).max(730).optional(),
       cashback_min_sale_cents: cents.optional(),
       cashback_rules: z.string().trim().max(400).optional(),
-      cashback_reminder_message: z.string().trim().max(1000).optional()
+      cashback_reminder_message: z.string().trim().max(1000).optional(),
+      // Dias da semana sem cashback (0=domingo … 6=sábado): nenhuma venda desses dias gera cashback.
+      cashback_off_weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional()
     }).strict(), req, res); if (!v) return;
+    if (v.cashback_off_weekdays) v.cashback_off_weekdays = [...new Set(v.cashback_off_weekdays)].sort();
     const keys = Object.keys(v); if (!keys.length) return bad(res, 400, 'Nada para salvar');
     const r = await q(`UPDATE tenants SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1} RETURNING ${CB_CONFIG}`, [...keys.map(k => v[k]), tid(req)]);
     await audit(req, 'update', 'cashback_settings', tid(req));
@@ -679,7 +687,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     automotive: ['Troca de óleo', 'Alinhamento e balanceamento', 'Revisão', 'Freios', 'Diagnóstico']
   };
   SERVICE_DEFAULTS.general = SERVICE_DEFAULTS.electronics;
-  const catalogFields = 'id,name,price_cents,cost_cents,position';
+  const catalogFields = 'id,name,price_cents,cost_cents,position,addon,price_rules';
+  // Variáveis de preço (pet shop): listas de {name, cents}. Nomes repetidos (sem acento/maiúsculas) ficam com o último.
+  const ruleList = z.array(z.object({ name: z.string().trim().min(1).max(60), cents: cents.max(10000000) }).strict()).max(80);
+  const priceRules = z.object({ size: ruleList.optional(), coat: ruleList.optional(), breed: ruleList.optional() }).strict();
+  const ruleKey = n => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const cleanRules = r => Object.fromEntries(Object.entries(r || {}).map(([k, list]) => [k, [...new Map(list.map(x => [ruleKey(x.name), { name: x.name.replace(/\s+/g, ' '), cents: x.cents }])).values()]]).filter(([, l]) => l.length));
   app.get('/api/store/sales/service-items', ...guard, route(async (req, res) => {
     const seeded = await q('UPDATE tenants SET service_catalog_seeded=true WHERE id=$1 AND NOT service_catalog_seeded RETURNING niche', [tid(req)]);
     const defaults = seeded.rowCount ? (SERVICE_DEFAULTS[seeded.rows[0].niche] || []) : [];
@@ -688,23 +701,26 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const r = await q(`SELECT ${catalogFields} FROM service_catalog WHERE tenant_id=$1 AND active ORDER BY position,lower(name)`, [tid(req)]);
     res.set('Cache-Control', 'no-store'); res.json(r.rows);
   }));
-  const catalogBody = z.object({ name: z.string().trim().min(2).max(80), price_cents: cents.nullable().optional(), cost_cents: cents.nullable().optional() }).strict();
+  const catalogBody = z.object({ name: z.string().trim().min(2).max(80), price_cents: cents.nullable().optional(), cost_cents: cents.nullable().optional(), addon: z.boolean().optional(), price_rules: priceRules.optional() }).strict();
   app.post('/api/store/sales/service-items', ...guard, route(async (req, res) => {
     const v = valid(catalogBody, req, res); if (!v) return;
     const n = (await q('SELECT count(*)::int n FROM service_catalog WHERE tenant_id=$1 AND active', [tid(req)])).rows[0].n;
-    if (n >= 60) return bad(res, 409, 'Limite de 60 serviços. Exclua algum antes de cadastrar outro.');
-    // Mesmo nome: atualiza preço e custo em vez de duplicar.
-    const up = await q(`UPDATE service_catalog SET price_cents=$3,cost_cents=$4 WHERE tenant_id=$1 AND active AND lower(name)=lower($2) RETURNING ${catalogFields}`, [tid(req), v.name, v.price_cents ?? null, v.cost_cents ?? null]);
-    const r = up.rowCount ? up : await q(`INSERT INTO service_catalog(tenant_id,name,price_cents,cost_cents,position) VALUES($1,$2,$3,$4,
-      (SELECT coalesce(max(position),0)+1 FROM service_catalog WHERE tenant_id=$1)) RETURNING ${catalogFields}`, [tid(req), v.name.replace(/\s+/g, ' '), v.price_cents ?? null, v.cost_cents ?? null]);
+    if (n >= 200) return bad(res, 409, 'Limite de 200 serviços. Exclua algum antes de cadastrar outro.');
+    // Mesmo nome: atualiza preço e custo (e variáveis, se vieram) em vez de duplicar.
+    const rules = v.price_rules ? JSON.stringify(cleanRules(v.price_rules)) : null;
+    const up = await q(`UPDATE service_catalog SET price_cents=$3,cost_cents=$4,addon=COALESCE($5,addon),price_rules=COALESCE($6::jsonb,price_rules) WHERE tenant_id=$1 AND active AND lower(name)=lower($2) RETURNING ${catalogFields}`, [tid(req), v.name, v.price_cents ?? null, v.cost_cents ?? null, v.addon ?? null, rules]);
+    const r = up.rowCount ? up : await q(`INSERT INTO service_catalog(tenant_id,name,price_cents,cost_cents,position,addon,price_rules) VALUES($1,$2,$3,$4,
+      (SELECT coalesce(max(position),0)+1 FROM service_catalog WHERE tenant_id=$1),$5,COALESCE($6::jsonb,'{}')) RETURNING ${catalogFields}`, [tid(req), v.name.replace(/\s+/g, ' '), v.price_cents ?? null, v.cost_cents ?? null, v.addon ?? false, rules]);
     await audit(req, 'create', 'service_catalog', r.rows[0].id); res.status(201).json(r.rows[0]);
   }));
   app.patch('/api/store/sales/service-items/:id', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Serviço inválido');
     const v = valid(catalogBody.partial().strict(), req, res); if (!v) return;
     try {
-      const r = await q(`UPDATE service_catalog SET name=COALESCE($3,name),price_cents=CASE WHEN $4 THEN $5::int ELSE price_cents END,cost_cents=CASE WHEN $6 THEN $7::int ELSE cost_cents END
-        WHERE id=$1 AND tenant_id=$2 AND active RETURNING ${catalogFields}`, [req.params.id, tid(req), v.name ?? null, 'price_cents' in v, v.price_cents ?? null, 'cost_cents' in v, v.cost_cents ?? null]);
+      const r = await q(`UPDATE service_catalog SET name=COALESCE($3,name),price_cents=CASE WHEN $4 THEN $5::int ELSE price_cents END,cost_cents=CASE WHEN $6 THEN $7::int ELSE cost_cents END,
+        addon=COALESCE($8,addon),price_rules=COALESCE($9::jsonb,price_rules)
+        WHERE id=$1 AND tenant_id=$2 AND active RETURNING ${catalogFields}`, [req.params.id, tid(req), v.name ?? null, 'price_cents' in v, v.price_cents ?? null, 'cost_cents' in v, v.cost_cents ?? null,
+        v.addon ?? null, v.price_rules ? JSON.stringify(cleanRules(v.price_rules)) : null]);
       if (!r.rowCount) return bad(res, 404, 'Serviço não encontrado');
       await audit(req, 'update', 'service_catalog', req.params.id); res.json(r.rows[0]);
     } catch (e) { if (e.code === '23505') return bad(res, 409, 'Já existe um serviço com este nome'); throw e; }
@@ -747,8 +763,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999), unit_price_cents: cents.optional(), variant_name: z.string().trim().min(1).max(80).optional(), gift: z.boolean().optional() }).strict(),
         z.object({ name: z.string().trim().min(1).max(120), quantity: z.number().int().min(1).max(9999), unit_price_cents: cents }).strict(),
         // Serviço: preço cobrado, custo, fornecedor, aparelho e garantia. part_id = peça do estoque usada (baixa 1).
+        // catalog_id: serviço cadastrado (pet shop: adicional ou principal, para comissão e metas).
         z.object({ service: z.string().trim().min(2).max(120), unit_price_cents: cents, cost_cents: cents.nullable().optional(), supplier: z.string().trim().max(80).optional(),
-          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), warranty_days: z.number().int().min(0).max(3650).optional() }).strict()
+          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), warranty_days: z.number().int().min(0).max(3650).optional(), catalog_id: uuid.optional() }).strict()
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
@@ -800,6 +817,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           WHERE p.tenant_id=$1 AND p.active AND p.kind='part' AND p.id=ANY($2::uuid[])`, [tid(req), partIds]) : { rows: [], rowCount: 0 };
         if (parts.rowCount !== partIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça não encontrada ou excluída. Escolha a peça de novo.'); }
         const partById = new Map(parts.rows.map(x => [x.id, x]));
+        // Serviço cadastrado: "adicional" é gravado como estava no cadastro na hora da venda (comissão não muda depois).
+        const catIds = [...new Set(v.items.filter(it => it.catalog_id).map(it => it.catalog_id))];
+        const cats = catIds.length ? await c.query('SELECT id,addon FROM service_catalog WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tid(req), catIds]) : { rows: [], rowCount: 0 };
+        if (cats.rowCount !== catIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Serviço cadastrado não encontrado. Atualize a venda.'); }
+        const catById = new Map(cats.rows.map(x => [x.id, x]));
         if (v.items.some(it => it.gift) && !v.items.some(it => it.service)) { await c.query('ROLLBACK'); return bad(res, 400, 'Brinde só vai junto com um serviço na mesma venda'); }
         for (const [n, it] of v.items.entries()) {
           if (it.service) {
@@ -808,7 +830,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
             merged.set('s:' + n, { id: part?.id || null, service: true, name: it.service.replace(/\s+/g, ' '), barcode: null,
               cost_cents: it.cost_cents !== undefined && it.cost_cents !== null ? it.cost_cents : part?.cost_cents ?? null,
               supplier: cleanName(it.supplier) || part?.supplier_name || null, device_model: cleanName(it.device_model) || part?.device_model || null,
-              warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1 });
+              warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1,
+              catalog_id: it.catalog_id || null, addon: !!(it.catalog_id && catById.get(it.catalog_id)?.addon) });
             continue;
           }
           const prod = it.product_id ? byId.get(it.product_id) : null;
@@ -869,7 +892,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         }
       }
       // Cashback ganho: sobre o valor pago (já sem desconto e sem o cashback usado). Só vale a partir da próxima compra.
-      if (customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents) {
+      // Dia da semana bloqueado (ex.: quarta da promoção): a venda não gera cashback (usar o saldo continua valendo).
+      if (customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents && !(cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) {
         const earned = cbEarn(total, cbCfg.cashback_percent);
         if (earned >= 1) {
           await c.query(`INSERT INTO cashback_lots(tenant_id,customer_id,sale_id,amount_cents,remaining_cents,percent_snapshot,expires_on)
@@ -881,9 +905,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const cq = (sql, params) => c.query(sql, params);
       for (const x of items) {
         const vr = x.vid ? { id: x.vid } : null;
-        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
-          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift]);
+        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift,catalog_id,addon)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
+          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift, x.catalog_id || null, !!x.addon]);
         if (!x.id) continue;
         // Baixa no estoque (do modelo, ou do produto quando controla estoque) e marca para reposição.
         // Modelo contado no total: o modelo só marca a reposição; a baixa é no produto.
@@ -894,6 +918,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       }
       sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents, service, supplier, device_model, warranty_days, cost_cents, gift }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents, ...(gift ? { gift: true } : {}),
         ...(service ? { service: true, supplier_name: supplier, device_model, warranty_days, unit_cost_cents: cost_cents } : {}) }));
+      if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && (cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) sale.cashback_off_today = true;
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
       if (customerId && !v.order_id) {

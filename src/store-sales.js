@@ -272,9 +272,15 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const r = await q(`SELECT id,name,phone,offers_opt_out FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND
         (fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR ($3<>'' AND length($3)>=4 AND regexp_replace(coalesce(phone,''),'\\D','','g') LIKE '%'||$3||'%'))
       ORDER BY (fp_fold(name) LIKE fp_fold($2)||'%') DESC,name LIMIT 12`, [tid(req), term, digits]);
-    const progress = await progressFor(tid(req), r.rows.map(x => x.id));
-    const cashback = await cashbackFor(tid(req), r.rows.map(x => x.id));
-    res.json(r.rows.map(x => ({ ...x, loyalty: progress.get(x.id), cashback: cashback.get(x.id) })));
+    // Pelo nome do pet: mostra o animal e o tutor (pet shop). Vem depois dos clientes achados pelo nome.
+    const pets = await q(`SELECT c.id,c.name,c.phone,c.offers_opt_out,json_build_object('id',p.id,'name',p.name,'breed',p.breed,'size',p.size,'species',p.species) pet
+      FROM customer_pets p JOIN customers c ON c.id=p.customer_id AND c.deleted_at IS NULL
+      WHERE p.tenant_id=$1 AND p.deleted_at IS NULL AND fp_fold(p.name) LIKE '%'||fp_fold($2)||'%'
+      ORDER BY (fp_fold(p.name) LIKE fp_fold($2)||'%') DESC,p.name,c.name LIMIT 12`, [tid(req), term]);
+    const rows = [...r.rows, ...pets.rows], ids = [...new Set(rows.map(x => x.id))];
+    const progress = await progressFor(tid(req), ids);
+    const cashback = await cashbackFor(tid(req), ids);
+    res.json(rows.map(x => ({ ...x, loyalty: progress.get(x.id), cashback: cashback.get(x.id) })));
   }));
 
   app.get('/api/store/sales/customers/:id', ...guard, route(async (req, res) => {
@@ -865,6 +871,36 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const r = await q('UPDATE pending_sales SET canceled_at=now(),canceled_by=$3,cancel_reason=$4 WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL RETURNING id', [req.params.id, tid(req), req.user.id, v.reason]);
     if (!r.rowCount) return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.');
     await audit(req, 'cancel', 'pending_sale', req.params.id); res.json({ canceled: true });
+  }));
+
+  // ---------- Serviços do dia ----------
+  // Para a atendente conferir no fim do dia: cada serviço lançado (pago ou a receber) e os pedidos
+  // abertos no dia que ainda não têm venda lançada.
+  app.get('/api/store/sales/day-services', ...guard, route(async (req, res) => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+    const day = req.query.day ? String(req.query.day) : today;
+    if (!dayField.safeParse(day).success) return bad(res, 400, 'Data inválida');
+    const tz = TZ.replace(/'/g, '');
+    const [paid, pending, orders] = await Promise.all([
+      q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,u.name seller_name,
+          i.name service,i.device_model pet,i.total_cents,i.addon,o.order_number
+        FROM sale_items i JOIN sales x ON x.id=i.sale_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN users u ON u.id=x.seller_id LEFT JOIN orders o ON o.id=x.order_id
+        WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date=$2::date ORDER BY x.created_at,i.position`, [tid(req), day]),
+      q(`SELECT p.id pending_id,p.number,p.created_at,p.customer_id,c.name customer_name,u.name seller_name,o.order_number,
+          coalesce(e->>'service',p.description,'Valor avulso') service,e->>'device_model' pet,coalesce((e->>'unit_price_cents')::int,p.total_cents) total_cents
+        FROM pending_sales p JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.seller_id LEFT JOIN orders o ON o.id=p.order_id
+        LEFT JOIN LATERAL (SELECT e FROM jsonb_array_elements(coalesce(p.payload->'items','[]'::jsonb)) e WHERE e ? 'service') it ON true
+        WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL AND (p.created_at AT TIME ZONE '${tz}')::date=$2::date
+          AND (it.e IS NOT NULL OR NOT (p.payload ? 'items')) ORDER BY p.created_at`, [tid(req), day]),
+      q(`SELECT o.id,o.order_number,o.created_at,o.status,o.customer_id,c.name customer_name,o.details->>'pet_name' pet,o.details->>'service' service
+        FROM orders o LEFT JOIN customers c ON c.id=o.customer_id
+        WHERE o.tenant_id=$1 AND o.deleted_at IS NULL AND (o.created_at AT TIME ZONE '${tz}')::date=$2::date
+          AND NOT EXISTS(SELECT 1 FROM sales x WHERE x.order_id=o.id AND x.canceled_at IS NULL)
+          AND NOT EXISTS(SELECT 1 FROM pending_sales p WHERE p.order_id=o.id AND p.canceled_at IS NULL)
+        ORDER BY o.created_at`, [tid(req), day])
+    ]);
+    res.set('Cache-Control', 'no-store');
+    res.json({ day, today, paid: paid.rows, pending: pending.rows, orders_without_sale: orders.rows });
   }));
 
   // Registra a venda. pendingId: recebimento de uma venda "a receber" (fica paga na mesma transação).

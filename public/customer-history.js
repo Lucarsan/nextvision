@@ -55,7 +55,7 @@
       ${h.loyalty?.enabled ? `<p class="nv-help">${icon('gift')} Fidelidade: ${h.loyalty.checkins} de ${h.loyalty.target}${h.loyalty.complete ? ' · <b>prêmio liberado</b>' : ''}</p>` : ''}
       ${h.cashback?.balance_cents ? `<p class="nv-help">Cashback: <b>${brl(h.cashback.balance_cents)}</b>${h.cashback.next_expires_on ? ` (vence ${dmy(h.cashback.next_expires_on)})` : ''}</p>` : ''}
       ${h.warranties.length ? `<div class="ch-warr"><b>Garantias valendo</b><ul>${h.warranties.map(w => `<li>${esc(w.name)}${w.device_model ? ' · ' + esc(w.device_model) : ''} — até <b>${dmy(w.until)}</b> (venda #${w.sale_number})</li>`).join('')}</ul></div>` : ''}
-      <input type="search" id="chSearch" class="ch-search" placeholder="Procurar no histórico: tela, bateria, A12…" aria-label="Procurar no histórico">
+      <input type="search" id="chSearch" class="ch-search" placeholder="Procurar no histórico: ${FP.ex('hist')}…" aria-label="Procurar no histórico">
       <div id="chList">${timeline.map(x => x.html).join('') || '<p class="nv-help">Nada registrado ainda para este cliente.</p>'}</div>`;
     $('chSearch').oninput = e => { const t = e.target.value.trim().toLowerCase(); $('chList').querySelectorAll('.ch-card').forEach(el => { el.hidden = !!t && !el.dataset.text.includes(t); }); };
   }

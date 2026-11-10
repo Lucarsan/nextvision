@@ -2,6 +2,8 @@ import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
 import {registerLegacyImport} from './legacy-import.js';
+import {startAutoCloseLoop,STORE_TZ} from './auto-close.js';
+import {registerPetRecords} from './pet-records.js';
 import {registerCustomerPets,savePetFromOrder} from './customer-pets.js';
 import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
@@ -48,7 +50,7 @@ const deviceAuth=route(async(req,res,next)=>{
  req.device=result.rows[0];next();
 });
 registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
-registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});
+registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});registerPetRecords(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});
 registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});registerStoreTools(app,{q,db,auth,roles,route,bad,valid,audit});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
@@ -249,8 +251,15 @@ app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
  const result=await q('UPDATE platform_settings SET sales_whatsapp=$1,support_whatsapp=CASE WHEN $2::boolean THEN NULLIF($3,\'\') ELSE support_whatsapp END WHERE id=true RETURNING sales_whatsapp,support_whatsapp',[v.sales_whatsapp,v.support_whatsapp!==undefined,v.support_whatsapp||'']);await audit(req,'update','platform_settings',null,null);res.json(result.rows[0]);
 }));
 app.get('/api/store/settings',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.address,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,t.waiting_camera_id,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
+ const r=await q('SELECT t.name,t.slug,t.logo_url,t.email_notifications,t.niche,t.ready_message,t.camera_limit,t.city,t.state,t.address,t.message_templates,t.whatsapp,t.demo_mode,t.demo_step_seconds,t.waiting_camera_id,to_char(t.auto_close_time,\'HH24:MI\') auto_close_time,(SELECT count(*)::int FROM cameras c WHERE c.tenant_id=t.id AND c.deleted_at IS NULL) camera_count,(SELECT sales_whatsapp FROM platform_settings WHERE id=true) sales_whatsapp FROM tenants t WHERE t.id=$1',[tid(req)]);
  const store=r.rows[0]||{},profile=storeProfiles[store.niche]||storeProfiles.general;res.json({...store,niche_label:profile.label,default_item_type:profile.itemType,short_link_base:process.env.SHORT_LINK_BASE_URL||''});
+}));
+// Encerramento automático diário (dono): horário em que pedidos esquecidos em andamento são finalizados.
+// Se o horário de hoje já passou, começa amanhã (não finaliza nada no momento em que é salvo).
+app.patch('/api/store/auto-close',auth,roles('owner'),route(async(req,res)=>{
+ const v=valid(z.object({time:z.union([z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/,'Horário inválido'),z.null()])}).strict(),req,res);if(!v)return;
+ const r=await q(`UPDATE tenants SET auto_close_time=$1::time,auto_close_last_date=CASE WHEN $1::time IS NOT NULL AND (now() AT TIME ZONE '${STORE_TZ}')::time>=$1::time THEN (now() AT TIME ZONE '${STORE_TZ}')::date ELSE NULL END WHERE id=$2 RETURNING to_char(auto_close_time,'HH24:MI') auto_close_time`,[v.time,tid(req)]);
+ await audit(req,'update_auto_close','tenant',tid(req));res.json(r.rows[0]);
 }));
 // Câmera da área de espera (dono): mostrada a todos os pedidos que estão na fila.
 app.patch('/api/store/waiting-camera',auth,roles('owner'),route(async(req,res)=>{
@@ -776,5 +785,5 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
 }));
 app.use(express.static('public'));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
-startDemoLoop();
+startDemoLoop();startAutoCloseLoop(Number(process.env.AUTO_CLOSE_INTERVAL_MS)||60000);
 app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');void ensureEdgeWorker();try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

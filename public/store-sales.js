@@ -2483,7 +2483,7 @@
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="dayservices">' + FPIcon('receipt') + 'Serviços do dia</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="dayservices">' + FPIcon('receipt') + 'Serviços do dia</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
     const phone = document.querySelector('.nv-phone-nav');
     if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }

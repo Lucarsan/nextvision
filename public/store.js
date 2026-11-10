@@ -719,3 +719,5 @@ async function loadEditor(view, box, version) {
  $('requestedCameras').oninput=updateLink;updateLink();
  }else if(view==='support'){await loadSupport(box,version)}
 }
+// Para o caixa: link de acompanhamento e mensagem de WhatsApp do pedido aberto junto com a venda.
+window.FPOrders = { link: o => trackingUrl(o), whats: o => whatsFor({ status: 'queued', steps: [], ...o }, 'created'), hasPhone: o => !!whatsPhone(o), refresh: () => reload(true).catch(() => {}) };

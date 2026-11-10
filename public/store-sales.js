@@ -170,6 +170,7 @@
 
   // ---------------- Caixa ----------------
   async function loadCash(box, alive) {
+    serviceItems = null; // serviços cadastrados sempre atualizados ao abrir o caixa (mudanças feitas em outro computador)
     const data = await api('/store/cash'); if (!alive()) return;
     if (!data.session) return drawClosed(box, data, alive);
     const s = data.session, sum = data.summary;
@@ -191,16 +192,16 @@
             <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras despesas do dia aparecem aqui.</p>'}</div></section>
         </div>
         <section class="nv-card fs-newsale"><h2>Nova venda</h2>
-          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">${FPIcon('cart')}Produto</button><button type="button" data-fs-mode="service">${FPIcon('wrench')}Serviço</button></div>
           <form id="fsSale" autocomplete="off">
+          <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
+          <div id="fsOrderBox"></div>
+          <div id="fsCbBox" aria-live="polite"></div>
+          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">${FPIcon('cart')}Produto</button><button type="button" data-fs-mode="service">${FPIcon('wrench')}Serviço</button></div>
           <div class="fs-scan" data-only="product"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
             <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
             <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
           <div id="fsSvc" data-only="service"></div>
           <div id="fsMix" aria-live="polite"></div>
-          <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
-          <div id="fsOrderBox"></div>
-          <div id="fsCbBox" aria-live="polite"></div>
           <div class="fs-quick" id="fsQuick" data-only="product"></div>
           <div class="fs-row" data-only="product"><label class="nv-field"><span id="fsTotalLabel">Valor</span><input name="total" inputmode="decimal" placeholder="0,00"></label>
           <label class="nv-field fs-grow">Descrição (opcional)<input name="description" maxlength="300" placeholder="Ex.: película, carregador, capinha"></label></div>
@@ -497,6 +498,8 @@
     if (svcFilled() && svcProblem()) { status.textContent = (svcCart.length || productPart() ? 'Serviço em edição: ' : '') + svcProblem(); return; }
     const services = [...svcCart, ...(pendingSvc() ? [svc] : [])], service = services.length > 0, onlyService = service && !productPart();
     const total = currentTotal();
+    const badSvc = svcCart.find(x => !Number.isFinite(svcPrice(x)));
+    if (badSvc) { status.textContent = `Informe o preço de "${badSvc.name.trim()}".`; return; }
     if (!Number.isFinite(total) || total <= 0) { status.textContent = saleMode === 'service' && !service ? 'Informe o serviço e o preço de venda.' : 'Informe o valor da venda.'; return; }
     const split = isSplit(), parts = split ? splitParts() : null;
     if (split) { const err = splitError(parts); if (err) { status.textContent = err; return; } }
@@ -556,6 +559,14 @@
   let svcPet = null, svcFilter = '';
   const petsCache = new Map();
   const isPet = () => window.__fpNiche === 'pet';
+  // Exemplos do serviço por nicho da loja (pet shop não vê "troca de tela").
+  const SVC_EX = {
+    electronics: { list: 'Troca de tela, troca de bateria', one: 'troca de tela', note: 'tela original; cliente busca amanhã', all: 'troca de tela, bateria…' },
+    pet: { list: 'Banho de cheiro, tosa higiênica', one: 'banho de cheiro', note: 'cliente busca às 17h; pet agitado', all: 'banho, tosa, hidratação…' },
+    carwash: { list: 'Lavagem completa, higienização interna', one: 'lavagem completa', note: 'cliente busca às 17h', all: 'lavagem, polimento…' },
+    automotive: { list: 'Troca de óleo, alinhamento', one: 'troca de óleo', note: 'cliente busca amanhã', all: 'troca de óleo, revisão…' }
+  };
+  const svcEx = k => (SVC_EX[window.__fpNiche] || SVC_EX.electronics)[k];
   const normName = n => String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
   const SIZE_ALIAS = { mini: 'micro', toy: 'micro' };
   const sameName = (a, b) => { const x = normName(a), y = normName(b); return !!x && (x === y || (SIZE_ALIAS[x] || x) === (SIZE_ALIAS[y] || y)); };
@@ -585,16 +596,27 @@
     const pp = petPrice(item, svcPet); if (!pp) return;
     svc.price = centsText(pp.cents); svc.calc = pp.parts.length > 1 ? pp.parts.map(x => (x.label === 'base' ? 'Base ' : x.label + ' ') + brl(x.cents)).join(' + ') + ' = ' + brl(pp.cents) : '';
   }
+  // Pet shop: preço de um item do catálogo para um pet (texto da conta incluído).
+  function petItem(i, pet) {
+    const pp = petPrice(i, pet);
+    return { name: i.name, catalog_id: i.id, model: pet?.name || '', petId: pet?.id || null, price: pp ? centsText(pp.cents) : '', autoPrice: !!pp,
+      cost: i.cost_cents != null ? centsText(i.cost_cents) : '', calc: pp && pp.parts.length > 1 ? pp.parts.map(x => (x.label === 'base' ? 'base ' : x.label + ' ') + brl(x.cents)).join(' + ') : '' };
+  }
+  // Itens já na venda sem pet (escolhidos antes do cliente/pet) passam a ser do pet escolhido, com o preço dele.
+  function adoptPet() {
+    if (!svcPet) return;
+    svcCart.forEach((x, n) => { if (x.catalog_id && !x.petId && !String(x.model || '').trim()) { const i = (serviceItems || []).find(c => c.id === x.catalog_id); if (i) svcCart[n] = x.autoPrice ? petItem(i, svcPet) : { ...x, model: svcPet.name, petId: svcPet.id }; } });
+  }
   async function drawPetPicker() {
     const box = $('fsSvcPetBox'); if (!box) return;
     if (!saleCustomer?.id) { box.innerHTML = '<p class="nv-help">Escolha o cliente acima para puxar o pet e o preço pelo porte, pelagem e raça.</p>'; return; }
     const pets = await customerPets(); if (!box.isConnected) return;
     if (svcPet && !pets.some(p => p.id === svcPet.id)) svcPet = null;
-    if (!svcPet && pets.length === 1) { svcPet = pets[0]; if (!String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); drawService(); return; }
+    if (!svcPet && pets.length === 1) { svcPet = pets[0]; if (!String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); adoptPet(); drawService(); $('fsSale')?.dispatchEvent(new Event('input')); return; }
     box.innerHTML = pets.length ? `<div class="fs-chips">${pets.map(p => `<button type="button" class="fs-chip${svcPet?.id === p.id ? ' fs-chip-on' : ''}" aria-pressed="${svcPet?.id === p.id}" data-fs-pet="${p.id}"><b>${esc(p.name)}</b><small>${esc([p.breed, p.size, p.coat && p.coat !== 'Curto' ? 'pelo ' + p.coat : ''].filter(Boolean).join(' · ') || 'sem raça/porte na ficha')}</small></button>`).join('')}</div>`
       : '<p class="nv-help">Este cliente não tem animal na ficha. Digite o nome do pet abaixo (o preço fica o base).</p>';
     box.querySelectorAll('[data-fs-pet]').forEach(b => b.onclick = () => {
-      svcPet = pets.find(p => p.id === b.dataset.fsPet) || null; svc.model = svcPet?.name || ''; repriceSvc();
+      svcPet = pets.find(p => p.id === b.dataset.fsPet) || null; svc.model = svcPet?.name || ''; repriceSvc(); adoptPet();
       drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
     });
   }
@@ -623,13 +645,19 @@
     const prod = productPart(), p = pendingSvc(), n = svcCart.length + (p ? 1 : 0);
     const btn = $('fsSaleBtn'); if (btn) btn.textContent = n && !prod ? (n > 1 ? 'Registrar serviços' : 'Registrar serviço') : 'Registrar venda';
     if (!svcCart.length && !(p && prod)) { if (box.dataset.html) { box.innerHTML = ''; box.dataset.html = ''; } return; }
-    const line = (x, i) => `<div class="fs-mix-row">${FPIcon('wrench')}<span class="fs-grow">${esc(x.name.trim())}${x.model ? ` <small>· ${esc(x.model.trim())}</small>` : ''}${x.gift ? ` <small>· brinde: ${esc(x.gift.product.name)}${x.gift.variant ? ' ' + esc(x.gift.variant) : ''}</small>` : ''}${i == null ? ' <small class="fs-var">(em edição)</small>' : ''}</span><b>${brl(svcPrice(x))}</b>${i == null ? '' : `<button type="button" class="fs-cart-del" data-fs-svc-del="${i}" aria-label="Tirar ${esc(x.name.trim())} da venda">${FPIcon('x')}</button>`}</div>`;
+    const priceCell = (x, i) => isPet() && i != null ? `<input class="fs-mix-price" inputmode="decimal" data-fs-svc-price="${i}" value="${esc(x.price || '')}" placeholder="preço" aria-label="Preço de ${esc(x.name.trim())}">` : `<b>${brl(svcPrice(x))}</b>`;
+    const line = (x, i) => `<div class="fs-mix-row">${FPIcon('wrench')}<span class="fs-grow">${esc(x.name.trim())}${x.model ? ` <small>· ${esc(x.model.trim())}</small>` : ''}${isPet() && x.calc ? `<br><small class="fs-mix-calc">${esc(x.calc)}</small>` : ''}${x.gift ? ` <small>· brinde: ${esc(x.gift.product.name)}${x.gift.variant ? ' ' + esc(x.gift.variant) : ''}</small>` : ''}${i == null ? ' <small class="fs-var">(em edição)</small>' : ''}</span>${priceCell(x, i)}${i == null ? '' : `<button type="button" class="fs-cart-del" data-fs-svc-del="${i}" aria-label="Tirar ${esc(x.name.trim())} da venda">${FPIcon('x')}</button>`}</div>`;
     const html = `<div class="fs-mix"><div class="fs-mix-head">Itens desta venda</div>
       ${prod ? `<div class="fs-mix-row">${FPIcon('cart')}<span class="fs-grow">${cart.length || quickCart.length ? 'Produtos e itens' : 'Valor avulso'}${saleMode === 'service' ? ' <button type="button" class="fs-link" data-fs-mode-go="product">ver</button>' : ''}</span><b>${brl(prod)}</b></div>` : ''}
       ${svcCart.map((x, i) => line(x, i)).join('')}${p ? line(p, null) : ''}
       <div class="fs-pcart-total"><span>Total da venda</span><b>${brl(currentTotal() || 0)}</b></div></div>`;
-    if (box.dataset.html === html) return; box.dataset.html = html; box.innerHTML = html;
-    box.querySelectorAll('[data-fs-svc-del]').forEach(b => b.onclick = () => { svcCart.splice(Number(b.dataset.fsSvcDel), 1); $('fsSale')?.dispatchEvent(new Event('input')); });
+    if (box.dataset.html === html) return;
+    // Redesenha sem perder o campo de preço que está sendo digitado.
+    const act = document.activeElement, focusAt = act?.dataset?.fsSvcPrice, caret = focusAt != null ? act.selectionStart : null;
+    box.dataset.html = html; box.innerHTML = html;
+    if (focusAt != null) { const n = box.querySelector(`[data-fs-svc-price="${focusAt}"]`); if (n) { n.focus(); try { n.setSelectionRange(caret, caret); } catch {} } }
+    box.querySelectorAll('[data-fs-svc-del]').forEach(b => b.onclick = () => { svcCart.splice(Number(b.dataset.fsSvcDel), 1); drawServiceChips(); $('fsSale')?.dispatchEvent(new Event('input')); });
+    box.querySelectorAll('[data-fs-svc-price]').forEach(inp => inp.oninput = e => { e.stopPropagation(); const x = svcCart[Number(inp.dataset.fsSvcPrice)]; if (!x) return; x.price = inp.value; x.autoPrice = false; x.calc = ''; $('fsSale')?.dispatchEvent(new Event('input')); });
     box.querySelectorAll('[data-fs-mode-go]').forEach(b => b.onclick = () => setMode(b.dataset.fsModeGo, true));
   }
   function setMode(mode, focus) {
@@ -672,16 +700,26 @@
     const last = name => history.find(h => h.name.toLowerCase() === name.toLowerCase())?.last_price_cents ?? null;
     const priceOf = i => (isPet() && i.price_cents != null ? petPrice(i, svcPet).cents : null) ?? i.price_cents ?? last(i.name);
     const current = String(svc.name || '').trim().toLowerCase();
-    const chip = i => { const p = priceOf(i); return `<button type="button" class="fs-chip${i.name.toLowerCase() === current ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${i.name.toLowerCase() === current}"><b>${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; };
+    // Pet shop: o botão põe o serviço direto na venda (para o pet escolhido); tocar de novo tira.
+    const inCart = i => svcCart.findIndex(x => x.catalog_id === i.id && (x.petId || null) === (svcPet?.id || null));
+    const on = i => isPet() ? inCart(i) >= 0 : i.name.toLowerCase() === current;
+    const chip = i => { const p = priceOf(i); return `<button type="button" class="fs-chip${on(i) ? ' fs-chip-on' : ''}" data-fs-svc="${i.id}" aria-pressed="${on(i)}"><b>${isPet() && on(i) ? '✓ ' : ''}${esc(i.name)}</b><small>${p != null ? brl(p) + (i.price_cents == null ? ' (último)' : '') : 'definir preço'}</small></button>`; };
     const many = items.length > 14, f = normName(svcFilter), shown = f ? items.filter(i => normName(i.name).includes(f)) : items;
     const main = shown.filter(i => !i.addon), extra = shown.filter(i => i.addon);
     const group = (title, list) => list.length ? (extra.length && main.length ? `<div class="fs-chip-group">${title}</div>` : '') + `<div class="fs-chips">${list.map(chip).join('')}</div>` : '';
     box.innerHTML = `<div class="fs-quick-head"><span>Serviços${isPet() && svcPet ? ` <small class="nv-help">preços para ${esc(svcPet.name)}</small>` : ''}</span><button type="button" class="fs-link" id="fsSvcManage">${items.length ? FPIcon('edit') + ' Editar' : '+ Cadastrar serviço'}</button></div>
       ${many ? `<input type="search" id="fsSvcFilter" class="fs-svc-filter" placeholder="Filtrar serviços (ex.: banho, tosa, hidratação)" value="${esc(svcFilter)}" aria-label="Filtrar serviços">` : ''}
-      ${items.length ? (group('Principais', main) + group('Adicionais', extra) || '<p class="nv-help">Nenhum serviço com esse nome.</p>') : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (troca de tela, bateria…) para lançar com um toque.</p>'}`;
+      ${items.length ? (group('Principais', main) + group('Adicionais', extra) || '<p class="nv-help">Nenhum serviço com esse nome.</p>') : '<p class="nv-help fs-quick-empty">Cadastre os serviços que a loja faz (' + svcEx('all') + ') para lançar com um toque.</p>'}`;
     if ($('fsSvcFilter')) $('fsSvcFilter').oninput = e => { svcFilter = e.target.value; const pos = e.target.selectionStart; drawServiceChips().then(() => { const n = $('fsSvcFilter'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }); };
     box.querySelectorAll('[data-fs-svc]').forEach(b => b.onclick = () => {
       const i = items.find(x => x.id === b.dataset.fsSvc); if (!i) return;
+      if (isPet()) {
+        const at = inCart(i);
+        if (at >= 0) svcCart.splice(at, 1); else svcCart.push(petItem(i, svcPet));
+        drawServiceChips(); $('fsSale')?.dispatchEvent(new Event('input'));
+        if (at < 0 && i.price_cents == null) setTimeout(() => $('fsMix')?.querySelector(`[data-fs-svc-price="${svcCart.length - 1}"]`)?.focus(), 0);
+        return;
+      }
       const p = priceOf(i);
       svc.name = i.name; svc.price = p != null ? centsText(p) : ''; svc.catalog_id = i.id; svc.autoPrice = p != null; svc.calc = '';
       if (isPet()) { if (svcPet && !String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); }
@@ -733,7 +771,7 @@
     const items = await loadServiceItems(true);
     const ed = typeof editId === 'string' ? items.find(i => i.id === editId) : null;
     openDialog(`${header('Serviços')}<p class="nv-help">Aparecem como botões no modo "Serviço" do caixa. O preço e o custo vêm preenchidos e podem ser mudados na hora. Sem preço, o botão usa o último valor cobrado.</p>
-      <form id="fsSvcForm" autocomplete="off"><div class="fs-row"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="${isPet() ? 'Ex.: Banho de cheiro' : 'Ex.: Troca de tela'}" value="${esc(ed?.name || '')}"></label>
+      <form id="fsSvcForm" autocomplete="off"><div class="fs-row"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="Ex.: ${svcEx('one')[0].toUpperCase() + svcEx('one').slice(1)}" value="${esc(ed?.name || '')}"></label>
       <label class="nv-field">Preço${isPet() ? ' base' : ''}<input name="price" inputmode="decimal" placeholder="0,00" value="${ed?.price_cents != null ? centsText(ed.price_cents) : ''}"></label>
       <label class="nv-field">Custo (opcional)<input name="cost" inputmode="decimal" placeholder="0,00" value="${ed?.cost_cents != null ? centsText(ed.cost_cents) : ''}"></label></div>
       ${isPet() ? varsEditor(ed) : ''}
@@ -767,7 +805,8 @@
     const box = $('fsSvc'); if (!box) return;
     const pet = isPet(), hide = pet ? ' hidden' : '';
     box.innerHTML = `${pet ? '<div class="nv-field fs-svc-pet">Pet do atendimento<div id="fsSvcPetBox"></div></div>' : ''}<div class="fs-quick" id="fsSvcQuick"></div>
-      <div class="fs-sugg"><label class="nv-field">Serviço<input id="fsSvcName" maxlength="120" list="fsSvcNames" placeholder="Ex.: Troca de tela, troca de bateria" value="${esc(svc.name || '')}"></label><datalist id="fsSvcNames"></datalist></div>
+      ${pet ? `<details class="fs-svc-other"${svcFilled() ? ' open' : ''}><summary>Outro serviço (fora da lista)</summary>` : ''}
+      <div class="fs-sugg"><label class="nv-field">Serviço<input id="fsSvcName" maxlength="120" list="fsSvcNames" placeholder="Ex.: ${svcEx('list')}" value="${esc(svc.name || '')}"></label><datalist id="fsSvcNames"></datalist></div>
       <div class="nv-field"${hide}>Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
       <div class="fs-row"><label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsSvcModel" maxlength="80" placeholder="${FP.ex('item')}" value="${esc(svc.model || '')}"></label>
         <label class="nv-field fs-grow fs-sugg"${hide}>Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
@@ -776,8 +815,8 @@
         <label class="nv-field"${hide}>Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
       ${pet && svc.calc ? `<p class="nv-help fs-svc-calc" id="fsSvcCalc">${esc(svc.calc)}</p>` : ''}<p class="nv-help" id="fsSvcProfit"></p>
       <div class="nv-field fs-gift"${hide}>Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
-      <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: tela original; cliente busca amanhã" value="${esc(svc.note || '')}"></label>
-      <button type="button" class="nv-button secondary fs-wide fs-svc-add" id="fsSvcAdd">${FPIcon('plus') || '+'} Pôr na venda e lançar outro serviço</button>
+      <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: ${svcEx('note')}" value="${esc(svc.note || '')}"></label>
+      <button type="button" class="nv-button secondary fs-wide fs-svc-add" id="fsSvcAdd">${FPIcon('plus') || '+'} Pôr na venda e lançar outro serviço</button>${pet ? '</details>' : ''}
       <p class="nv-help fs-svc-tip">Para vender produto junto, toque em <b>Produto</b> (ou bipe o código): o serviço continua na mesma venda.</p>`;
     const read = () => { if (svc.autoPrice && $('fsSvcPrice').value !== (svc.price || '')) { svc.autoPrice = false; svc.calc = ''; const k = $('fsSvcCalc'); if (k) k.remove(); }
       if (svc.catalog_id && normName($('fsSvcName').value) !== normName(svc.name)) { svc.catalog_id = null; svc.autoPrice = false; }
@@ -793,7 +832,7 @@
     });
     drawPartPicker(); drawGiftPicker(); drawServiceChips(); if (pet) drawPetPicker(); read();
     $('fsSvcAdd').onclick = () => {
-      const err = svcFilled() ? svcProblem() : 'Informe o serviço (ex.: troca de tela).', st = $('fsSaleStatus');
+      const err = svcFilled() ? svcProblem() : `Informe o serviço (ex.: ${svcEx('one')}).`, st = $('fsSaleStatus');
       if (err) { if (st) st.textContent = err; return; }
       svcCart.push({ ...svc }); svc = isPet() && svcPet ? { model: svcPet.name } : {}; if (st) st.textContent = ''; drawService(); $('fsSale')?.dispatchEvent(new Event('input')); $('fsSvcName')?.focus();
     };
@@ -862,7 +901,7 @@
     drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
   }
   function serviceError() {
-    if (String(svc.name || '').trim().length < 2) return 'Informe o serviço (ex.: troca de tela).';
+    if (String(svc.name || '').trim().length < 2) return `Informe o serviço (ex.: ${svcEx('one')}).`;
     const c = String(svc.cost || '').trim();
     if (c && (!Number.isFinite(parseMoney(c)) || parseMoney(c) < 0)) return 'Preço de custo inválido.';
     return '';
@@ -2262,6 +2301,7 @@
   .fs-chip-group{font-size:12px;font-weight:700;color:var(--nv-muted);margin:8px 0 4px;text-transform:uppercase;letter-spacing:.03em}.fs-svc-filter{width:100%;margin:0 0 8px;padding:8px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-svc-calc{margin:-4px 0 6px;color:var(--nv-blue,#2563eb);font-weight:600}.fs-svc-pet .fs-chips{margin-top:4px}
   .fs-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nv-blue-soft,#e8f0fe);color:var(--nv-blue,#2563eb);vertical-align:middle}.fs-vars{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-vars summary{cursor:pointer;font-weight:700}.fs-vars-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:6px 0}.fs-vars-row>span{flex:0 0 100%;font-size:13px;font-weight:700;color:var(--nv-muted)}.fs-vars-row .nv-field{flex:1 1 90px;min-width:80px;margin:0}
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
+  .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;

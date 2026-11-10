@@ -294,7 +294,7 @@
       box.innerHTML = `<div class="fs-row"><input id="fsNewName" placeholder="Nome do cliente" maxlength="120"><input id="fsNewPhone" placeholder="WhatsApp (85 9…)" inputmode="tel" maxlength="30"></div><button type="button" class="nv-button secondary fs-small" id="fsBack">Buscar cliente cadastrado</button>`;
       $('fsBack').onclick = () => { saleCustomer = null; drawCustomerPicker(); }; $('fsNewName').focus(); return;
     }
-    box.innerHTML = `<input id="fsSearch" type="search" placeholder="Buscar por nome ou WhatsApp" aria-label="Buscar cliente"><div id="fsResults" class="fs-results"></div>
+    box.innerHTML = `<input id="fsSearch" type="search" placeholder="${isPet() ? 'Buscar por nome do cliente, do pet ou WhatsApp' : 'Buscar por nome ou WhatsApp'}" aria-label="Buscar cliente"><div id="fsResults" class="fs-results"></div>
       <div class="fs-row fs-small-row"><button type="button" class="nv-button secondary fs-small" id="fsNew">+ Cliente novo</button><button type="button" class="nv-button secondary fs-small" id="fsAnon">Não quis se identificar</button></div>`;
     let timer;
     $('fsSearch').oninput = e => { clearTimeout(timer); timer = setTimeout(async () => {
@@ -302,15 +302,22 @@
       if (term.length < 2) { out.innerHTML = ''; return; }
       try {
         const rows = await api('/store/sales/customers?q=' + encodeURIComponent(term));
-        out.innerHTML = rows.map(r => `<button type="button" data-fs-pick="${r.id}"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem telefone')}</small> ${cbBadge(r.cashback)}${progressBar(r.loyalty)}</button>`).join('') || '<p class="nv-help">Nenhum cliente encontrado. Use "+ Cliente novo".</p>';
-        out.querySelectorAll('[data-fs-pick]').forEach(b => b.onclick = () => pick(b.dataset.fsPick));
+        out.innerHTML = rows.map(r => r.pet ? `<button type="button" data-fs-pick="${r.id}" data-fs-pick-pet="${r.pet.id}">${FPIcon('paw')} <b>${esc(r.pet.name)}</b>${r.pet.breed ? ` <small>${esc(r.pet.breed)}</small>` : ''} · tutor <b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem telefone')}</small> ${cbBadge(r.cashback)}</button>`
+          : `<button type="button" data-fs-pick="${r.id}"><b>${esc(r.name)}</b> <small>${esc(r.phone || 'sem telefone')}</small> ${cbBadge(r.cashback)}${progressBar(r.loyalty)}</button>`).join('') || '<p class="nv-help">Nenhum cliente encontrado. Use "+ Cliente novo".</p>';
+        out.querySelectorAll('[data-fs-pick]').forEach(b => b.onclick = () => pick(b.dataset.fsPick, b.dataset.fsPickPet));
       } catch (err) { out.textContent = err.message; }
     }, 220); };
     $('fsNew').onclick = () => { const term = $('fsSearch').value.trim(); saleCustomer = { isNew: true }; drawCustomerPicker(); if (/\d{4,}/.test(term)) $('fsNewPhone').value = term; else $('fsNewName').value = term; };
     $('fsAnon').onclick = () => { saleCustomer = { anonymous: true }; drawCustomerPicker(); };
   }
-  async function pick(id) {
-    const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker(); if (isPet()) { svcPet = null; if (svc.model && !svcCart.length) svc.model = ''; drawService(); } $('fsSale')?.dispatchEvent(new Event('input'));
+  async function pick(id, petId) {
+    const c = await api('/store/sales/customers/' + id); saleCustomer = c; cbWanted = false; drawCustomerPicker();
+    if (isPet()) {
+      svcPet = null; if (svc.model && !svcCart.length) svc.model = '';
+      // Achou pelo nome do pet: já deixa o pet escolhido e abre os serviços.
+      if (petId) { const pet = (await customerPets()).find(p => p.id === petId); if (pet) { svcPet = pet; svc.model = pet.name; adoptPet(); setMode('service'); } }
+      drawService();
+    } $('fsSale')?.dispatchEvent(new Event('input'));
     const box = $('fsOrderBox');
     box.innerHTML = c.orders.length ? `<label class="nv-field">É pagamento de um pedido de serviço? (opcional)<select id="fsOrder"><option value="">Não, venda avulsa</option>${c.orders.map(o => `<option value="${o.id}">Pedido ${esc(o.order_number || '')} · ${esc(o.details?.model || o.details?.brand || o.process || '')} · ${o.status === 'completed' ? 'finalizado' : 'em andamento'} · ${dmy(o.created_at)}</option>`).join('')}</select><small>Pedido de serviço já conta no cartão quando é finalizado; a venda dele não conta de novo.</small></label>` : '';
   }
@@ -2370,6 +2377,52 @@
     });
   }
 
+  // ---------------- Serviços do dia ----------------
+  // Lista para a atendente conferir no fim do dia (como a planilha diária): serviços pagos e a receber,
+  // e pedidos abertos sem venda lançada. Imprime e baixa planilha (CSV que abre no Excel).
+  let dsDay = '';
+  const payText = x => Array.isArray(x.payments) && x.payments.length ? x.payments.map(p => (METHODS[p.method] || p.method) + ' ' + brl(p.amount_cents)).join(' + ') : METHODS[x.payment_method] || x.payment_method || '';
+  const shiftDay = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const dayLabel = d => new Date(d + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+  async function loadDayServices(box, alive) {
+    const d = await api('/store/sales/day-services' + (dsDay ? '?day=' + dsDay : '')); if (!alive()) return;
+    dsDay = d.day;
+    const rows = [...d.paid.map(x => ({ ...x, at: x.created_at, status: 'Pago · ' + payText(x), paidOk: true, ref: 'Venda ' + x.sale_number })),
+      ...d.pending.map(x => ({ ...x, at: x.created_at, status: 'A receber', ref: 'A receber #' + x.number }))].sort((a, b) => new Date(a.at) - new Date(b.at));
+    const total = rows.reduce((a, x) => a + x.total_cents, 0), open = d.pending.reduce((a, x) => a + x.total_cents, 0);
+    const baths = rows.filter(x => /banho/i.test(x.service || '')).length;
+    box.innerHTML = `<section class="nv-card fs-day"><div class="nv-heading"><h2>Serviços do dia</h2>
+        <div class="fs-day-nav"><button type="button" class="nv-button secondary fs-small" id="fsDayPrev" aria-label="Dia anterior">‹</button><input type="date" id="fsDay" value="${d.day}" max="${d.today}"><button type="button" class="nv-button secondary fs-small" id="fsDayNext" aria-label="Próximo dia" ${d.day >= d.today ? 'disabled' : ''}>›</button></div></div>
+      <p class="nv-help">${esc(dayLabel(d.day))}. Confira com a planilha: cada linha é um serviço lançado no caixa (pago) ou guardado em "A receber".</p>
+      <div class="fs-goal-stats"><div><b>${rows.length}</b><small>serviços</small></div><div><b>${baths}</b><small>banhos</small></div><div><b>${brl(total)}</b><small>total</small></div><div><b>${brl(open)}</b><small>a receber</small></div></div>
+      <div class="fs-row fs-day-actions"><button type="button" class="nv-button secondary" id="fsDayPrint">${FPIcon('printer')} Imprimir</button><button type="button" class="nv-button secondary" id="fsDayCsv">${FPIcon('copy')} Baixar planilha</button></div>
+      ${d.orders_without_sale.length ? `<div class="fs-day-warn"><b>${FPIcon('alert')} ${d.orders_without_sale.length} pedido${d.orders_without_sale.length > 1 ? 's' : ''} do dia sem venda lançada</b><small>Confira se o serviço foi cobrado ou guardado em "A receber".</small>
+        <ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${custLink(o.customer_id, esc(o.customer_name || 'sem cliente'))}${o.pet ? ' · ' + esc(o.pet) : ''}${o.service ? ' · ' + esc(o.service) : ''}</li>`).join('')}</ul></div>` : ''}
+      ${rows.length ? `<div class="fs-day-table" role="table"><div class="fs-day-row fs-day-h" role="row"><span>Hora</span><span>Cliente</span><span>Pet</span><span>Serviço</span><span class="n">Valor</span><span>Situação</span><span>Vendedor</span></div>
+        ${rows.map(x => `<div class="fs-day-row${x.paidOk ? '' : ' fs-day-open'}" role="row"><span>${hhmm(x.at)}</span><span>${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}</span><span>${esc(x.pet || '')}</span><span>${esc(x.service || '')}${x.addon ? ' <span class="fs-tag">adicional</span>' : ''}</span><span class="n">${brl(x.total_cents)}</span><span>${esc(x.status)}</span><span>${esc(x.seller_name || '')}</span></div>`).join('')}</div>`
+        : '<p class="nv-help">Nenhum serviço lançado neste dia.</p>'}</section>`;
+    const go = day => { dsDay = day; loadDayServices(box, alive); };
+    $('fsDay').onchange = e => { if (e.target.value) go(e.target.value); };
+    $('fsDayPrev').onclick = () => go(shiftDay(d.day, -1));
+    $('fsDayNext').onclick = () => go(shiftDay(d.day, 1));
+    const cells = x => [d.day.split('-').reverse().join('/'), hhmm(x.at), x.customer_name || '', x.pet || '', x.service || '', centsText(x.total_cents), x.paidOk ? 'Pago' : 'A receber', x.paidOk ? payText(x) : '', x.seller_name || ''];
+    $('fsDayCsv').onclick = () => {
+      const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+      const csv = '﻿' + [['Data', 'Hora', 'Cliente', 'Pet', 'Serviço', 'Valor', 'Situação', 'Pagamento', 'Vendedor'], ...rows.map(cells)].map(r => r.map(q).join(';')).join('\r\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `servicos-${d.day}.csv`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    };
+    $('fsDayPrint').onclick = () => {
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Serviços do dia ${d.day}</title><style>body{font:12px Arial,sans-serif;margin:16px}h1{font-size:16px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}.ok{width:18px}</style></head><body>
+        <h1>Serviços do dia · ${esc(config?.name || '')}</h1><div>${esc(dayLabel(d.day))} · ${rows.length} serviços · ${baths} banhos · total ${brl(total)} · a receber ${brl(open)}</div>
+        <table><thead><tr><th class="ok">✓</th><th>Hora</th><th>Cliente</th><th>Pet</th><th>Serviço</th><th class="n">Valor</th><th>Situação</th><th>Vendedor</th></tr></thead><tbody>
+        ${rows.map(x => `<tr><td class="ok">☐</td><td>${hhmm(x.at)}</td><td>${esc(x.customer_name || '')}</td><td>${esc(x.pet || '')}</td><td>${esc(x.service || '')}</td><td class="n">${brl(x.total_cents)}</td><td>${esc(x.status)}</td><td>${esc(x.seller_name || '')}</td></tr>`).join('')}</tbody></table>
+        ${d.orders_without_sale.length ? `<h1 style="margin-top:14px">Pedidos sem venda lançada</h1><ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${esc(o.customer_name || '')}${o.pet ? ' · ' + esc(o.pet) : ''}</li>`).join('')}</ul>` : ''}</body></html>`;
+      const frame = document.createElement('iframe'); frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.append(frame);
+      frame.contentDocument.open(); frame.contentDocument.write(html); frame.contentDocument.close();
+      setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } finally { setTimeout(() => frame.remove(), 60000); } }, 250);
+    };
+  }
+
   // ---------------- Integração com o painel ----------------
   const css = `.fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
   @media(max-width:900px){.fs-grid{grid-template-columns:1fr}.fs-newsale{order:-1}}
@@ -2422,6 +2475,7 @@
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
   .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
   .fs-later{margin-top:8px}.fs-later small{font-weight:500;opacity:.8}.fs-live{border:1px dashed var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fs-live select{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-live-done{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;margin-top:10px}.fs-live-done>div{flex:1;min-width:200px}.fs-live-done input{width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-size:13px}.fs-pending{border:2px solid var(--nv-orange,#f97316)}.fs-pend .fs-sale-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.fs-tag-ok{background:#dcfce7;color:#166534}
+  .fs-day-nav{display:flex;gap:6px;align-items:center}.fs-day-nav input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-day-actions{margin:8px 0}.fs-day-warn{border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:10px 0}.fs-day-warn small{display:block;color:var(--nv-muted)}.fs-day-warn ul{margin:6px 0 0;padding-left:18px}.fs-day-table{border:1px solid var(--nv-border);border-radius:12px;overflow:hidden;margin-top:8px}.fs-day-row{display:grid;grid-template-columns:56px 1.3fr .8fr 1.6fr 90px 1.3fr .9fr;gap:8px;padding:8px 10px;border-bottom:1px solid var(--nv-border);font-size:14px;align-items:center}.fs-day-row:last-child{border-bottom:0}.fs-day-row .n{text-align:right;font-weight:700}.fs-day-h{background:var(--nv-blue-soft,#f1f5f9);font-weight:700;font-size:12px;color:var(--nv-muted)}.fs-day-open{background:#fff7ed}@media(max-width:760px){.fs-day-row{grid-template-columns:48px 1fr 80px}.fs-day-row>span:nth-child(3),.fs-day-row>span:nth-child(6),.fs-day-row>span:nth-child(7){display:none}.fs-day-row>span:nth-child(2){grid-column:2}.fs-day-row>span:nth-child(4){grid-column:2;grid-row:2;font-size:13px;color:var(--nv-muted)}}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
   @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
@@ -2429,15 +2483,15 @@
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="dayservices">' + FPIcon('receipt') + 'Serviços do dia</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
     const phone = document.querySelector('.nv-phone-nav');
     if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }
 
   window.FPSales = {
     enabled: () => !!config?.enabled,
-    titles: { cash: 'Caixa', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
-    moreItems: () => config?.enabled ? [['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
+    titles: { cash: 'Caixa', dayservices: 'Serviços do dia', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
+    moreItems: () => config?.enabled ? [['dayservices', 'Serviços do dia'], ['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
     async load(view, box, alive) {
       box.classList.remove('fs-private');
       if (!config?.enabled) { box.innerHTML = '<section class="nv-card">Recurso não habilitado para esta loja.</section>'; return; }
@@ -2445,6 +2499,7 @@
       // Estoque pelo menu: as mesmas abas da janela do Caixa, sem precisar abrir o caixa.
       if (view === 'stock') { box.innerHTML = '<section class="nv-card fs-stockpage" id="fsStockPage"></section>'; stockPage = $('fsStockPage'); return productsDialog('', 'list'); }
       if (view === 'goals') return loadGoals(box, alive);
+      if (view === 'dayservices') return loadDayServices(box, alive);
       return loadMessages(box, alive);
     }
   };

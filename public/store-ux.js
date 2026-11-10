@@ -57,6 +57,19 @@
   };
   NICHES.bodyshop = NICHES.automotive; NICHES.carwash = NICHES.automotive;
   const niche = n => NICHES[n] || NICHES.general;
+  // Exemplos de texto (placeholders/ajuda) por nicho: o pet shop não deve ver "tela, bateria, A12".
+  const EXAMPLES = {
+    electronics: { hist: 'tela, bateria, A12', itemLabel: 'Aparelho (marca / modelo)', item: 'Ex.: Galaxy A12, iPhone 11', variant: 'Ex.: Galaxy A12', variant2: 'Ex.: Galaxy A12, iPhone 13…',
+      product: 'Ex.: Película 3D Galaxy A12', product2: 'Ex.: Capinha Galaxy A12 transparente', byVariant: 'ex.: 5 do A12, 3 do A32',
+      bulk: ['Galaxy A12 = 5', 'iPhone 11 x3', 'Redmi Note 13'], parts: 'Ex.: Tela Galaxy A12, do fornecedor João, custo R$ 80, 3 na loja.', expense: 'Ex.: tela Samsung A12 do fornecedor João' },
+    pet: { hist: 'banho, tosa, ração, Thor', itemLabel: 'Pet (nome / raça)', item: 'Ex.: Thor, Shih-tzu', variant: 'Ex.: 15 kg', variant2: 'Ex.: 1 kg, 15 kg…',
+      product: 'Ex.: Ração Golden Adulto 15 kg', product2: 'Ex.: Coleira antipulgas P', byVariant: 'ex.: 5 de 1 kg, 3 de 15 kg',
+      bulk: ['1 kg = 5', '3 kg x3', '15 kg'], parts: 'Ex.: Shampoo neutro 5 L, do fornecedor João, custo R$ 40, 3 na loja.', expense: 'Ex.: shampoo do fornecedor João' },
+    general: { hist: 'serviço, produto', itemLabel: 'Item (descrição)', item: 'Ex.: descrição do item', variant: 'Ex.: tamanho M', variant2: 'Ex.: P, M, G…',
+      product: 'Ex.: nome do produto', product2: 'Ex.: nome do produto', byVariant: 'ex.: 5 do P, 3 do M',
+      bulk: ['P = 5', 'M x3', 'G'], parts: 'Ex.: item do fornecedor João, custo R$ 40, 3 na loja.', expense: 'Ex.: compra do fornecedor João' }
+  };
+  const ex = key => (EXAMPLES[window.__fpNiche] || EXAMPLES.general)[key];
   function itemFields(nicheKey, d = {}) {
     const cfg = niche(nicheKey);
     if (!cfg.fields.length) return '';
@@ -189,5 +202,5 @@
       handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
     });
   }
-  window.FP = { niche, itemFields, detailInfo, itemLabel, customerPicker, addressAssist, customerFields, readCustomer, sortable, formatCpf, esc };
+  window.FP = { ex, niche, itemFields, detailInfo, itemLabel, customerPicker, addressAssist, customerFields, readCustomer, sortable, formatCpf, esc };
 })();

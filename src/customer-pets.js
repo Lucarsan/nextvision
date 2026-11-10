@@ -12,7 +12,8 @@ const petBody = z.object({
   sex: z.union([z.enum(['M', 'F']), z.literal('')]).optional().transform(v => v || null),
   birth_date: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')]).optional().transform(v => v || null),
   weight_kg: z.union([z.number().positive().max(999), z.null()]).optional(),
-  neutered: z.union([z.boolean(), z.null()]).optional()
+  neutered: z.union([z.boolean(), z.null()]).optional(),
+  customer_id: z.string().uuid().optional()
 }).strict();
 export const PET_FIELDS = 'id,customer_id,name,species,breed,sex,birth_date,color,weight_kg,size,coat,temperament,neutered,notes,created_at';
 
@@ -36,6 +37,7 @@ export function registerCustomerPets(app, { q, auth, roles, route, bad, valid, a
   app.post('/api/customers/:id/pets', ...staff, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Cliente inválido');
     const v = valid(petBody, req, res); if (!v) return;
+    if (v.customer_id && v.customer_id !== req.params.id) return bad(res, 400, 'Tutor inválido');
     const r = await q(`INSERT INTO customer_pets(tenant_id,customer_id,name,species,breed,sex,birth_date,color,weight_kg,size,coat,temperament,neutered,notes)
       SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 WHERE EXISTS(SELECT 1 FROM customers WHERE id=$2 AND tenant_id=$1 AND deleted_at IS NULL)
       RETURNING ${PET_FIELDS}`, [tid(req), req.params.id, v.name, v.species, v.breed, v.sex, v.birth_date, v.color, v.weight_kg ?? null, v.size, v.coat, v.temperament, v.neutered ?? null, v.notes]);
@@ -45,9 +47,11 @@ export function registerCustomerPets(app, { q, auth, roles, route, bad, valid, a
   app.patch('/api/pets/:id', ...staff, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Pet inválido');
     const v = valid(petBody, req, res); if (!v) return;
-    const r = await q(`UPDATE customer_pets SET name=$3,species=$4,breed=$5,sex=$6,birth_date=$7,color=$8,weight_kg=$9,size=$10,coat=$11,temperament=$12,neutered=$13,notes=$14,updated_at=now()
+    // customer_id (opcional) troca o tutor, desde que seja cliente desta loja.
+    if (v.customer_id && !(await q('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [v.customer_id, tid(req)])).rowCount) return bad(res, 400, 'Tutor não encontrado');
+    const r = await q(`UPDATE customer_pets SET name=$3,species=$4,breed=$5,sex=$6,birth_date=$7,color=$8,weight_kg=$9,size=$10,coat=$11,temperament=$12,neutered=$13,notes=$14,customer_id=COALESCE($15::uuid,customer_id),updated_at=now()
       WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL RETURNING ${PET_FIELDS}`,
-    [req.params.id, tid(req), v.name, v.species, v.breed, v.sex, v.birth_date, v.color, v.weight_kg ?? null, v.size, v.coat, v.temperament, v.neutered ?? null, v.notes]);
+    [req.params.id, tid(req), v.name, v.species, v.breed, v.sex, v.birth_date, v.color, v.weight_kg ?? null, v.size, v.coat, v.temperament, v.neutered ?? null, v.notes, v.customer_id || null]);
     if (!r.rowCount) return bad(res, 404, 'Pet não encontrado');
     await audit(req, 'update', 'pet', req.params.id); res.json(r.rows[0]);
   }));

@@ -665,7 +665,7 @@
     box.innerHTML = `<div class="fs-quick" id="fsSvcQuick"></div>
       <div class="fs-sugg"><label class="nv-field">Serviço<input id="fsSvcName" maxlength="120" list="fsSvcNames" placeholder="Ex.: Troca de tela, troca de bateria" value="${esc(svc.name || '')}"></label><datalist id="fsSvcNames"></datalist></div>
       <div class="nv-field">Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
-      <div class="fs-row"><label class="nv-field fs-grow fs-sugg">Aparelho (marca / modelo)<input id="fsSvcModel" maxlength="80" placeholder="Ex.: Galaxy A12, iPhone 11" value="${esc(svc.model || '')}"></label>
+      <div class="fs-row"><label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsSvcModel" maxlength="80" placeholder="${FP.ex('item')}" value="${esc(svc.model || '')}"></label>
         <label class="nv-field fs-grow fs-sugg">Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input id="fsSvcPrice" inputmode="decimal" placeholder="0,00" value="${esc(svc.price || '')}"></label>
         <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
@@ -779,7 +779,7 @@
     openDialog(`${header(editing ? 'Editar peça' : 'Cadastrar peça')}<form id="fsPart" autocomplete="off">
       <p class="nv-help">Peças usadas nos serviços (telas, baterias…). Cadastre uma peça para cada modelo de aparelho e fornecedor.</p>
       <div class="fs-row"><label class="nv-field fs-grow">Peça<input name="name" maxlength="120" required list="fsPartNames" value="${esc(initial.name || '')}" placeholder="Ex.: Tela, Bateria"></label><datalist id="fsPartNames">${PART_NAMES.map(n => `<option value="${n}">`).join('')}</datalist>
-        <label class="nv-field fs-grow fs-sugg">Aparelho (marca / modelo)<input id="fsPartModel" name="device_model" maxlength="80" value="${esc(initial.device_model || '')}" placeholder="Ex.: Galaxy A12"></label></div>
+        <label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsPartModel" name="device_model" maxlength="80" value="${esc(initial.device_model || '')}" placeholder="${FP.ex('variant')}"></label></div>
       <label class="nv-field fs-sugg">Fornecedor<input id="fsPartSupplier" name="supplier" maxlength="80" value="${esc(initial.supplier_name || '')}" placeholder="De quem a loja compra esta peça"></label>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label>
         <label class="nv-field fs-grow">Preço do serviço com esta peça <small class="nv-help">(opcional)</small><input name="price" inputmode="decimal" value="${initial.price_cents > 0 ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
@@ -816,7 +816,7 @@
       list.innerHTML = rows.map(p => `<div class="fs-sale fs-prod"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? 'Fornecedor: ' + esc(p.supplier_name) : 'sem fornecedor'} · custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.price_cents > 0 ? ' · serviço ' + brl(p.price_cents) : ''}</small><br>
           <small>Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
         <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-p-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></div>`).join('')
-        || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : 'Nenhuma peça cadastrada ainda. Ex.: Tela Galaxy A12, do fornecedor João, custo R$ 80, 3 na loja.'}</p>`;
+        || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : 'Nenhuma peça cadastrada ainda. ' + FP.ex('parts')}</p>`;
       const byId = id => rows.find(p => p.id === id);
       list.querySelectorAll('[data-p-edit]').forEach(b => b.onclick = () => partDialog(byId(b.dataset.pEdit), reopen));
       list.querySelectorAll('[data-p-stock]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pStock); stockDialog({ ...p, name: partLabel(p) }, reopen); });
@@ -885,7 +885,7 @@
   }
   // Pergunta o modelo: sugere os mais vendidos e filtra enquanto digita; modelo novo fica salvo na venda.
   function variantPicker(p, onPick) {
-    openDialog(`${header('Qual modelo? · ' + esc(p.name))}<form id="fsVar" autocomplete="off"><label class="nv-field">Modelo aplicado<input name="m" maxlength="80" placeholder="Ex.: Galaxy A12, iPhone 13…" required></label>
+    openDialog(`${header('Qual modelo? · ' + esc(p.name))}<form id="fsVar" autocomplete="off"><label class="nv-field">Modelo aplicado<input name="m" maxlength="80" placeholder="${FP.ex('variant2')}" required></label>
       <div id="fsVarList" class="fs-results"></div><button class="nv-button">Pôr na venda</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsVar'), input = f.elements.m, list = $('fsVarList'); let rows = [], timer;
     const pick = v => { $('editorDialog').close(); onPick(v); beep(true); };
@@ -991,7 +991,7 @@
       ${!editing && initial.barcode ? `<p class="nv-help fs-warn">O código <b>${esc(initial.barcode)}</b> ainda não está cadastrado. Informe nome e preço: o produto entra na venda e, nas próximas vezes, o leitor já reconhece.</p>` : ''}
       <label class="nv-field">Código de barras<input name="barcode" maxlength="64" value="${esc(initial.barcode || '')}" placeholder="Bipe o produto com o leitor (opcional)"${initial.generated_barcode ? ' readonly' : ''}></label>
       ${initial.generated_barcode ? '<small class="nv-help">Código gerado pelo sistema (não muda, para as etiquetas impressas continuarem valendo).</small>' : ''}
-      <label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(initial.name || '')}" placeholder="Ex.: Película 3D Galaxy A12"></label>
+      <label class="nv-field">Nome do produto<input name="name" maxlength="120" required value="${esc(initial.name || '')}" placeholder="${FP.ex('product')}"></label>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required value="${initial.price_cents != null ? centsText(initial.seasonal_base_cents ?? initial.price_cents) : ''}" placeholder="0,00"></label>
       <label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label></div>
       <p class="nv-help" id="fsMargin"></p>
@@ -999,7 +999,7 @@
       <label class="fs-check"><input type="checkbox" name="ask_variant"${initial.ask_variant ? ' checked' : ''}> Código geral com modelos (película, capinha…): na venda, pergunta o modelo aplicado</label>
       <fieldset class="fs-varmode" id="fsVarMode"><legend>Como contar o estoque</legend>
         <label><input type="radio" name="variant_stock" value="total"${!initial.ask_variant || initial.variant_stock === 'total' ? ' checked' : ''}> No total (contei tudo junto, ex.: 349 capas). O modelo vendido vai para a reposição.</label>
-        <label><input type="radio" name="variant_stock" value="model"${initial.ask_variant && initial.variant_stock === 'model' ? ' checked' : ''}> Por modelo (ex.: 5 do A12, 3 do A32)</label></fieldset>
+        <label><input type="radio" name="variant_stock" value="model"${initial.ask_variant && initial.variant_stock === 'model' ? ' checked' : ''}> Por modelo (${FP.ex('byVariant')})</label></fieldset>
       <label class="nv-field" id="fsStockField">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
       <small class="nv-help" id="fsVarHelp">O estoque fica por modelo: use "Modelos" → "Lançar vários modelos" na lista de produtos.</small>
       <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
@@ -1259,7 +1259,7 @@
   function stockDialog(p, onDone, variantName = '') {
     const total = p.ask_variant && p.variant_stock === 'total';
     openDialog(`${header('Entrada de estoque')}<form id="fsStock" autocomplete="off"><p class="nv-help"><b>${esc(p.name)}</b>${p.ask_variant && !total ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · vendido e não reposto: <b>${p.restock_pending}</b>` : ''}</p>
-      ${p.ask_variant ? `<label class="nv-field">Modelo${total ? ' <small class="nv-help">opcional · informe para tirar este modelo da reposição</small>' : ''}<input name="m" maxlength="80"${total ? '' : ' required'} list="fsStockVars" value="${esc(variantName)}" placeholder="Ex.: Galaxy A12"></label><datalist id="fsStockVars"></datalist>
+      ${p.ask_variant ? `<label class="nv-field">Modelo${total ? ' <small class="nv-help">opcional · informe para tirar este modelo da reposição</small>' : ''}<input name="m" maxlength="80"${total ? '' : ' required'} list="fsStockVars" value="${esc(variantName)}" placeholder="${FP.ex('variant')}"></label><datalist id="fsStockVars"></datalist>
         <p class="nv-help">Vários modelos de uma vez? Use <button type="button" class="fs-link" id="fsStockMany">Lançar vários modelos</button>.</p>` : ''}
       <div class="fs-row"><label class="nv-field fs-grow">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 10"></label>
       <label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
@@ -1394,8 +1394,8 @@
   function modelsDialog(p, onDone) {
     const total = p.variant_stock === 'total';
     openDialog(`${header('Lançar vários modelos · ' + esc(p.name))}<form id="fsMany" autocomplete="off">
-      <p class="nv-help">Um modelo por linha; a quantidade vem depois de <b>=</b> (ou de um x). Ex.:<br><code>Galaxy A12 = 5</code><br><code>iPhone 11 x3</code><br><code>Redmi Note 13</code> (sem quantidade = 1)</p>
-      <label class="nv-field">Modelos e quantidades<textarea name="t" rows="9" required placeholder="Galaxy A12 = 5&#10;Galaxy A32 = 3&#10;iPhone 11 = 2"></textarea></label>
+      <p class="nv-help">Um modelo por linha; a quantidade vem depois de <b>=</b> (ou de um x). Ex.:<br><code>${esc(FP.ex('bulk')[0])}</code><br><code>${esc(FP.ex('bulk')[1])}</code><br><code>${esc(FP.ex('bulk')[2])}</code> (sem quantidade = 1)</p>
+      <label class="nv-field">Modelos e quantidades<textarea name="t" rows="9" required placeholder="${esc(FP.ex('bulk').join('\n'))}"></textarea></label>
       <div class="fs-row"><label class="nv-field fs-grow">Custo de cada (compra)<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label></div>
       <p class="nv-help" id="fsManyInfo"></p><button class="nv-button">Somar ao estoque</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsMany'), st = f.querySelector('[role=status]');
@@ -1500,7 +1500,7 @@
       formBox.innerHTML = `<form id="fsEnStock" class="fs-picked" style="display:block;margin-top:10px" autocomplete="off">
         <div class="fs-row"><p class="fs-grow"><b>${esc(p.name)}</b>${p.ask_variant && p.variant_stock !== 'total' ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.barcode ? `<br><small>${esc(p.barcode)}</small>` : ''}</p><button type="button" class="nv-button secondary fs-small" id="fsEnEdit" title="Editar nome, preços, código e estoque (senha do admin)">${FPIcon('lock')}Editar produto</button></div>
         ${attach ? `<p class="nv-help fs-warn">${p.barcode ? `Este produto tem o código <b>${esc(p.barcode)}</b>. Ao salvar, passa a usar <b>${esc(code)}</b>.` : `O código <b>${esc(code)}</b> será salvo neste produto: da próxima vez o leitor já reconhece.`}</p>` : ''}
-        ${p.ask_variant ? `<label class="nv-field">Modelo${p.variant_stock === 'total' ? ' <small class="nv-help">opcional</small>' : ''}<input name="m" maxlength="80"${p.variant_stock === 'total' ? '' : ' required'} list="fsEnVars" placeholder="Ex.: Galaxy A12"></label><datalist id="fsEnVars"></datalist>
+        ${p.ask_variant ? `<label class="nv-field">Modelo${p.variant_stock === 'total' ? ' <small class="nv-help">opcional</small>' : ''}<input name="m" maxlength="80"${p.variant_stock === 'total' ? '' : ' required'} list="fsEnVars" placeholder="${FP.ex('variant')}"></label><datalist id="fsEnVars"></datalist>
           <p class="nv-help">Vários modelos? <button type="button" class="fs-link" id="fsEnMany">Lançar vários modelos de uma vez</button></p>` : ''}
         <div class="fs-row"><label class="nv-field" style="flex:0 0 170px">Quantidade que chegou<input name="n" inputmode="numeric" required placeholder="Ex.: 30"></label>
         <label class="nv-field fs-grow">Custo de cada<input name="cost" inputmode="decimal" value="${p.cost_cents != null ? centsText(p.cost_cents) : ''}" placeholder="0,00"></label>
@@ -1651,7 +1651,7 @@
     if (tab === 'suppliers') return suppliersTab(box);
     if (tab === 'gen') {
       box.innerHTML = `<p class="nv-help">Para produto <b>sem código de barras</b>: o sistema cria o código, já cadastra o produto com o estoque e abre as etiquetas para imprimir (uma por unidade). Depois é só colar no produto: o leitor reconhece na venda e o estoque baixa sozinho.</p>
-        <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="Ex.: Capinha Galaxy A12 transparente"></label>
+        <form id="fsGen" autocomplete="off"><label class="nv-field">Nome do produto<input name="name" maxlength="120" required placeholder="${FP.ex('product2')}"></label>
         <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input name="price" inputmode="decimal" required placeholder="0,00"></label><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" placeholder="0,00"></label><label class="nv-field" style="flex:0 0 120px">Quantidade<input name="qty" inputmode="numeric" required value="1"></label></div>
         ${labelChoiceHtml('each')}<p class="nv-help" id="fsGenInfo"></p><button class="nv-button">Gerar código e cadastrar</button><p role="status" class="nv-help"></p></form>`;
       const f = $('fsGen'), st = f.querySelector('[role=status]');
@@ -1744,7 +1744,7 @@
       <div class="fs-row"><label class="nv-field">Valor<input name="amount" inputmode="decimal" required placeholder="0,00"></label>
       ${expense ? `<label class="nv-field fs-grow">Categoria<select name="category">${CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select></label>` : ''}</div>
       ${expense ? `<fieldset class="fs-methods"><legend>Pago com</legend>${Object.entries(METHODS).map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 0 ? 'checked' : ''}><span>${v}</span></label>`).join('')}</fieldset>` : ''}
-      <label class="nv-field">${expense ? 'Descrição' : 'Motivo'}<input name="note" maxlength="200" placeholder="${expense ? 'Ex.: tela Samsung A12 do fornecedor João' : kind === 'withdrawal' ? 'Ex.: levado para o cofre' : 'Ex.: troco extra'}"></label>
+      <label class="nv-field">${expense ? 'Descrição' : 'Motivo'}<input name="note" maxlength="200" placeholder="${expense ? FP.ex('expense') : kind === 'withdrawal' ? 'Ex.: levado para o cofre' : 'Ex.: troco extra'}"></label>
       <button class="nv-button">Confirmar</button><p role="status" class="nv-help"></p></form>`);
     $('fsMove').onsubmit = async e => {
       e.preventDefault(); const f = e.currentTarget, v = parseMoney(f.elements.amount.value);
@@ -1887,7 +1887,7 @@
       ${transfers.length ? `<h2>Sangrias e suprimentos</h2>${table(['Hora', 'Tipo', 'Motivo', 'Lançado por', '<span class="n">Valor</span>'], transfers.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${MOVE_LABEL[m.kind]}</td><td>${esc(m.note)}</td><td>${esc(m.created_by_name)}</td><td class="n">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</td></tr>`), '')}` : ''}
       <h2>Vendas (${sales.length}${sales.length ? ` · ${Math.round(100 * linked / sales.length)}% com cliente identificado` : ''})</h2>
       ${table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.seller_name || '')}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${payLabel(x)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
-      ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', 'Aparelho', 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents) : '—'}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents) : '—'}</td></tr>`), '')}` : ''}
+      ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', (window.__fpNiche === 'pet' ? 'Pet' : window.__fpNiche === 'electronics' ? 'Aparelho' : 'Item'), 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents) : '—'}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents) : '—'}</td></tr>`), '')}` : ''}
       ${salesCanceled.length || movesCanceled.length ? `<h2>Cancelamentos</h2>${table(['Item', 'Cancelado por', 'Quando', 'Motivo', '<span class="n">Valor</span>'], [...salesCanceled.map(x => `<tr><td>Venda ${x.sale_number}${x.customer_name ? ' · ' + esc(x.customer_name) : ''}</td><td>${esc(x.canceled_by_name || '—')}</td><td>${hhmm(x.canceled_at)}</td><td>${esc(x.cancel_reason)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), ...movesCanceled.map(m => `<tr><td>${MOVE_LABEL[m.kind]}${m.category ? ' · ' + esc(m.category) : ''}</td><td>${esc(m.canceled_by_name || '—')}</td><td>${hhmm(m.canceled_at)}</td><td>${esc(m.cancel_reason)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`)], '')}` : ''}
       <div class="sign"><div>Responsável pelo caixa</div><div>Conferido por</div></div>
     </body></html>`;

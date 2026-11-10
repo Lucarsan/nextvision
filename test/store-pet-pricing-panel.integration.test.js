@@ -35,6 +35,8 @@ test('caixa do pet shop: preço por pet, variáveis, dia sem cashback e metas', 
     assert.match(await page.locator('#fsSvcPetBox').innerText(), /Escolha o cliente/);
     assert.equal(await page.locator('#fsSvcSupplier').isVisible(), false, 'pet shop não vê fornecedor');
     assert.equal(await page.locator('#fsSvcWarranty').isVisible(), false, 'nem garantia');
+    assert.equal(await page.locator('#fsSvcName').getAttribute('placeholder'), 'Ex.: Banho de cheiro, tosa higiênica', 'exemplo de pet shop');
+    assert.doesNotMatch(await page.locator('#fsSvc').innerText(), /tela/i);
     await page.locator('#fsSvcManage').click();
     const dlg = page.locator('#editorDialog');
     await dlg.locator('[name="name"]').fill('Hidratação simples'); await dlg.locator('[name="price"]').fill('18');
@@ -56,6 +58,9 @@ test('caixa do pet shop: preço por pet, variáveis, dia sem cashback e metas', 
     assert.match(await dlg.locator('#fsSvcStatus').innerText(), /linha 1/);
     await dlg.locator('[data-close-dialog]').click();
 
+    // O cliente vem antes de Produto/Serviço.
+    const cliBox = await page.locator('#fsCustomerBox').boundingBox(), modeBox = await page.locator('.fs-mode').boundingBox();
+    assert.ok(cliBox.y < modeBox.y, 'cliente antes de produto/serviço');
     // Cliente com dois pets: escolhe o Thor (Golden, Grande) → raça vale no lugar do porte.
     await page.locator('#fsSearch').fill('afonso');
     await page.locator('[data-fs-pick]').first().click();
@@ -63,23 +68,33 @@ test('caixa do pet shop: preço por pet, variáveis, dia sem cashback e metas', 
     await page.locator('[data-fs-pet]', { hasText: 'Thor' }).click();
     await page.waitForSelector('#fsSvcQuick:has-text("preços para Thor")');
     assert.match(await page.locator('[data-fs-svc]', { hasText: 'Banho de cheiro' }).innerText(), /123,00/);
+    // Tocar no serviço põe direto na venda, com a conta.
     await page.locator('[data-fs-svc]', { hasText: 'Banho de cheiro' }).click();
-    assert.equal(await page.locator('#fsSvcPrice').inputValue(), '123,00');
-    assert.equal(await page.locator('#fsSvcModel').inputValue(), 'Thor');
-    assert.match(await page.locator('#fsSvcCalc').innerText(), /Base R\$\s*43,00 \+ Golden Retriever R\$\s*80,00 = R\$\s*123,00/);
-    // Trocar para o Dom (Médio, pelo longo) recalcula: 43 + 7 + 10.
+    await page.waitForSelector('[data-fs-svc-price="0"]');
+    assert.equal(await page.locator('[data-fs-svc-price="0"]').inputValue(), '123,00');
+    assert.match(await page.locator('#fsMix').innerText(), /Banho de cheiro · Thor[\s\S]*base R\$\s*43,00 \+ Golden Retriever R\$\s*80,00/);
+    // Outro pet do mesmo cliente (Dom: Médio, pelo longo): principal + adicional juntos na mesma venda.
     await page.locator('[data-fs-pet]', { hasText: 'Dom' }).click();
-    await page.waitForFunction(() => document.querySelector('#fsSvcPrice')?.value === '60,00');
-    assert.equal(await page.locator('#fsSvcModel').inputValue(), 'Dom');
-    assert.match(await page.locator('#fsSvcCalc').innerText(), /porte Médio R\$\s*7,00 \+ pelo Longo R\$\s*10,00/);
-    await page.getByRole('button', { name: /Pôr na venda/ }).click();
-    // O adicional para o mesmo pet: Médio +3.
+    await page.waitForSelector('#fsSvcQuick:has-text("preços para Dom")');
+    assert.match(await page.locator('[data-fs-svc]', { hasText: 'Banho de cheiro' }).innerText(), /60,00/);
+    await page.locator('[data-fs-svc]', { hasText: 'Banho de cheiro' }).click();
     assert.match(await page.locator('#fsSvcQuick').innerText(), /ADICIONAIS|Adicionais/);
     await page.locator('[data-fs-svc]', { hasText: 'Hidratação simples' }).click();
-    assert.equal(await page.locator('#fsSvcPrice').inputValue(), '21,00');
-    // Preço mexido à mão não é recalculado.
-    await page.locator('#fsSvcPrice').fill('20,00');
-    assert.equal(await page.locator('#fsSvcCalc').count(), 0);
+    await page.waitForSelector('[data-fs-svc-price="2"]');
+    assert.deepEqual(await page.locator('[data-fs-svc-price]').evaluateAll(n => n.map(x => x.value)), ['123,00', '60,00', '21,00']);
+    assert.match(await page.locator('#fsMix').innerText(), /porte Médio R\$\s*7,00 \+ pelo Longo R\$\s*10,00/);
+    assert.match(await page.locator('#fsMix .fs-pcart-total').innerText(), /204,00/);
+    // Tocar de novo tira; tocar outra vez põe de novo.
+    await page.locator('[data-fs-svc]', { hasText: 'Hidratação simples' }).click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-fs-svc-price]').length === 2);
+    await page.locator('[data-fs-svc]', { hasText: 'Hidratação simples' }).click();
+    await page.waitForSelector('[data-fs-svc-price="2"]');
+    // Preço mexido à mão vale e a conta some; o total acompanha.
+    await page.locator('[data-fs-svc-price="2"]').fill('20,00');
+    await page.waitForSelector('#fsMix .fs-pcart-total:has-text("203,00")');
+    // Tirar o banho do Thor pelo X.
+    await page.locator('[data-fs-svc-del="0"]').click();
+    await page.waitForSelector('#fsMix .fs-pcart-total:has-text("80,00")');
     await page.locator('#fsSeller').selectOption({ label: 'Tainá' });
     await page.screenshot(shot('pet-caixa-preco'));
     await page.getByRole('button', { name: 'Registrar serviços' }).click();

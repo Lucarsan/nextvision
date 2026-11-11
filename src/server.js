@@ -4,6 +4,7 @@ import express from 'express';import helmet from 'helmet';import rateLimit from 
 import {registerLegacyImport} from './legacy-import.js';
 import {startAutoCloseLoop,STORE_TZ} from './auto-close.js';
 import {registerPetRecords} from './pet-records.js';
+import {loyaltyBlock} from './loyalty-rules.js';
 import {registerCustomerPets,savePetFromOrder} from './customer-pets.js';
 import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
@@ -301,13 +302,21 @@ app.patch('/api/store/messages',auth,roles('owner'),route(async(req,res)=>{
  const r=await q('UPDATE tenants SET ready_message=$1 WHERE id=$2 RETURNING ready_message',[v.ready_message,tid(req)]);
  await audit(req,'update','store_messages',tid(req));res.json(r.rows[0]);
 }));
+// Fidelidade: meta, prêmio e filtros (dias em que não conta e serviços que contam; vazio = tudo conta).
+const LOYALTY_FIELDS='loyalty_enabled,loyalty_target,loyalty_reward,loyalty_off_weekdays,loyalty_service_ids';
 app.get('/api/store/loyalty',auth,roles('owner','operator'),route(async(req,res)=>{
- const r=await q('SELECT loyalty_enabled,loyalty_target,loyalty_reward FROM tenants WHERE id=$1',[tid(req)]);
- res.json(r.rows[0]||{loyalty_enabled:false,loyalty_target:10,loyalty_reward:''});
+ const r=await q(`SELECT ${LOYALTY_FIELDS} FROM tenants WHERE id=$1`,[tid(req)]);
+ res.json(r.rows[0]||{loyalty_enabled:false,loyalty_target:10,loyalty_reward:'',loyalty_off_weekdays:[],loyalty_service_ids:[]});
 }));
 app.patch('/api/store/loyalty',auth,roles('owner'),route(async(req,res)=>{
- const v=valid(z.object({loyalty_enabled:z.boolean(),loyalty_target:z.number().int().min(2).max(100),loyalty_reward:z.string().trim().min(3).max(240)}),req,res);if(!v)return;
- const r=await q('UPDATE tenants SET loyalty_enabled=$1,loyalty_target=$2,loyalty_reward=$3 WHERE id=$4 RETURNING loyalty_enabled,loyalty_target,loyalty_reward',[v.loyalty_enabled,v.loyalty_target,v.loyalty_reward,tid(req)]);
+ const v=valid(z.object({loyalty_enabled:z.boolean(),loyalty_target:z.number().int().min(2).max(100),loyalty_reward:z.string().trim().min(3).max(240),
+  loyalty_off_weekdays:z.array(z.number().int().min(0).max(6)).max(7).optional(),loyalty_service_ids:z.array(uuid).max(300).optional()}),req,res);if(!v)return;
+ const days=v.loyalty_off_weekdays?[...new Set(v.loyalty_off_weekdays)].sort():null;
+ const ids=v.loyalty_service_ids?[...new Set(v.loyalty_service_ids)]:null;
+ if(ids?.length&&(await q('SELECT count(*)::int n FROM service_catalog WHERE tenant_id=$1 AND id=ANY($2::uuid[])',[tid(req),ids])).rows[0].n!==ids.length)return bad(res,400,'Serviço não encontrado. Atualize a página.');
+ if(days?.length===7)return bad(res,400,'Deixe pelo menos um dia da semana contando para a fidelidade.');
+ const r=await q(`UPDATE tenants SET loyalty_enabled=$1,loyalty_target=$2,loyalty_reward=$3,loyalty_off_weekdays=COALESCE($5::smallint[],loyalty_off_weekdays),
+  loyalty_service_ids=COALESCE($6::uuid[],loyalty_service_ids) WHERE id=$4 RETURNING ${LOYALTY_FIELDS}`,[v.loyalty_enabled,v.loyalty_target,v.loyalty_reward,tid(req),days,ids]);
  await audit(req,'update','loyalty_settings',tid(req));res.json(r.rows[0]);
 }));
 app.get('/api/store/loyalty/customers',auth,roles('owner','operator'),route(async(req,res)=>{
@@ -526,7 +535,7 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
   }
   const upd=await c.query("UPDATE orders SET camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $5 THEN NULL WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() WHEN $6 THEN NULL ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index",[status,index,o.id,status==='queued'?null:camera,unstart,reopen]);
   if(reopen)await c.query('DELETE FROM loyalty_checkins WHERE order_id=$1 AND tenant_id=$2 AND redemption_id IS NULL',[o.id,tid(req)]);
-  if(v.action==='complete'&&o.customer_id)await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled=true) ON CONFLICT(order_id) DO NOTHING',[tid(req),o.customer_id,o.id]);
+  if(v.action==='complete'&&o.customer_id&&!(await loyaltyBlock(c,tid(req),{orderId:o.id})))await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) VALUES($1,$2,$3) ON CONFLICT(order_id) DO NOTHING',[tid(req),o.customer_id,o.id]);
   await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tid(req),req.user.id,v.action,'order',o.id]);
   await c.query('COMMIT');void notifyOrder(o.id,v.action).catch(e=>console.error('Falha no e-mail:',e.message));res.json(upd.rows[0]);
  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}

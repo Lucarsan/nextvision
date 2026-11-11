@@ -2,6 +2,7 @@
 // Para quando a equipe esquece de finalizar: no horário, pedidos que já começaram (em andamento
 // ou pausados) viram "concluídos", a gravação da etapa é fechada e a câmera é liberada.
 // Pedidos na fila (não começados) ficam para o dia seguinte. Roda uma vez por dia por loja.
+import { loyaltyBlock } from './loyalty-rules.js';
 const dbModule = () => import('./db.js');
 export const STORE_TZ = 'America/Sao_Paulo';
 
@@ -21,7 +22,7 @@ export async function autoCloseTick() {
       for (const o of orders) {
         await c.query("UPDATE recordings SET status='finalizing',ended_at=COALESCE(ended_at,now()),updated_at=now() WHERE order_id=$1 AND tenant_id=$2 AND status IN ('pending','recording','paused')", [o.id, id]);
         await c.query("UPDATE orders SET status='completed',completed_at=now(),camera_id=NULL WHERE id=$1", [o.id]);
-        if (o.customer_id) await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled=true) ON CONFLICT(order_id) DO NOTHING', [id, o.customer_id, o.id]);
+        if (o.customer_id && !(await loyaltyBlock(c, id, { orderId: o.id }))) await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) VALUES($1,$2,$3) ON CONFLICT(order_id) DO NOTHING', [id, o.customer_id, o.id]);
         await c.query("INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,NULL,'auto_complete','order',$2)", [id, o.id]);
         closed++;
       }

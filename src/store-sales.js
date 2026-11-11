@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { registerStockValue } from './stock-value.js';
 import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
+import { loyaltyBlock } from './loyalty-rules.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -1089,8 +1090,19 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && (cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) sale.cashback_off_today = true;
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
+      // Pedido já concluído antes do pagamento, sem ponto (o serviço só ficou conhecido agora): avalia pelo dia em que foi feito.
+      if (customerId && v.order_id) {
+        const done = (await c.query(`SELECT o.completed_at FROM orders o WHERE o.id=$1 AND o.tenant_id=$2 AND o.status='completed' AND o.customer_id=$3
+          AND NOT EXISTS(SELECT 1 FROM loyalty_checkins l WHERE l.order_id=o.id)`, [v.order_id, tid(req), customerId])).rows[0];
+        if (done && !(await loyaltyBlock(c, tid(req), { orderId: v.order_id, at: done.completed_at }))) {
+          counted = (await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) VALUES($1,$2,$3) ON CONFLICT(order_id) DO NOTHING RETURNING id', [tid(req), customerId, v.order_id])).rowCount > 0;
+        }
+      }
       if (customerId && !v.order_id) {
-        const ck = await c.query(`INSERT INTO loyalty_checkins(tenant_id,customer_id,sale_id) SELECT $1,$2,$3
+        // Filtros: dia da semana sem fidelidade (promoção) e só os serviços escolhidos (ex.: banhos).
+        const block = await loyaltyBlock(c, tid(req), { items: items.map(x => ({ catalog_id: x.catalog_id, name: x.name })) });
+        if (block === 'weekday' || block === 'service') sale.loyalty_skip = block;
+        const ck = block ? { rowCount: 0 } : await c.query(`INSERT INTO loyalty_checkins(tenant_id,customer_id,sale_id) SELECT $1,$2,$3
           WHERE EXISTS(SELECT 1 FROM tenants WHERE id=$1 AND loyalty_enabled AND $4>=loyalty_min_sale_cents) RETURNING id`, [tid(req), customerId, sale.id, total]);
         counted = ck.rowCount > 0;
       }

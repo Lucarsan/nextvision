@@ -62,7 +62,7 @@ const openedOrders = new Set();
 async function api(path, method = 'GET', body) {
   const response = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), {status:response.status});
+  if (!response.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), {status:response.status, code:data.code});
   return data;
 }
 function showUndo(id, [action, label]) {
@@ -512,7 +512,13 @@ document.addEventListener('click', async e => {
     if (button.dataset.transitionId) {
       const o = cachedOrders.find(o => o.id === button.dataset.transitionId); if (!o) return;
       button.disabled = true;
-      try { const action = button.dataset.action; await api('/orders/' + o.id + '/transition', 'POST', { action, expected_step_index: o.step_index, expected_status: o.status }); await reload(true); feedback('Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); const fresh = cachedOrders.find(x => x.id === o.id) || o; const key = { start: 'started', advance: 'advanced', pause: 'paused', resume: 'started' }[action]; if (key) showWhatsOffer(fresh, key); }
+      try { const action = button.dataset.action; const body = { action, expected_step_index: o.step_index, expected_status: o.status }; let noVideo = false;
+        try { await api('/orders/' + o.id + '/transition', 'POST', body); }
+        catch (error) {
+          if (error.code !== 'camera_busy' || !confirm('A câmera está sendo usada por outro pet. Iniciar este atendimento sem vídeo?\n\nO cliente continua vendo as etapas e a fila, só não vê a imagem deste pet.')) throw error;
+          await api('/orders/' + o.id + '/transition', 'POST', { ...body, without_video: true }); noVideo = true;
+        }
+        await reload(true); feedback(noVideo ? 'Atendimento seguindo sem vídeo.' : 'Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); const fresh = cachedOrders.find(x => x.id === o.id) || o; const key = { start: 'started', advance: 'advanced', pause: 'paused', resume: 'started' }[action]; if (key) showWhatsOffer(fresh, key); }
       catch (error) { await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
     }

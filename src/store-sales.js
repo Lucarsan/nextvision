@@ -896,6 +896,42 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       res.json({ ...(await q(PENDING_SELECT + ' WHERE p.id=$1', [p.id])).rows[0], removed: removed.service || removed.name || 'Produto' });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
+  // Incluir itens numa venda a receber (ex.: o cliente pediu uma hidratação depois de deixar o pet).
+  // Só enquanto não foi recebida; venda recebida se cancela (com motivo) e se lança de novo.
+  app.post('/api/store/sales/pending/:id/add-items', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const v = valid(z.object({ items: saleSchema.shape.items.unwrap(), description: z.string().trim().max(300).optional() }).strict(), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const p = (await c.query('SELECT id,payload,order_id,description FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [req.params.id, tid(req)])).rows[0];
+      if (!p) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Se já foi recebida, cancele a venda (com o motivo) e lance outra.'); }
+      // Venda guardada só com valor (sem itens): o valor vira um item, para somar com os novos.
+      const old = Array.isArray(p.payload.items) ? p.payload.items
+        : [{ name: (p.payload.description || 'Valor avulso').slice(0, 120), quantity: 1, unit_price_cents: p.payload.total_cents }];
+      const items = [...old, ...v.items];
+      if (items.length > 200) { await c.query('ROLLBACK'); return bad(res, 400, 'Limite de 200 itens por venda.'); }
+      const ids = [...new Set(items.filter(it => it.product_id).map(it => it.product_id))];
+      const pr = ids.length ? await c.query('SELECT id,price_cents,active FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [] };
+      const newIds = new Set(v.items.filter(it => it.product_id).map(it => it.product_id));
+      if ([...newIds].some(id => !pr.rows.some(x => x.id === id && x.active))) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
+      const catIds = [...new Set(v.items.filter(it => it.catalog_id).map(it => it.catalog_id))];
+      if (catIds.length && (await c.query('SELECT count(*)::int n FROM service_catalog WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tid(req), catIds])).rows[0].n !== catIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Serviço cadastrado não encontrado. Atualize a venda.'); }
+      const price = new Map(pr.rows.map(x => [x.id, x.price_cents]));
+      const total = items.reduce((a, it) => a + (it.gift ? 0 : (it.unit_price_cents ?? price.get(it.product_id) ?? 0) * (it.quantity || 1)), 0) - (p.payload.discount_cents || 0);
+      if (total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, 'Total da venda inválido (confira preços e quantidades)'); }
+      const description = [p.payload.description, v.description].filter(Boolean).join(' · ').slice(0, 300);
+      const { total_cents, ...rest } = p.payload;
+      const payload = { ...rest, items, description };
+      await c.query('UPDATE pending_sales SET payload=$1,total_cents=$2,description=$3 WHERE id=$4', [JSON.stringify(payload), total, description, p.id]);
+      // O pedido ao vivo passa a mostrar todos os serviços.
+      if (p.order_id && v.items.some(it => it.service)) await c.query(`UPDATE orders SET details=jsonb_set(details,'{service}',to_jsonb($1::text)) WHERE id=$2 AND tenant_id=$3`,
+        [items.filter(it => it.service).map(it => it.service).join(' + ').slice(0, 300), p.order_id, tid(req)]);
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'add_items', 'pending_sale', p.id]);
+      await c.query('COMMIT');
+      res.json({ ...(await q(PENDING_SELECT + ' WHERE p.id=$1', [p.id])).rows[0], added: v.items.length });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
   app.post('/api/store/sales/pending/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;

@@ -27,6 +27,7 @@
   const CATEGORIES = ['Fornecedor / peças', 'Mercadoria para revenda', 'Aluguel', 'Energia / água / internet', 'Salário / diária', 'Transporte / entrega', 'Alimentação', 'Impostos / taxas', 'Manutenção da loja', 'Retirada do dono', 'Outros'];
   const DEFAULT_STATUS = 'Olá, {cliente}! Obrigado pela preferência na {loja}!\n\n{fidelidade}\n\n{cashback}\n\nSua opinião ajuda muito: pode nos avaliar no Google? Leva 1 minutinho: {avaliacao}';
   const DEFAULT_CB_REMINDER = 'Olá, {cliente}! Você tem {valor} de cashback na {loja} que vence {quando}. Aproveite para usar na sua próxima compra!\n\n{regras}';
+  let addTo = null; // venda a receber que está recebendo itens novos (botão "+ Incluir")
   let config = null, saleCustomer = null, lastSale = null, quickItems = null, quickCart = [];
   const basic = () => config?.access_level === 'basic';
   let cart = []; // [{ id, name, barcode, price_cents, quantity }] — produtos lidos pelo leitor na venda em montagem
@@ -192,7 +193,8 @@
             ${Object.keys(sum.expenses_by_method).length ? `<div class="fs-methods-sum">${Object.entries(sum.expenses_by_method).map(([k, v]) => `<span class="fs-pill fs-pill-out">${METHODS[k]} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</div>` : ''}
             <div class="nv-list">${data.movements.map(m => `<div class="fs-sale ${m.canceled_at ? 'canceled' : ''}"><div><b>${MOVE_LABEL[m.kind]}</b> · ${hhmm(m.created_at)}${m.category ? ' · ' + esc(m.category) : ''}${m.note ? ' · ' + esc(m.note) : ''}<br><small>${METHODS[m.method] || 'Dinheiro'} · lançado por ${esc(m.created_by_name)}${m.canceled_at ? ` · <span class="fs-neg">cancelado por ${esc(m.canceled_by_name || '—')} às ${hhmm(m.canceled_at)}: ${esc(m.cancel_reason)}</span>` : ''}</small></div><div class="fs-sale-end"><b class="${m.kind === 'deposit' ? 'fs-pos' : 'fs-neg'}">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</b>${m.canceled_at ? '' : `<button class="nv-button secondary fs-small" data-fs-move-cancel="${m.id}">Cancelar</button>`}</div></div>`).join('') || '<p class="nv-help">Pagamentos de fornecedor, contas, retiradas e outras despesas do dia aparecem aqui.</p>'}</div></section>
         </div>
-        <section class="nv-card fs-newsale"><h2>Nova venda</h2>
+        <section class="nv-card fs-newsale"><h2 id="fsNewSaleTitle">Nova venda</h2>
+          <div id="fsAddBanner" class="fs-add-banner" hidden></div>
           <form id="fsSale" autocomplete="off">
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
@@ -215,7 +217,7 @@
           <button type="button" class="nv-button secondary fs-wide fs-later" id="fsLaterBtn">${FPIcon('inbox')} Pagar depois <small>(fica em "A receber")</small></button><p role="status" id="fsSaleStatus" class="nv-help"></p></form>
           <div id="fsLast"></div></section>
       </div>`;
-    saleCustomer = null; svcPet = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
+    saleCustomer = null; svcPet = null; addTo = null; drawCustomerPicker(); if (lastSale) drawLast(); loadSellers();
     const sf = $('fsSale');
     const updChange = () => {
       const split = isSplit(); drawMix(); drawCashbackBox(); drawSplit();
@@ -232,7 +234,7 @@
     setupScanInput(); drawCart(); drawService(); setMode(saleMode); updChange(); setupEye(box);
     box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => setMode(b.dataset.fsMode, true));
     $('fsProducts').onclick = () => productsDialog();
-    $('fsSale').onsubmit = e => submitSale(e, box, alive);
+    $('fsSale').onsubmit = e => submitSale(e, box, alive, !!addTo); // incluindo: Enter não registra venda paga
     $('fsLaterBtn').onclick = () => submitSale({ preventDefault() {}, currentTarget: $('fsSale') }, box, alive, true);
     drawLiveBox(); drawPending(box, alive);
     const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
@@ -287,7 +289,7 @@
     if (saleCustomer?.id || saleCustomer?.anonymous) {
       const c = saleCustomer;
       box.innerHTML = `<div class="fs-picked"><div><b>${c.anonymous ? 'Venda sem cliente' : custLink(c.id, esc(c.name))}</b>${c.phone ? ' · ' + esc(c.phone) : ''} ${cbBadge(c.cashback)}${progressBar(c.loyalty)}</div><button type="button" class="nv-button secondary fs-small" id="fsChange">Trocar</button></div>`;
-      $('fsChange').onclick = () => { saleCustomer = null; cbWanted = false; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; if (isPet()) { svcPet = null; drawService(); } $('fsSale')?.dispatchEvent(new Event('input')); };
+      $('fsChange').onclick = () => { if (addTo) exitAdd(); saleCustomer = null; cbWanted = false; drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; if (isPet()) { svcPet = null; drawService(); } $('fsSale')?.dispatchEvent(new Event('input')); };
       drawCashbackBox(); return;
     }
     if (saleCustomer?.isNew) {
@@ -540,6 +542,7 @@
     else if (saleCustomer?.isNew) { const name = $('fsNewName').value.trim(); if (name.length < 2) { status.textContent = 'Informe o nome do cliente.'; return; } body.new_customer = { name, phone: $('fsNewPhone').value.trim() }; }
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     // Pedido ao vivo junto (o servidor abre o pedido na mesma transação da venda).
+    if (addTo && later) { delete body.payment_method; delete body.payments; delete body.cashback_use_cents; delete body.order_id; return submitAdd(body, box, alive, btn, status); }
     if (liveWanted() && !body.order_id) body.live_order = { process_id: $('fsLiveProc').value, details: liveDetails(services) };
     if (later) {
       delete body.payment_method; delete body.payments;
@@ -622,8 +625,9 @@
     card.innerHTML = `<div class="nv-heading"><h2>A receber <span class="nv-pill">${rows.length}</span></h2><b>${brl(sum)}</b></div>
       <div class="nv-list">${rows.map(p => `<div class="fs-sale fs-pend" data-pend="${p.id}"><div><b>#${p.number}</b> · ${custLink(p.customer_id, esc(p.customer_name))}${p.pet_name ? ' · ' + FPIcon('paw') + esc(p.pet_name) : ''}
         <br><span class="fs-pend-items">${(p.payload?.items || []).length > 1 ? p.payload.items.map((it, n) => `<span class="fs-pend-item">${esc(it.service || it.name || 'Produto')}${it.unit_price_cents != null ? ' ' + brl(it.unit_price_cents * (it.quantity || 1)) : ''}<button type="button" class="fs-full-only" data-pend-rm="${p.id}" data-pend-rm-i="${n}" aria-label="Tirar ${esc(it.service || it.name || 'item')} desta venda" title="Tirar este item">${FPIcon('x')}</button></span>`).join('') : `<small>${esc(pendingItems(p))}</small>`}</span><br><small>${ago(p.created_at)}${p.seller_name ? ' · ' + esc(p.seller_name) : ''}${p.order_number ? ` · pedido ${esc(p.order_number)} <span class="fs-tag${p.order_status === 'completed' ? ' fs-tag-ok' : ''}">${ORDER_STATUS[p.order_status] || ''}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
+        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button><button type="button" class="nv-button secondary fs-small" data-pend-add="${p.id}" title="Incluir serviços ou produtos nesta venda">+ Incluir</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
     card.querySelectorAll('[data-pend-pay]').forEach(b => b.onclick = () => payPending(rows.find(x => x.id === b.dataset.pendPay), box, alive));
+    card.querySelectorAll('[data-pend-add]').forEach(b => b.onclick = () => startAdd(rows.find(x => x.id === b.dataset.pendAdd)));
     card.querySelectorAll('[data-pend-rm]').forEach(b => b.onclick = async () => {
       const p = rows.find(x => x.id === b.dataset.pendRm), it = p.payload.items[Number(b.dataset.pendRmI)];
       if (!confirm(`Tirar "${it.service || it.name || 'item'}" da venda a receber #${p.number} (${p.customer_name})?`)) return;
@@ -634,6 +638,44 @@
       const reason = prompt(`Cancelar a venda a receber #${p.number} (${p.customer_name}, ${brl(p.total_cents)})? Motivo:`); if (!reason || reason.trim().length < 3) return;
       try { await api(`/store/sales/pending/${p.id}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda a receber cancelada.'); drawPending(box, alive); } catch (err) { feedback(err.message, true); }
     });
+  }
+  // "+ Incluir": o caixa passa a montar itens para a venda a receber escolhida (mesmo cliente e pet).
+  // Ao confirmar, os itens entram nela e o total é refeito; nada é cobrado agora.
+  async function startAdd(p) {
+    addTo = p; cart = []; quickCart = []; svc = {}; svcCart = []; cartDiscount = ''; applyCart();
+    try { await pick(p.customer_id); } catch (err) { addTo = null; feedback(err.message, true); return; }
+    if (isPet()) {
+      // Pet da venda (pelo pedido ao vivo ou pelo item); com um pet só na ficha, ele já vem escolhido.
+      const name = (p.pet_name || (p.payload?.items || []).map(i => i.device_model).find(Boolean) || '').trim().toLowerCase();
+      const pet = name && (await customerPets().catch(() => [])).find(x => x.name.trim().toLowerCase() === name);
+      if (pet) { svcPet = pet; svc.model = pet.name; adoptPet(); }
+      setMode('service'); drawService();
+    }
+    drawAddMode(); $('fsSale')?.dispatchEvent(new Event('input'));
+    $('fsAddBanner')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function exitAdd() { addTo = null; drawAddMode(); }
+  function drawAddMode() {
+    const b = $('fsAddBanner'); if (!b) return; const on = !!addTo;
+    b.hidden = !on; $('fsNewSaleTitle').textContent = on ? `Incluir na venda a receber #${addTo.number}` : 'Nova venda';
+    if (on) {
+      b.innerHTML = `<div><b>${esc(addTo.customer_name)}</b>${addTo.pet_name ? ' · ' + esc(addTo.pet_name) : ''} · hoje ${brl(addTo.total_cents)}<br><small>Escolha os serviços ou produtos que faltaram e toque em "Incluir na venda". Nada é cobrado agora.</small></div><button type="button" class="nv-button secondary fs-small" id="fsAddCancel">Sair sem incluir</button>`;
+      $('fsAddCancel').onclick = () => { exitAdd(); saleCustomer = null; cart = []; quickCart = []; svc = {}; svcCart = []; svcPet = null; applyCart(); drawCustomerPicker(); $('fsOrderBox').innerHTML = ''; drawService(); $('fsSale')?.dispatchEvent(new Event('input')); };
+    }
+    document.querySelector('.fs-newsale')?.classList.toggle('fs-adding', on);
+    const later = $('fsLaterBtn'); if (later) later.innerHTML = on ? `${FPIcon('plus') || '+'} Incluir na venda a receber #${addTo.number}` : `${FPIcon('inbox')} Pagar depois <small>(fica em "A receber")</small>`;
+  }
+  async function submitAdd(body, box, alive, btn, status) {
+    if (saleCustomer?.id !== addTo.customer_id) { status.textContent = 'Cliente diferente da venda a receber. Toque em "Sair sem incluir".'; return; }
+    if (body.discount_cents) { status.textContent = 'Desconto não entra aqui: tire o desconto e dê na hora de receber.'; return; }
+    const items = body.items || [{ name: (body.description || 'Valor avulso').slice(0, 120), quantity: 1, unit_price_cents: body.total_cents }];
+    btn.disabled = true;
+    try {
+      const r = await api(`/store/sales/pending/${addTo.id}/add-items`, 'POST', { items, ...(body.items && body.description ? { description: body.description } : {}) });
+      cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; addTo = null; lastSale = null;
+      feedback(`${items.length > 1 ? `${items.length} itens incluídos` : 'Item incluído'} na venda a receber #${r.number}. Total agora: ${brl(r.total_cents)}.`);
+      await loadCash(box, alive);
+    } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function payPending(p, box, alive) {
     const bal = cbOn() ? p.cashback?.balance_cents || 0 : 0, can = bal ? cbAllowed(p.total_cents, bal) : 0;
@@ -2479,7 +2521,7 @@
   .fs-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nv-blue-soft,#e8f0fe);color:var(--nv-blue,#2563eb);vertical-align:middle}.fs-vars{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-vars summary{cursor:pointer;font-weight:700}.fs-vars-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:6px 0}.fs-vars-row>span{flex:0 0 100%;font-size:13px;font-weight:700;color:var(--nv-muted)}.fs-vars-row .nv-field{flex:1 1 90px;min-width:80px;margin:0}
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
   .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
-  .fs-later{margin-top:8px}.fs-later small{font-weight:500;opacity:.8}.fs-live{border:1px dashed var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fs-live select{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-live-done{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;margin-top:10px}.fs-live-done>div{flex:1;min-width:200px}.fs-live-done input{width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-size:13px}.fs-pending{border:2px solid var(--nv-orange,#f97316)}.fs-pend .fs-sale-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.fs-tag-ok{background:#dcfce7;color:#166534}
+  .fs-add-banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:2px solid var(--nv-orange,#f97316);border-radius:12px;padding:10px 12px;margin-bottom:10px}.fs-add-banner>div{flex:1;min-width:200px}.fs-adding #fsSaleBtn,.fs-adding .fs-methods,.fs-adding #fsSplit,.fs-adding #fsChangeBox,.fs-adding .fs-autoprint,.fs-adding #fsLiveBox,.fs-adding #fsOrderBox,.fs-adding #fsCbBox{display:none!important}.fs-later{margin-top:8px}.fs-later small{font-weight:500;opacity:.8}.fs-live{border:1px dashed var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fs-live select{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-live-done{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;margin-top:10px}.fs-live-done>div{flex:1;min-width:200px}.fs-live-done input{width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-size:13px}.fs-pending{border:2px solid var(--nv-orange,#f97316)}.fs-pend .fs-sale-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.fs-tag-ok{background:#dcfce7;color:#166534}
   .fs-day-nav{display:flex;gap:6px;align-items:center}.fs-day-nav input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-day-actions{margin:8px 0}.fs-day-warn{border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:10px 0}.fs-day-warn small{display:block;color:var(--nv-muted)}.fs-day-warn ul{margin:6px 0 0;padding-left:18px}.fs-day-table{border:1px solid var(--nv-border);border-radius:12px;overflow:hidden;margin-top:8px}.fs-day-row{display:grid;grid-template-columns:56px 1.3fr .8fr 1.6fr 90px 1.3fr .9fr;gap:8px;padding:8px 10px;border-bottom:1px solid var(--nv-border);font-size:14px;align-items:center}.fs-day-row:last-child{border-bottom:0}.fs-day-row .n{text-align:right;font-weight:700}.fs-day-h{background:var(--nv-blue-soft,#f1f5f9);font-weight:700;font-size:12px;color:var(--nv-muted)}.fs-day-open{background:#fff7ed}@media(max-width:760px){.fs-day-row{grid-template-columns:48px 1fr 80px}.fs-day-row>span:nth-child(3),.fs-day-row>span:nth-child(6),.fs-day-row>span:nth-child(7){display:none}.fs-day-row>span:nth-child(2){grid-column:2}.fs-day-row>span:nth-child(4){grid-column:2;grid-row:2;font-size:13px;color:var(--nv-muted)}}
   .fs-pend-items{display:inline-flex;flex-wrap:wrap;gap:4px;margin:3px 0}.fs-pend-item{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--nv-blue-soft,#f1f5f9);border-radius:999px;padding:2px 4px 2px 9px}.fs-pend-item button{border:0;background:transparent;padding:2px;cursor:pointer;color:var(--nv-muted);display:inline-flex}.fs-pend-item button:hover{color:#b42318}.fs-pend-item .fp-ic{width:13px;height:13px}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}

@@ -87,3 +87,42 @@ test('tirar um item da venda a receber (cliente desistiu da tosa)', { skip }, as
     assert.equal((await request(`/store/sales/pending/${p.id}/remove-item`, { method: 'POST', body: { index: 0 } })).status, 409);
   } finally { await f.cleanup(); }
 });
+
+test('incluir itens na venda a receber; recebida não aceita mais (cancela e lança outra)', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, db } = f;
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true, niche: 'pet' } });
+    const proc = await api('/processes', { method: 'POST', body: { name: 'Banho', steps: ['Recebido', 'Pronto'] } }, 201);
+    const cli = await api('/customers', { method: 'POST', body: { name: 'Ana Lima', phone: '85988887777' } }, 201);
+    const hidra = await api('/store/sales/service-items', { method: 'POST', body: { name: 'Hidratação', price_cents: 1800, addon: true } }, 201);
+    const prod = await api('/store/products', { method: 'POST', body: { name: 'Laço', price_cents: 500, stock_qty: 10 } }, 201);
+    const p = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, discount_cents: 500,
+      items: [{ service: 'Banho de cheiro', unit_price_cents: 5000, device_model: 'Mel' }],
+      live_order: { process_id: proc.id, details: { pet_name: 'Mel', service: 'Banho de cheiro' } } } }, 201);
+    assert.equal(p.total_cents, 4500);
+
+    // Novato pode incluir (não é tirar nem cancelar).
+    const basic = await f.addOperator(tenant, 'basic', 'Novato');
+    const r = await api(`/store/sales/pending/${p.id}/add-items`, { method: 'POST', token: basic.token, body: { description: 'pediu laço',
+      items: [{ service: 'Hidratação', unit_price_cents: 1800, device_model: 'Mel', catalog_id: hidra.id }, { product_id: prod.id, quantity: 2 }] } });
+    assert.equal(r.added, 2); assert.equal(r.total_cents, 5000 + 1800 + 1000 - 500, 'desconto da venda continua');
+    assert.equal(r.payload.items.length, 3); assert.match(r.description, /pediu laço/);
+    assert.equal((await db.query('SELECT details FROM orders WHERE id=$1', [p.order_id])).rows[0].details.service, 'Banho de cheiro + Hidratação', 'pedido ao vivo mostra os serviços novos');
+    assert.equal((await request(`/store/sales/pending/${p.id}/add-items`, { method: 'POST', body: { items: [] } })).status, 400);
+    assert.equal((await request(`/store/sales/pending/${p.id}/add-items`, { method: 'POST', body: { items: [{ product_id: '00000000-0000-4000-8000-000000000000', quantity: 1 }] } })).status, 400);
+
+    // Venda guardada só com valor: o valor vira item e soma com o novo.
+    const v = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, total_cents: 3500, description: 'Tosa' } }, 201);
+    const v2 = await api(`/store/sales/pending/${v.id}/add-items`, { method: 'POST', body: { items: [{ name: 'Perfume', quantity: 1, unit_price_cents: 700 }] } });
+    assert.equal(v2.total_cents, 4200); assert.deepEqual(v2.payload.items.map(i => i.name), ['Tosa', 'Perfume']); assert.equal(v2.payload.total_cents, undefined);
+
+    // Ao receber, cobra tudo; estoque baixa nessa hora.
+    await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
+    const paid = await api(`/store/sales/pending/${p.id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);
+    assert.equal(paid.sale.total_cents, 7300); assert.equal(paid.sale.items.length, 3);
+    assert.equal((await db.query('SELECT stock_qty FROM products WHERE id=$1', [prod.id])).rows[0].stock_qty, 8);
+    const after = await request(`/store/sales/pending/${p.id}/add-items`, { method: 'POST', body: { items: [{ name: 'X', quantity: 1, unit_price_cents: 100 }] } });
+    assert.equal(after.status, 409); assert.match(after.data.error, /cancele a venda/);
+  } finally { await f.cleanup(); }
+});

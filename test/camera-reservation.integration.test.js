@@ -28,5 +28,15 @@ test('camera reservation serializes different orders and preserves active captur
   assert.equal((await move(winner,'resume')).status,409);
   assert.equal((await db.query('SELECT status FROM orders WHERE id=$1',[winner.id])).rows[0].status,'paused');
   assert.equal((await move(loser,'pause')).status,200);assert.equal((await move(winner,'resume')).status,200);
+  // Duas tosadoras, uma câmera: o segundo pet começa sem vídeo, por escolha explícita.
+  const third=await make('Third');
+  const busy=await move(third,'start');assert.equal(busy.status,409);assert.equal(busy.data.code,'camera_busy');
+  const noVideo=await request('/orders/'+third.id+'/transition',{method:'POST',body:{action:'start',without_video:true}});
+  assert.equal(noVideo.status,200);
+  const row=(await db.query('SELECT status,camera_id,video_off FROM orders WHERE id=$1',[third.id])).rows[0];
+  assert.equal(row.status,'live');assert.equal(row.camera_id,null);assert.equal(row.video_off,true);
+  assert.equal((await db.query('SELECT count(*)::int n FROM recordings WHERE order_id=$1',[third.id])).rows[0].n,0);
+  assert.equal((await move(third,'advance')).status,200);assert.equal((await move(third,'complete')).status,200);
+  assert.equal((await db.query('SELECT status FROM orders WHERE id=$1',[winner.id])).rows[0].status,'live');
  }finally{await f.cleanup()}
 });

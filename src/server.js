@@ -499,7 +499,7 @@ app.post('/api/public/orders/:token/loyalty/claim',rateLimit({windowMs:60000,lim
 }));
 app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
- const v=valid(z.object({action:z.enum(['start','pause','resume','advance','back','complete','reopen']),expected_step_index:z.number().int().min(0).optional(),expected_status:z.enum(['queued','live','paused','completed']).optional()}),req,res);if(!v)return;
+ const v=valid(z.object({action:z.enum(['start','pause','resume','advance','back','complete','reopen']),expected_step_index:z.number().int().min(0).optional(),expected_status:z.enum(['queued','live','paused','completed']).optional(),without_video:z.boolean().optional()}),req,res);if(!v)return;
  const c=await db.connect();try{
   await c.query('BEGIN');
   const r=await c.query("SELECT o.*,o.process_snapshot->'steps' steps,o.process_snapshot->>'camera_id' process_camera_id,o.process_snapshot->'step_cameras' step_cameras FROM orders o WHERE o.id=$1 AND o.tenant_id=$2 AND o.deleted_at IS NULL FOR UPDATE OF o",[req.params.id,tid(req)]);
@@ -518,12 +518,14 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
   else if(v.action==='reopen'&&status==='completed'&&o.completed_at&&Date.now()-new Date(o.completed_at).getTime()<24*3600000){status='live';reopen=true;}
   else if(v.action==='complete'&&status==='live'&&index===o.steps.length-1)status='completed';
   else{await c.query('ROLLBACK');return bad(res,409,'Transição inválida');}
-  const camera=cameraForStep(o.step_cameras,o.process_camera_id,index);
+  // Sem vídeo (escolha explícita do operador): o pedido segue as etapas sem câmera, para não disputar a câmera de outro atendimento.
+  const videoOff=status==='queued'?false:Boolean(o.video_off||(v.without_video&&status==='live'));
+  const camera=videoOff?null:cameraForStep(o.step_cameras,o.process_camera_id,index);
   if(status==='live'&&camera){
    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['nextvision-camera:'+camera]);
-   const occupied=await c.query(`SELECT 1 FROM orders busy WHERE busy.tenant_id=$1 AND busy.id<>$2 AND busy.status='live' AND busy.deleted_at IS NULL
+   const occupied=await c.query(`SELECT 1 FROM orders busy WHERE busy.tenant_id=$1 AND busy.id<>$2 AND busy.status='live' AND busy.deleted_at IS NULL AND NOT busy.video_off
     AND (CASE WHEN (busy.process_snapshot->'step_cameras') ? busy.step_index::text THEN busy.process_snapshot->'step_cameras'->>busy.step_index::text ELSE busy.process_snapshot->>'camera_id' END)=$3 LIMIT 1`,[tid(req),o.id,camera]);
-   if(occupied.rowCount){await c.query('ROLLBACK');return bad(res,409,'Esta câmera está em uso por outro pedido. Pause ou conclua o atendimento atual antes de usar esta câmera.');}
+   if(occupied.rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'Esta câmera está em uso por outro pedido. Pause ou conclua o atendimento atual, ou inicie este sem vídeo.',code:'camera_busy'});}
   }
   // Close the old capture before assigning a distinct file/job to a new visit.
   if(['pause','advance','back','complete','resume'].includes(v.action)){
@@ -533,7 +535,7 @@ app.post('/api/orders/:id/transition',auth,roles('owner','operator'),route(async
   if(status==='live'&&camera&&['start','advance','back','resume','reopen'].includes(v.action)&&(await c.query('SELECT 1 FROM cameras ca JOIN tenants t ON t.id=ca.tenant_id WHERE ca.id=$1 AND ca.tenant_id=$2 AND ca.enabled AND ca.deleted_at IS NULL AND t.recordings_enabled',[camera,tid(req)])).rowCount){
    await c.query("INSERT INTO recordings(tenant_id,order_id,step_index,camera_id,status,visit_index) SELECT $1,$2,$3,$4,'pending',COALESCE(max(visit_index),-1)+1 FROM recordings WHERE order_id=$2 AND step_index=$3",[tid(req),o.id,index,camera]);
   }
-  const upd=await c.query("UPDATE orders SET camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $5 THEN NULL WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() WHEN $6 THEN NULL ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index",[status,index,o.id,status==='queued'?null:camera,unstart,reopen]);
+  const upd=await c.query("UPDATE orders SET video_off=$7,camera_id=$4,status=$1,step_index=$2,started_at=CASE WHEN $5 THEN NULL WHEN $1='live' AND started_at IS NULL THEN now() ELSE started_at END,completed_at=CASE WHEN $1='completed' THEN now() WHEN $6 THEN NULL ELSE completed_at END WHERE id=$3 RETURNING id,status,step_index,video_off",[status,index,o.id,status==='queued'?null:camera,unstart,reopen,videoOff]);
   if(reopen)await c.query('DELETE FROM loyalty_checkins WHERE order_id=$1 AND tenant_id=$2 AND redemption_id IS NULL',[o.id,tid(req)]);
   if(v.action==='complete'&&o.customer_id&&!(await loyaltyBlock(c,tid(req),{orderId:o.id})))await c.query('INSERT INTO loyalty_checkins(tenant_id,customer_id,order_id) VALUES($1,$2,$3) ON CONFLICT(order_id) DO NOTHING',[tid(req),o.customer_id,o.id]);
   await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tid(req),req.user.id,v.action,'order',o.id]);
@@ -585,7 +587,7 @@ async function resolveLive(token){
  const legacy=legacyMediaConfig();
  const hash=crypto.createHash('sha256').update(token).digest('hex');
  // A camera must belong to this tenant and this active order; never expose a general camera feed
- const found=await q(`SELECT o.id,o.tenant_id,o.status,t.waiting_camera_id,t.slug tenant_slug,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
+ const found=await q(`SELECT o.id,o.tenant_id,o.status,o.video_off,t.waiting_camera_id,t.slug tenant_slug,o.step_index,c.id media_camera,c.stream_path,o.process_snapshot->'step_cameras' step_cameras,o.process_snapshot->>'camera_id' process_camera,sm.origin media_origin,sm.media_username,sm.media_password_enc
  FROM orders o JOIN tenants t ON t.id=o.tenant_id
  JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
  JOIN cameras c ON c.id=(CASE WHEN o.status='queued' THEN t.waiting_camera_id::text WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text THEN o.process_snapshot->'step_cameras'->>o.step_index::text ELSE o.process_snapshot->>'camera_id' END)::uuid AND c.tenant_id=o.tenant_id AND c.enabled AND c.deleted_at IS NULL
@@ -600,10 +602,11 @@ async function resolveLive(token){
  if(!config){console.error('HLS configuration incomplete');return {status:503,message:'Vídeo indisponível'};}
  // Na fila: a câmera da área de espera é de todos os pedidos na fila (não disputa câmera).
  const waiting=order.status==='queued';
+ if(!waiting&&order.video_off)return {status:404,message:'Vídeo indisponível'};
  const chosen=waiting?order.waiting_camera_id:cameraForStep(order.step_cameras,order.process_camera,order.step_index);
  if(chosen!==order.media_camera||(!config.perStore&&config.cameraId&&chosen!==config.cameraId))return {status:404,message:'Vídeo indisponível'};
  const competing=waiting?{rowCount:0}:await q(`SELECT 1 FROM orders o JOIN processes p ON p.id=o.process_id AND p.tenant_id=o.tenant_id
- WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL
+ WHERE o.tenant_id=$1 AND o.id<>$2 AND o.status='live' AND o.deleted_at IS NULL AND NOT o.video_off
  AND (CASE WHEN (o.process_snapshot->'step_cameras') ? o.step_index::text
  THEN o.process_snapshot->'step_cameras'->>o.step_index::text
  ELSE o.process_snapshot->>'camera_id' END)=$3 LIMIT 1`,[order.tenant_id,order.id,chosen]);

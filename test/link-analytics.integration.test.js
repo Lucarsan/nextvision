@@ -83,6 +83,31 @@ test('medição do acompanhamento, números da central e relatórios para os loj
       if (group === 'order') assert.match(text, /A1;/);
     }
 
+    // Funil: 3 pedidos, 2 com link enviado/copiado, 1 aberto pelo cliente, 1 com vídeo ao vivo.
+    assert.equal(d.totals.shared, 2); assert.equal(d.totals.share_rate, 67); assert.equal(d.totals.shared_opened, 1);
+    assert.equal(d.totals.shared_open_rate, 50); assert.equal(d.totals.live_orders, 1); assert.equal(d.totals.opened_during, 1);
+    assert.equal(d.totals.staff_opens, 0); assert.equal(d.days.at(-1).shared, 2);
+    assert.equal(typeof d.totals.median_open_seconds, 'number');
+
+    // Equipe: navegador do painel (staff) e aparelho que abre pedidos de clientes diferentes ficam fora da conta.
+    const counter = id(), boss = id();
+    await post('/public/orders/' + t2 + '/visit', { visit: id(), visitor: counter, visible: 5, live: 0, device: 'desktop', staff: true });
+    await post('/public/orders/' + t1 + '/visit', { visit: id(), visitor: boss, visible: 9, live: 0, device: 'mobile' });
+    await post('/public/orders/' + t2 + '/visit', { visit: id(), visitor: boss, visible: 9, live: 0, device: 'mobile' });
+    const d2 = await api('/master/analytics?from=' + localDay(-1) + '&to=' + today, { token: f.masterToken });
+    assert.equal(d2.totals.opens, 3, 'equipe não conta'); assert.equal(d2.totals.people, 2); assert.equal(d2.totals.staff_opens, 3);
+    assert.equal(d2.totals.links_opened, 1, 'o pedido 2 só foi aberto pela equipe');
+    assert.equal((await api('/orders')).find(o => o.id === o2.id).link_opens, 0, 'loja também não vê a própria abertura como cliente');
+    // Relatório por pedido do dia.
+    const day = await api('/master/analytics/orders?from=' + today + '&to=' + today + '&tenant=' + f.tenant, { token: f.masterToken });
+    assert.equal(day.orders.length, 3); assert.equal(day.totals.links, 3);
+    const r1 = day.orders.find(o => o.id === o1.id), r2 = day.orders.find(o => o.id === o2.id);
+    assert.equal(r1.opens, 3); assert.equal(r1.sent, 1); assert.ok(r1.shared_at && r1.first_open);
+    assert.equal(r2.opens, 0); assert.equal(r2.copied, 1); assert.equal(r2.staff_opens, 2); assert.equal(r2.first_open, null);
+    assert.equal((await request('/master/analytics/orders', { token: f.ownerToken })).status, 403);
+    const csvDay = await fetch(base + '/api/master/analytics.csv?group=order&from=' + today + '&to=' + today + '&tenant=' + f.foreignTenant, { headers: { Authorization: 'Bearer ' + f.masterToken } });
+    assert.doesNotMatch(await csvDay.text(), /A1;/, 'filtro por loja no CSV');
+
     // Número público: desligado → 404; ligado → só totais.
     assert.equal((await fetch(base + '/api/public/stats')).status, 404);
     await api('/master/analytics/settings', { method: 'PATCH', token: f.masterToken, body: { public_stats_enabled: true } });

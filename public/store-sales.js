@@ -161,6 +161,7 @@
   // e registra o envio.
   function sendWhats(phone, text, record) {
     const w = window.open(waLink(phone, text), '_blank'); if (w) w.opener = null;
+    if (typeof measureShare === 'function') measureShare(text, 'whatsapp');
     return api('/store/messages/sent', 'POST', record);
   }
   async function redeem(customerId, name) {

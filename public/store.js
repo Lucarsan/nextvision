@@ -1,4 +1,6 @@
 const token = sessionStorage.getItem('nv_token');
+// Este navegador é da equipe: aberturas do acompanhamento feitas aqui não contam como cliente.
+try { if (token) localStorage.setItem('fp_staff', '1'); } catch { }
 const $ = id => document.getElementById(id);
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Nome ou foto do cliente: clicar abre o histórico dele (customer-history.js).

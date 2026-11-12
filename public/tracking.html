@@ -116,7 +116,8 @@ const fpStats=(()=>{
  const source=/whatsapp/i.test(document.referrer)?'whatsapp':document.referrer?'other':'direct';
  let visible=0,live=0,lastSent=-1;
  const url='/api/public/orders/'+encodeURIComponent(token)+'/visit';
- const body=()=>JSON.stringify({visit,visitor,visible,live,device,source});
+ let staff=false;try{staff=localStorage.getItem('fp_staff')==='1'}catch{}
+ const body=()=>JSON.stringify({visit,visitor,visible,live,device,source,staff});
  const send=beacon=>{if(lastSent===visible+live*100000&&beacon)return;lastSent=visible+live*100000;try{if(beacon&&navigator.sendBeacon){navigator.sendBeacon(url,new Blob([body()],{type:'application/json'}));return}fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body(),keepalive:true}).catch(()=>{})}catch{}};
  setInterval(()=>{if(document.hidden)return;visible++;const v=window.__fpLiveVideo;if(v&&v.isConnected&&!v.paused&&!v.ended&&v.readyState>=3)live++;if(visible%30===0)send(false)},1000);
  document.addEventListener('visibilitychange',()=>{if(document.hidden)send(true)});

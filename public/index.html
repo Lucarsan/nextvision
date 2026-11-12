@@ -107,7 +107,7 @@
       const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw Error(data.error || 'Não foi possível entrar');
-      sessionStorage.setItem('nv_token', data.token);
+      sessionStorage.setItem('nv_token', data.token); try { localStorage.setItem('fp_staff', '1'); } catch { }
       go(data.user.role);
     } catch (err) { $('loginError').textContent = err.message; btn.disabled = false; }
   });

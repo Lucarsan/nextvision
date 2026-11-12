@@ -10,27 +10,42 @@
   const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
   const kpi = (label, value, note = '') => '<div class="ct-kpi"><span>' + safe(label) + '</span><strong>' + safe(value) + '</strong><em>' + safe(note) + '</em></div>';
   const state = { days: 30, from: null, to: null, tenant: '' };
+  const legend = (c, t) => '<span style="display:inline-block;width:10px;height:10px;background:' + c + ';border-radius:2px"></span> ' + safe(t);
+  const rate = v => v == null ? '—' : v + '%';
+  const TZ = 'America/Fortaleza';
+  const hm = d => d ? new Date(d).toLocaleTimeString('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }) : '';
+  const dayOf = d => d ? new Date(d).toLocaleDateString('sv-SE', { timeZone: TZ }) : '';
+  const when = (d, base) => d ? (dayOf(d) === base ? hm(d) : dmy(dayOf(d)).slice(0, 5) + ' ' + hm(d)) : '';
+  const gap = (a, b) => { if (!a || !b) return ''; const m = Math.max(0, Math.round((new Date(b) - new Date(a)) / 60000)); return m < 1 ? 'na hora' : m < 60 ? m + ' min depois' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min depois'; };
+  // Funil: pedidos criados → link enviado → cliente abriu → viu ao vivo.
+  function funnel(t) {
+    const steps = [['Pedidos criados', t.links, ''], ['Link enviado ou copiado', t.shared, rate(t.share_rate) + ' dos pedidos'],
+      ['Cliente abriu o link', t.links_opened, rate(t.open_rate) + ' dos pedidos'], ['Cliente viu ao vivo', t.live_orders, t.links_opened ? Math.round(t.live_orders * 100 / t.links_opened) + '% de quem abriu' : '—']];
+    const max = Math.max(1, t.links);
+    return '<div style="display:grid;gap:10px">' + steps.map(([l, v, n], i) => '<div style="display:grid;grid-template-columns:minmax(150px,210px) 1fr;gap:12px;align-items:center"><span style="font-size:13px;color:var(--muted)">' + safe(l) + '</span>'
+      + '<div style="display:flex;align-items:center;gap:10px"><div style="height:26px;border-radius:6px;background:' + ['#CBD2DC', '#3B82F6', '#F25C1F', '#16A34A'][i] + ';width:' + Math.max(1, Math.round(v * 70 / max)) + '%;min-width:4px"></div><strong style="font-size:18px">' + num(v) + '</strong><em style="font-style:normal;font-size:12px;color:var(--muted)">' + safe(n) + '</em></div></div>').join('') + '</div>';
+  }
 
   // Gráfico simples por dia: pedidos com link (cinza) e aberturas (laranja).
   function chart(days) {
     if (!days.length) return '';
-    const W = 760, H = 180, padL = 34, padB = 22, max = Math.max(1, ...days.map(d => Math.max(d.links, d.opens)));
-    const bw = (W - padL) / days.length, bar = Math.max(2, Math.min(14, bw / 2 - 2));
+    const W = 760, H = 180, padL = 34, padB = 22, max = Math.max(1, ...days.map(d => Math.max(d.links, d.shared || 0, d.opens)));
+    const bw = (W - padL) / days.length, bar = Math.max(2, Math.min(12, bw / 3 - 2));
     const y = v => H - padB - (H - padB - 8) * v / max;
     const ticks = [0, Math.round(max / 2), max];
     let g = ticks.map(t => '<line x1="' + padL + '" x2="' + W + '" y1="' + y(t) + '" y2="' + y(t) + '" stroke="#EEF0F3"/><text x="' + (padL - 6) + '" y="' + (y(t) + 4) + '" text-anchor="end" font-size="10" fill="#6B7280">' + t + '</text>').join('');
     days.forEach((d, i) => {
       const x = padL + i * bw + bw / 2;
-      g += '<rect x="' + (x - bar - 1) + '" y="' + y(d.links) + '" width="' + bar + '" height="' + (H - padB - y(d.links)) + '" rx="2" fill="#CBD2DC"><title>' + dmy(d.day) + ': ' + d.links + ' pedidos com link</title></rect>';
-      g += '<rect x="' + (x + 1) + '" y="' + y(d.opens) + '" width="' + bar + '" height="' + (H - padB - y(d.opens)) + '" rx="2" fill="#F25C1F"><title>' + dmy(d.day) + ': ' + d.opens + ' aberturas</title></rect>';
+      const r = (dx, v, fill, t) => '<rect x="' + (x + dx) + '" y="' + y(v) + '" width="' + bar + '" height="' + (H - padB - y(v)) + '" rx="2" fill="' + fill + '"><title>' + dmy(d.day) + ': ' + v + ' ' + t + '</title></rect>';
+      g += r(-bar * 1.5 - 1, d.links, '#CBD2DC', 'pedidos criados') + r(-bar / 2, d.shared || 0, '#3B82F6', 'pedidos com link enviado') + r(bar / 2 + 1, d.opens, '#F25C1F', 'aberturas de clientes');
       if (days.length <= 14 || i % Math.ceil(days.length / 10) === 0) g += '<text x="' + x + '" y="' + (H - 6) + '" text-anchor="middle" font-size="10" fill="#6B7280">' + d.day.slice(8) + '/' + d.day.slice(5, 7) + '</text>';
     });
     return '<div style="overflow-x:auto"><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;min-width:520px;height:auto" role="img" aria-label="Pedidos com link e aberturas por dia">' + g + '</svg></div>'
-      + '<p class="ct-note"><span style="display:inline-block;width:10px;height:10px;background:#CBD2DC;border-radius:2px"></span> Pedidos com link &nbsp; <span style="display:inline-block;width:10px;height:10px;background:#F25C1F;border-radius:2px"></span> Aberturas</p>';
+      + '<p class="ct-note">' + legend('#CBD2DC', 'Pedidos criados') + ' &nbsp; ' + legend('#3B82F6', 'Link enviado') + ' &nbsp; ' + legend('#F25C1F', 'Aberturas de clientes') + '</p>';
   }
 
-  async function downloadCsv(group, range) {
-    const r = await fetch('/api/master/analytics.csv?group=' + group + '&from=' + range.from + '&to=' + range.last, { headers: { Authorization: 'Bearer ' + token } });
+  async function downloadCsv(group, range, tenant = '') {
+    const r = await fetch('/api/master/analytics.csv?group=' + group + '&from=' + range.from + '&to=' + range.last + (tenant ? '&tenant=' + tenant : ''), { headers: { Authorization: 'Bearer ' + token } });
     if (!r.ok) throw Error('Não foi possível gerar o arquivo');
     const blob = await r.blob(), a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'ficoupronto-' + group + '-' + range.from + '-a-' + range.last + '.csv'; a.click();
@@ -49,21 +64,24 @@
       + '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end"><label style="margin:0">De<input type="date" id="anFrom" value="' + from + '"></label><label style="margin:0">Até<input type="date" id="anTo" value="' + last + '"></label>'
       + '<label style="margin:0">Loja<select id="anTenant"><option value="">Todas as lojas</option>' + stores.map(s => '<option value="' + safe(s.id) + '"' + (s.id === state.tenant ? ' selected' : '') + '>' + safe(s.name) + '</option>').join('') + '</select></label>'
       + '<button type="button" id="anApply">Ver</button></div></section>'
+      + '<section class="ct-card"><h2>Funil dos pedidos criados no período</h2>' + funnel(t) + '</section>'
       + '<section class="ct-card ct-kpis">'
-      + kpi('Pedidos com link', num(t.links), num(t.sent) + ' enviados pelo WhatsApp')
-      + kpi('Aberturas do link', num(t.opens), num(t.people) + ' pessoas (aparelhos)')
-      + kpi('Links abertos', t.open_rate == null ? '—' : t.open_rate + '%', num(t.links_opened) + ' de ' + num(t.links) + ' pedidos')
+      + kpi('Abriram entre os enviados', rate(t.shared_open_rate), num(t.shared_opened) + ' de ' + num(t.shared) + ' links enviados')
+      + kpi('Tempo até abrir', t.median_open_seconds == null ? '—' : dur(t.median_open_seconds), 'mediana entre o envio e a 1ª abertura')
+      + kpi('Abriram durante o atendimento', num(t.opened_during), 'antes de o pedido ficar pronto')
+      + kpi('Aberturas de clientes', num(t.opens), num(t.people) + ' pessoas (aparelhos)')
       + kpi('Voltaram para ver de novo', num(t.returns), 'clientes que abriram mais de uma vez')
       + kpi('Tempo médio na página', dur(t.avg_visible_seconds), 'por abertura')
       + kpi('Vídeo ao vivo assistido', dur(t.live_seconds), num(t.downloads) + ' vídeos baixados')
       + kpi('Conversas com a loja', num(t.talks), 'cliques em "Falar com a loja"')
       + kpi('Pelo celular', t.opens ? Math.round(t.mobile * 100 / t.opens) + '%' : '—', 'das aberturas')
+      + kpi('Aberturas da equipe', num(t.staff_opens), 'fora da conta (loja e central)')
       + '</section>'
       + '<section class="ct-card"><h2>Por dia</h2>' + chart(d.days) + '</section>'
       + '<section class="ct-card"><div class="ct-card-head"><h2>Por loja</h2><div><button type="button" class="secondary" data-csv="store">Baixar por loja (CSV)</button><button type="button" class="secondary" data-csv="day">Por dia</button><button type="button" class="secondary" data-csv="order">Por pedido</button></div></div>'
-      + '<div style="overflow-x:auto"><table><thead><tr><th>Loja</th><th>Pedidos com link</th><th>Enviados</th><th>Aberturas</th><th>Pessoas</th><th>Links abertos</th><th>Retornos</th><th>Tempo médio</th><th>Vídeo assistido</th><th>Downloads</th></tr></thead><tbody>'
-      + (d.stores.length ? d.stores.map(s => '<tr><td><div class="ct-store"><strong>' + safe(s.name) + '</strong><span>' + safe(s.slug) + '</span></div></td><td>' + num(s.links) + '</td><td>' + num(s.sent) + '</td><td>' + num(s.opens) + '</td><td>' + num(s.people) + '</td><td>' + (s.open_rate == null ? '—' : s.open_rate + '%') + '</td><td>' + num(s.returns) + '</td><td>' + dur(s.avg_visible_seconds) + '</td><td>' + dur(s.live_seconds) + '</td><td>' + num(s.downloads) + '</td></tr>').join('') : '<tr><td colspan="10" class="ct-empty">Sem dados no período.</td></tr>')
-      + '</tbody></table></div><p class="ct-note">Contagem anônima: aberturas são contadas pelo celular do cliente (a prévia do link no WhatsApp não conta). Pessoas = aparelhos diferentes. A medição começou em 31/10/2026; antes disso só existe a quantidade de pedidos.</p></section>'
+      + '<div style="overflow-x:auto"><table><thead><tr><th>Loja</th><th>Pedidos</th><th>Link enviado</th><th>Abertos</th><th>Aberturas</th><th>Pessoas</th><th>Tempo até abrir</th><th>Retornos</th><th>Tempo médio</th><th>Vídeo assistido</th><th>Downloads</th></tr></thead><tbody>'
+      + (d.stores.length ? d.stores.map(s => '<tr><td><div class="ct-store"><strong>' + safe(s.name) + '</strong><span>' + safe(s.slug) + '</span></div></td><td>' + num(s.links) + '</td><td>' + num(s.shared) + ' <small>(' + rate(s.share_rate) + ')</small></td><td>' + num(s.links_opened) + ' <small>(' + rate(s.open_rate) + ')</small></td><td>' + num(s.opens) + '</td><td>' + num(s.people) + '</td><td>' + (s.median_open_seconds == null ? '—' : dur(s.median_open_seconds)) + '</td><td>' + num(s.returns) + '</td><td>' + dur(s.avg_visible_seconds) + '</td><td>' + dur(s.live_seconds) + '</td><td>' + num(s.downloads) + '</td></tr>').join('') : '<tr><td colspan="11" class="ct-empty">Sem dados no período.</td></tr>')
+      + '</tbody></table></div><p class="ct-note">Contagem anônima: aberturas são contadas pelo aparelho do cliente (a prévia do link no WhatsApp não conta). Pessoas = aparelhos diferentes. Aberturas da equipe ficam fora: navegadores onde alguém entrou no painel e aparelhos que abriram links de clientes diferentes. Funil e taxas consideram os pedidos criados no período. A medição começou em 31/10/2026.</p></section>'
       + '<section class="ct-card"><div class="ct-card-head"><h2>Números públicos (site e apresentação)</h2><span class="ct-chip ' + (d.public_stats_enabled ? 'ok">Ligado' : 'muted">Desligado') + '</span></div>'
       + '<p>Totais somados de todas as lojas, sem nenhum dado de cliente, em <code>' + safe(location.origin) + '/api/public/stats</code>. Fica desligado até você decidir mostrar.</p>'
       + '<button type="button" id="pubToggle" class="' + (d.public_stats_enabled ? 'secondary' : '') + '">' + (d.public_stats_enabled ? 'Desligar números públicos' : 'Ligar números públicos') + '</button></section>');
@@ -101,15 +119,55 @@
     });
   }
 
-  let reportDate = null;
+  // Relatório do dia: funil, números e uma linha por pedido criado no dia.
+  function orderStatus(o) {
+    if (o.opens) return '<span class="ct-chip ok">Abriu</span>';
+    if (o.shared_at) return '<span class="ct-chip warn">Enviado, não abriu</span>';
+    return '<span class="ct-chip muted">Link não enviado</span>';
+  }
+  function dayReport(r, day, allStores) {
+    const t = r.totals, rows = r.orders;
+    const head = '<tr>' + (allStores ? '<th>Loja</th>' : '') + '<th>Pedido</th><th>Cliente / pet</th><th>Criado</th><th>Link</th><th>Cliente abriu</th><th>Aberturas</th><th>Na página</th><th>Ao vivo</th><th>Pronto</th></tr>';
+    const body = rows.length ? rows.map(o => '<tr>' + (allStores ? '<td>' + safe(o.store) + '</td>' : '')
+      + '<td><strong>' + safe(o.order_number || '') + '</strong>' + (o.external_reference ? '<br><small>' + safe(o.external_reference) + '</small>' : '') + '</td>'
+      + '<td>' + safe(o.customer || '—') + (o.item ? '<br><small>' + safe(o.item) + (o.service ? ' · ' + safe(o.service) : '') + '</small>' : '') + '</td>'
+      + '<td>' + safe(when(o.created_at, day)) + '</td>'
+      + '<td>' + (o.shared_at ? safe(when(o.shared_at, day)) + '<br><small>' + [o.sent ? 'WhatsApp' + (o.sent > 1 ? ' ×' + o.sent : '') : '', o.copied ? 'copiado' : ''].filter(Boolean).join(' + ') + '</small>' : orderStatus(o)) + '</td>'
+      + '<td>' + (o.first_open ? safe(when(o.first_open, day)) + '<br><small>' + safe(gap(o.shared_at || o.created_at, o.first_open)) + '</small>' : (o.shared_at ? orderStatus(o) : '—')) + '</td>'
+      + '<td>' + (o.opens ? num(o.opens) + (o.people > 1 ? ' <small>(' + o.people + ' pessoas)</small>' : '') : '—') + (o.staff_opens ? '<br><small title="Aberturas da loja ou da central, fora da conta">+' + o.staff_opens + ' da equipe</small>' : '') + '</td>'
+      + '<td>' + (o.opens ? dur(o.visible_seconds) : '—') + '</td>'
+      + '<td>' + (o.live_seconds ? dur(o.live_seconds) : '—') + (o.downloads ? '<br><small>' + o.downloads + ' download(s)</small>' : '') + '</td>'
+      + '<td>' + (o.completed_at ? safe(when(o.completed_at, day)) : '<small>' + safe(o.status === 'live' ? 'Em atendimento' : o.status === 'paused' ? 'Pausado' : 'Na fila') + '</small>') + '</td></tr>').join('')
+      : '<tr><td colspan="' + (allStores ? 10 : 9) + '" class="ct-empty">Nenhum pedido criado neste dia.</td></tr>';
+    const notSent = rows.filter(o => !o.shared_at).length, notOpened = rows.filter(o => o.shared_at && !o.opens).length;
+    return funnel(t)
+      + '<div class="ct-kpis" style="margin-top:22px">'
+      + kpi('Abriram entre os enviados', rate(t.shared_open_rate), num(t.shared_opened) + ' de ' + num(t.shared))
+      + kpi('Tempo até abrir', t.median_open_seconds == null ? '—' : dur(t.median_open_seconds), 'mediana após o envio')
+      + kpi('Tempo médio na página', dur(t.avg_visible_seconds), num(t.opens) + ' aberturas · ' + num(t.people) + ' pessoas')
+      + kpi('Vídeo ao vivo assistido', dur(t.live_seconds), num(t.returns) + ' voltaram para ver de novo')
+      + '</div>'
+      + (rows.length ? '<p class="ct-note" style="margin-top:16px">' + (notSent ? '<strong>' + notSent + '</strong> pedido(s) sem link enviado pelo painel. ' : '') + (notOpened ? '<strong>' + notOpened + '</strong> enviado(s) e ainda não aberto(s). ' : '') + (t.staff_opens ? t.staff_opens + ' abertura(s) da equipe ficaram fora da conta.' : '') + '</p>' : '')
+      + '<div style="overflow-x:auto;margin-top:12px"><table><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>'
+      + '<p class="ct-note">"Link enviado" conta o botão de WhatsApp e o "Copiar link" do painel; links mandados por fora do painel (ex.: digitados no WhatsApp) não aparecem como enviados, mas as aberturas contam. Aberturas da equipe (navegadores do painel e aparelhos que abriram links de clientes diferentes) ficam fora.</p>';
+  }
+
+  let reportDate = null, reportTenant = '';
   window.resultsReportsPage = async function resultsReportsPage() {
     const day = reportDate || today();
-    const d = await api('/master/results-reports?date=' + day);
+    const [d, r] = await Promise.all([
+      api('/master/results-reports?date=' + day),
+      api('/master/analytics/orders?from=' + day + '&to=' + day + (reportTenant ? '&tenant=' + reportTenant : ''))
+    ]);
     const pending = d.due.filter(r => !r.sent).length;
     const sched = d.schedules.map(s => '<tr><td>' + safe(s.name) + '</td><td><select data-sched="' + safe(s.tenant_id) + '"><option value="off"' + (s.results_report === 'off' ? ' selected' : '') + '>Desligado</option><option value="daily"' + (s.results_report === 'daily' ? ' selected' : '') + '>Todo dia</option><option value="weekly"' + (s.results_report === 'weekly' ? ' selected' : '') + '>Toda semana</option></select></td><td><select data-weekday="' + safe(s.tenant_id) + '"' + (s.results_report !== 'weekly' ? ' disabled' : '') + '>' + WEEKDAYS.map((w, i) => '<option value="' + i + '"' + (i === s.results_report_weekday ? ' selected' : '') + '>' + w + '</option>').join('') + '</select></td></tr>').join('');
-    render('<section class="ct-card"><div class="ct-card-head"><h2>' + (day === today() ? 'Para enviar hoje' : 'Para enviar em ' + safe(dmy(day))) + ' · ' + (d.due.length ? (pending ? pending + ' pendente(s)' : 'tudo enviado') : 'nenhum') + '</h2>'
-      + '<div style="display:flex;gap:8px;align-items:center"><button type="button" class="secondary" id="rpPrev" aria-label="Dia anterior" title="Dia anterior">‹</button><input type="date" id="rpDate" value="' + day + '" style="margin:0;max-width:170px"><button type="button" class="secondary" id="rpNext" aria-label="Próximo dia" title="Próximo dia">›</button></div></div>'
-      + '<p>Mensagens prontas com os resultados de cada loja. Revise, toque em <strong>Enviar no WhatsApp</strong> e a mensagem abre na conversa com o lojista. Diário = resultados de ontem; semanal = últimos 7 dias.</p>'
+    render('<section class="ct-card"><div class="ct-card-head"><h2>Relatório do dia · ' + safe(dmy(day)) + (day === today() ? ' (hoje, até agora)' : '') + '</h2>'
+      + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="rpStore" style="margin:0;max-width:220px"><option value="">Todas as lojas</option>' + d.schedules.map(s => '<option value="' + safe(s.tenant_id) + '"' + (s.tenant_id === reportTenant ? ' selected' : '') + '>' + safe(s.name) + '</option>').join('') + '</select>'
+      + '<button type="button" class="secondary" id="rpPrev" aria-label="Dia anterior" title="Dia anterior">‹</button><input type="date" id="rpDate" value="' + day + '" max="' + today() + '" style="margin:0;max-width:170px"><button type="button" class="secondary" id="rpNext" aria-label="Próximo dia" title="Próximo dia"' + (day >= today() ? ' disabled' : '') + '>›</button>'
+      + '<button type="button" class="secondary" id="rpCsv">Baixar (CSV)</button></div></div>'
+      + dayReport(r, day, !reportTenant) + '</section>'
+      + '<section class="ct-card"><div class="ct-card-head"><h2>Mensagens de resultados ' + (day === today() ? 'para enviar hoje' : 'de ' + safe(dmy(day))) + ' · ' + (d.due.length ? (pending ? pending + ' pendente(s)' : 'tudo enviado') : 'nenhuma programada') + '</h2></div>'
+      + '<p>Mensagens prontas com os resultados de cada loja (aparecem só no dia programado de cada uma; veja a programação abaixo). Revise, toque em <strong>Enviar no WhatsApp</strong> e a mensagem abre na conversa com o lojista. Diário = resultados de ontem; semanal = últimos 7 dias.</p>'
       + (d.due.length ? d.due.map(r => reportCard(r, { markable: true })).join('') : '<p class="ct-empty">Nenhum relatório programado para este dia.</p>') + '</section>'
       + '<section class="ct-card"><h2>Gerar agora para uma loja</h2><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end"><label style="margin:0">Loja<select id="rpTenant">' + d.schedules.map(s => '<option value="' + safe(s.tenant_id) + '">' + safe(s.name) + '</option>').join('') + '</select></label>'
       + '<label style="margin:0">Período<select id="rpKind"><option value="weekly">Últimos 7 dias</option><option value="daily">Ontem</option></select></label><button type="button" id="rpGen">Gerar mensagem</button></div><div id="rpPreview" style="margin-top:14px"></div></section>'
@@ -119,6 +177,8 @@
     const go = n => { reportDate = shift(day, n); resultsReportsPage().catch(e => msg(e.message)); };
     el('rpPrev').onclick = () => go(-1); el('rpNext').onclick = () => go(1);
     el('rpDate').onchange = () => { if (el('rpDate').value) { reportDate = el('rpDate').value; resultsReportsPage().catch(e => msg(e.message)); } };
+    el('rpStore').onchange = () => { reportTenant = el('rpStore').value; resultsReportsPage().catch(e => msg(e.message)); };
+    el('rpCsv').onclick = () => downloadCsv('order', { from: day, last: day }, reportTenant).catch(e => msg(e.message));
     wireCards(d.due, { markable: true, reload: resultsReportsPage });
     el('rpGen').onclick = async () => {
       try {

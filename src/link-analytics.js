@@ -35,20 +35,23 @@ export function duration(seconds) {
 const pct = (a, b) => b ? Math.round(a * 100 / b) + '%' : '—';
 
 // Números de um período [from, to) em datas locais, por loja (tenant opcional) e por dia.
+// Só contam aberturas de clientes (link_client_visits): aparelhos da equipe ficam em staff_opens.
+// Funil por pedido criado no período: criado → link enviado/copiado → aberto pelo cliente → viu ao vivo.
 export async function linkStats(q, { from, to, tenantId = null }) {
   const p = [from, to, TZ, tenantId];
   const inRange = col => `${col} >= ($1::date::timestamp AT TIME ZONE $3) AND ${col} < ($2::date::timestamp AT TIME ZONE $3)`;
   const tf = col => `($4::uuid IS NULL OR ${col} = $4::uuid)`;
-  const [stores, days] = await Promise.all([
-    q(`WITH o AS (SELECT tenant_id, count(*)::int created,
-          count(*) FILTER (WHERE EXISTS (SELECT 1 FROM link_visits v WHERE v.order_id = orders.id))::int created_opened
-        FROM orders WHERE deleted_at IS NULL AND ${inRange('created_at')} AND ${tf('tenant_id')} GROUP BY tenant_id),
+  const [stores, days, funnelTotal] = await Promise.all([
+    q(`WITH oc AS (${cohortSql(inRange('o.created_at'), tf('o.tenant_id'))}),
+      o AS (SELECT tenant_id, ${funnelCols} FROM oc GROUP BY tenant_id),
       c AS (SELECT tenant_id, count(*)::int completed FROM orders WHERE deleted_at IS NULL AND ${inRange('completed_at')} AND ${tf('tenant_id')} GROUP BY tenant_id),
       v AS (SELECT tenant_id, count(*)::int opens, count(DISTINCT visitor_id)::int people, count(DISTINCT order_id)::int orders_opened,
           COALESCE(sum(visible_seconds), 0)::bigint visible, COALESCE(sum(live_seconds), 0)::bigint live,
           count(*) FILTER (WHERE device = 'mobile')::int mobile
-        FROM link_visits WHERE ${inRange('started_at')} AND ${tf('tenant_id')} GROUP BY tenant_id),
-      r AS (SELECT tenant_id, count(*)::int returns FROM (SELECT tenant_id, order_id, visitor_id FROM link_visits
+        FROM link_client_visits WHERE ${inRange('started_at')} AND ${tf('tenant_id')} GROUP BY tenant_id),
+      sv AS (SELECT tenant_id, count(*)::int staff_opens FROM link_visits x
+        WHERE ${inRange('started_at')} AND ${tf('tenant_id')} AND NOT EXISTS (SELECT 1 FROM link_client_visits c WHERE c.id = x.id) GROUP BY tenant_id),
+      r AS (SELECT tenant_id, count(*)::int returns FROM (SELECT tenant_id, order_id, visitor_id FROM link_client_visits
           WHERE ${inRange('started_at')} AND ${tf('tenant_id')} GROUP BY 1, 2, 3 HAVING count(*) > 1) x GROUP BY tenant_id),
       e AS (SELECT tenant_id,
           count(DISTINCT order_id) FILTER (WHERE kind = 'link_sent')::int sent,
@@ -58,31 +61,76 @@ export async function linkStats(q, { from, to, tenantId = null }) {
           count(*) FILTER (WHERE kind = 'loyalty_claim')::int claims
         FROM link_events WHERE ${inRange('created_at')} AND ${tf('tenant_id')} GROUP BY tenant_id)
       SELECT t.id tenant_id, t.name, t.slug, t.whatsapp, t.status, t.results_report, t.results_report_weekday,
-        COALESCE(o.created, 0) links, COALESCE(o.created_opened, 0) links_opened, COALESCE(c.completed, 0) completed,
+        COALESCE(o.links, 0) links, COALESCE(o.shared, 0) shared, COALESCE(o.links_opened, 0) links_opened,
+        COALESCE(o.shared_opened, 0) shared_opened, COALESCE(o.live_orders, 0) live_orders, COALESCE(o.opened_during, 0) opened_during,
+        o.median_open_seconds, COALESCE(c.completed, 0) completed,
         COALESCE(v.opens, 0) opens, COALESCE(v.people, 0) people, COALESCE(v.orders_opened, 0) orders_opened,
         COALESCE(v.visible, 0)::int visible_seconds, COALESCE(v.live, 0)::int live_seconds, COALESCE(v.mobile, 0) mobile,
-        COALESCE(r.returns, 0) returns, COALESCE(e.sent, 0) sent, COALESCE(e.copied, 0) copied,
+        COALESCE(sv.staff_opens, 0) staff_opens, COALESCE(r.returns, 0) returns, COALESCE(e.sent, 0) sent, COALESCE(e.copied, 0) copied,
         COALESCE(e.downloads, 0) downloads, COALESCE(e.talks, 0) talks, COALESCE(e.claims, 0) claims
       FROM tenants t LEFT JOIN o ON o.tenant_id = t.id LEFT JOIN c ON c.tenant_id = t.id LEFT JOIN v ON v.tenant_id = t.id
-      LEFT JOIN r ON r.tenant_id = t.id LEFT JOIN e ON e.tenant_id = t.id
-      WHERE ${tf('t.id')} ORDER BY COALESCE(v.opens, 0) DESC, t.name`, p),
+      LEFT JOIN sv ON sv.tenant_id = t.id LEFT JOIN r ON r.tenant_id = t.id LEFT JOIN e ON e.tenant_id = t.id
+      WHERE ${tf('t.id')} ORDER BY COALESCE(o.links, 0) DESC, COALESCE(v.opens, 0) DESC, t.name`, p),
     q(`WITH d AS (SELECT generate_series($1::date, $2::date - 1, interval '1 day')::date d)
       SELECT to_char(d.d, 'YYYY-MM-DD') AS day,
         (SELECT count(*) FROM orders o WHERE o.deleted_at IS NULL AND ${tf('o.tenant_id')}
           AND o.created_at >= (d.d::timestamp AT TIME ZONE $3) AND o.created_at < ((d.d + 1)::timestamp AT TIME ZONE $3))::int links,
-        (SELECT count(*) FROM link_visits v WHERE ${tf('v.tenant_id')}
+        (SELECT count(DISTINCT e.order_id) FROM link_events e WHERE ${tf('e.tenant_id')} AND e.kind IN ('link_sent', 'link_copied')
+          AND e.created_at >= (d.d::timestamp AT TIME ZONE $3) AND e.created_at < ((d.d + 1)::timestamp AT TIME ZONE $3))::int shared,
+        (SELECT count(*) FROM link_client_visits v WHERE ${tf('v.tenant_id')}
           AND v.started_at >= (d.d::timestamp AT TIME ZONE $3) AND v.started_at < ((d.d + 1)::timestamp AT TIME ZONE $3))::int opens,
-        (SELECT COALESCE(sum(v.live_seconds), 0) FROM link_visits v WHERE ${tf('v.tenant_id')}
+        (SELECT COALESCE(sum(v.live_seconds), 0) FROM link_client_visits v WHERE ${tf('v.tenant_id')}
           AND v.started_at >= (d.d::timestamp AT TIME ZONE $3) AND v.started_at < ((d.d + 1)::timestamp AT TIME ZONE $3))::int live_seconds
-      FROM d ORDER BY d.d`, p)
+      FROM d ORDER BY d.d`, p),
+    // Mediana não se soma entre lojas: calculada à parte para o total.
+    q(`WITH oc AS (${cohortSql(inRange('o.created_at'), tf('o.tenant_id'))}) SELECT ${funnelCols} FROM oc`, p)
   ]);
   const sum = k => stores.rows.reduce((a, r) => a + Number(r[k] || 0), 0);
-  const keys = ['links', 'links_opened', 'completed', 'opens', 'people', 'orders_opened', 'visible_seconds', 'live_seconds', 'mobile', 'returns', 'sent', 'copied', 'downloads', 'talks', 'claims'];
+  const keys = ['links', 'shared', 'links_opened', 'shared_opened', 'live_orders', 'opened_during', 'completed', 'opens', 'people', 'orders_opened', 'visible_seconds', 'live_seconds', 'mobile', 'staff_opens', 'returns', 'sent', 'copied', 'downloads', 'talks', 'claims'];
   const totals = Object.fromEntries(keys.map(k => [k, sum(k)]));
+  totals.median_open_seconds = funnelTotal.rows[0]?.median_open_seconds ?? null;
   return { from, to, totals: withDerived(totals), stores: stores.rows.map(withDerived), days: days.rows };
 }
+// Pedidos criados no período com: primeiro envio do link, primeira abertura pelo cliente e vídeo ao vivo visto.
+const cohortSql = (range, tenant) => `SELECT o.id, o.tenant_id, o.completed_at,
+    (SELECT min(e.created_at) FROM link_events e WHERE e.order_id = o.id AND e.kind IN ('link_sent', 'link_copied')) shared_at,
+    (SELECT min(v.started_at) FROM link_client_visits v WHERE v.order_id = o.id) first_open,
+    (SELECT COALESCE(sum(v.live_seconds), 0) FROM link_client_visits v WHERE v.order_id = o.id) live
+  FROM orders o WHERE o.deleted_at IS NULL AND ${range} AND ${tenant}`;
+const funnelCols = `count(*)::int links, count(shared_at)::int shared, count(first_open)::int links_opened,
+  count(*) FILTER (WHERE shared_at IS NOT NULL AND first_open IS NOT NULL)::int shared_opened,
+  count(*) FILTER (WHERE live > 0)::int live_orders,
+  count(*) FILTER (WHERE first_open IS NOT NULL AND (completed_at IS NULL OR first_open < completed_at))::int opened_during,
+  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY GREATEST(0, extract(epoch FROM first_open - shared_at)))
+    FILTER (WHERE shared_at IS NOT NULL AND first_open IS NOT NULL))::int median_open_seconds`;
 function withDerived(r) {
-  return { ...r, open_rate: r.links ? Math.round(r.links_opened * 100 / r.links) : null, avg_visible_seconds: r.opens ? Math.round(r.visible_seconds / r.opens) : 0 };
+  const rate = (a, b) => b ? Math.round(a * 100 / b) : null;
+  return { ...r, open_rate: rate(r.links_opened, r.links), share_rate: rate(r.shared, r.links), shared_open_rate: rate(r.shared_opened, r.shared),
+    avg_visible_seconds: r.opens ? Math.round(r.visible_seconds / r.opens) : 0 };
+}
+
+// Um pedido por linha (relatório do dia e CSV): quando o link saiu, quando o cliente abriu, quanto tempo ficou.
+export async function orderRows(q, { from, to, tenantId = null }) {
+  const r = await q(`SELECT o.id, t.name store, o.order_number, o.external_reference, o.status, o.created_at, o.completed_at,
+      split_part(trim(c.name), ' ', 1) customer, COALESCE(NULLIF(o.details->>'pet_name', ''), NULLIF(trim(concat_ws(' ', o.details->>'brand', o.details->>'model')), '')) item, NULLIF(o.details->>'service', '') service,
+      o.process_snapshot->>'name' process,
+      (SELECT min(e.created_at) FROM link_events e WHERE e.order_id = o.id AND e.kind IN ('link_sent', 'link_copied')) shared_at,
+      (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_sent')::int sent,
+      (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_copied')::int copied,
+      (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'video_download')::int downloads,
+      (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'talk_store')::int talks,
+      (SELECT min(v.started_at) FROM link_client_visits v WHERE v.order_id = o.id) first_open,
+      (SELECT max(v.last_seen_at) FROM link_client_visits v WHERE v.order_id = o.id) last_seen,
+      (SELECT count(*) FROM link_client_visits v WHERE v.order_id = o.id)::int opens,
+      (SELECT count(DISTINCT v.visitor_id) FROM link_client_visits v WHERE v.order_id = o.id)::int people,
+      (SELECT COALESCE(sum(v.visible_seconds), 0) FROM link_client_visits v WHERE v.order_id = o.id)::int visible_seconds,
+      (SELECT COALESCE(sum(v.live_seconds), 0) FROM link_client_visits v WHERE v.order_id = o.id)::int live_seconds,
+      (SELECT count(*) FROM link_visits v WHERE v.order_id = o.id)::int - (SELECT count(*) FROM link_client_visits v WHERE v.order_id = o.id)::int staff_opens
+    FROM orders o JOIN tenants t ON t.id = o.tenant_id LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.deleted_at IS NULL AND o.created_at >= ($1::date::timestamp AT TIME ZONE $3) AND o.created_at < ($2::date::timestamp AT TIME ZONE $3)
+      AND ($4::uuid IS NULL OR o.tenant_id = $4::uuid)
+    ORDER BY o.created_at DESC LIMIT 2000`, [from, to, TZ, tenantId]);
+  return r.rows;
 }
 
 // Período do relatório de resultados que vence em `day` (data local): diário = ontem; semanal = 7 dias até ontem.
@@ -96,7 +144,7 @@ const dueOn = (t, day) => t.results_report === 'daily' || (t.results_report === 
 export function fillTemplate(template, store, period) {
   // Valor null = sem dado no período (ex.: taxa sem pedidos novos): a linha inteira sai da mensagem.
   const v = {
-    loja: store.name || '', periodo: period.title, links: store.links, enviados: store.sent, aberturas: store.opens, pessoas: store.people,
+    loja: store.name || '', periodo: period.title, links: store.links, enviados: store.shared, aberturas: store.opens, pessoas: store.people,
     taxa: store.links ? pct(store.links_opened, store.links) : null, retornos: store.returns, tempo_medio: duration(store.avg_visible_seconds),
     horas_video: duration(store.live_seconds), downloads: store.downloads, conversas: store.talks, concluidos: store.completed
   };
@@ -124,7 +172,8 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
     visit: z.string().regex(uuidRe), visitor: z.string().regex(uuidRe),
     visible: z.number().int().min(0).max(86400), live: z.number().int().min(0).max(86400),
     device: z.enum(['mobile', 'tablet', 'desktop', 'other']).default('other'),
-    source: z.enum(['whatsapp', 'qrcode', 'direct', 'other']).default('direct')
+    source: z.enum(['whatsapp', 'qrcode', 'direct', 'other']).default('direct'),
+    staff: z.boolean().default(false)
   });
   const visitLimit = rateLimit({ windowMs: 60000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false });
   app.post('/api/public/orders/:token/visit', visitLimit, route(async (req, res) => {
@@ -132,14 +181,15 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
     if (!/^[\w-]{16,100}$/.test(token)) return bad(res, 404, 'Não encontrado');
     const v = valid(visitSchema, req, res); if (!v) return;
     // Tempos acumulados: só aumentam e nunca passam do tempo real desde a abertura (+1 min de folga).
-    await q(`INSERT INTO link_visits(id, tenant_id, order_id, visitor_id, visible_seconds, live_seconds, device, source)
-      SELECT $3, o.tenant_id, o.id, $4, LEAST($5, 60), LEAST($6, 60), $7, $8 FROM orders o WHERE ${byToken}
-      ON CONFLICT (id) DO UPDATE SET last_seen_at = now(),
+    // staff: navegador onde a equipe já entrou no painel (aberturas da loja não contam como cliente).
+    await q(`INSERT INTO link_visits(id, tenant_id, order_id, visitor_id, visible_seconds, live_seconds, device, source, staff)
+      SELECT $3, o.tenant_id, o.id, $4, LEAST($5, 60), LEAST($6, 60), $7, $8, $9 FROM orders o WHERE ${byToken}
+      ON CONFLICT (id) DO UPDATE SET last_seen_at = now(), staff = link_visits.staff OR EXCLUDED.staff,
         visible_seconds = GREATEST(link_visits.visible_seconds, LEAST($5, extract(epoch FROM now() - link_visits.started_at)::int + 60)),
         live_seconds = GREATEST(link_visits.live_seconds, LEAST($6, extract(epoch FROM now() - link_visits.started_at)::int + 60))
       WHERE link_visits.order_id = EXCLUDED.order_id AND link_visits.visitor_id = EXCLUDED.visitor_id
         AND link_visits.last_seen_at > now() - interval '12 hours'`,
-      [digestToken(token), token, v.visit, v.visitor, v.visible, v.live, v.device, v.source]);
+      [digestToken(token), token, v.visit, v.visitor, v.visible, v.live, v.device, v.source, v.staff]);
     res.status(204).end();
   }));
 
@@ -176,30 +226,31 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
     res.set('Cache-Control', 'no-store').json({ ...(await linkStats(q, { ...range, tenantId })), public_stats_enabled: !!settings.rows[0]?.public_stats_enabled });
   }));
 
+  // Relatório por pedido (página Relatórios): números do período + uma linha por pedido.
+  app.get('/api/master/analytics/orders', auth, roles('master'), route(async (req, res) => {
+    const range = parseRange(req.query, 1); if (!range) return bad(res, 400, 'Período inválido (até 400 dias)');
+    const tenantId = uuidRe.test(req.query.tenant || '') ? req.query.tenant : null;
+    const [stats, orders] = await Promise.all([linkStats(q, { ...range, tenantId }), orderRows(q, { ...range, tenantId })]);
+    res.set('Cache-Control', 'no-store').json({ ...stats, orders });
+  }));
+
   app.get('/api/master/analytics.csv', auth, roles('master'), route(async (req, res) => {
     const range = parseRange(req.query); if (!range) return bad(res, 400, 'Período inválido (até 400 dias)');
     const group = ['store', 'day', 'order'].includes(req.query.group) ? req.query.group : 'store';
+    const tenantId = uuidRe.test(req.query.tenant || '') ? req.query.tenant : null;
     let rows;
     if (group === 'store') {
-      const s = await linkStats(q, range);
-      rows = [['Loja', 'Pedidos com link', 'Links enviados (WhatsApp)', 'Links copiados', 'Pedidos com link aberto', 'Taxa de abertura (%)', 'Aberturas', 'Pessoas (aparelhos)', 'Retornos', 'Tempo na página (s)', 'Tempo médio por abertura (s)', 'Vídeo ao vivo assistido (s)', 'Downloads de vídeo', 'Conversas com a loja', 'Recompensas pedidas', 'Pedidos concluídos']]
-        .concat(s.stores.map(r => [r.name, r.links, r.sent, r.copied, r.links_opened, r.open_rate ?? '', r.opens, r.people, r.returns, r.visible_seconds, r.avg_visible_seconds, r.live_seconds, r.downloads, r.talks, r.claims, r.completed]));
+      const s = await linkStats(q, { ...range, tenantId });
+      rows = [['Loja', 'Pedidos criados', 'Com link enviado ou copiado', 'Envios WhatsApp', 'Cópias do link', 'Abertos pelo cliente', 'Taxa de abertura (%)', 'Abertos entre os enviados (%)', 'Tempo mediano até abrir (s)', 'Viram ao vivo', 'Aberturas', 'Pessoas (aparelhos)', 'Retornos', 'Tempo na página (s)', 'Tempo médio por abertura (s)', 'Vídeo ao vivo assistido (s)', 'Downloads de vídeo', 'Conversas com a loja', 'Recompensas pedidas', 'Pedidos concluídos', 'Aberturas da equipe (fora da conta)']]
+        .concat(s.stores.map(r => [r.name, r.links, r.shared, r.sent, r.copied, r.links_opened, r.open_rate ?? '', r.shared_open_rate ?? '', r.median_open_seconds ?? '', r.live_orders, r.opens, r.people, r.returns, r.visible_seconds, r.avg_visible_seconds, r.live_seconds, r.downloads, r.talks, r.claims, r.completed, r.staff_opens]));
     } else if (group === 'day') {
-      const s = await linkStats(q, range);
-      rows = [['Dia', 'Pedidos com link', 'Aberturas', 'Vídeo ao vivo assistido (s)']].concat(s.days.map(d => [d.day, d.links, d.opens, d.live_seconds]));
+      const s = await linkStats(q, { ...range, tenantId });
+      rows = [['Dia', 'Pedidos criados', 'Pedidos com link enviado', 'Aberturas de clientes', 'Vídeo ao vivo assistido (s)']].concat(s.days.map(d => [d.day, d.links, d.shared, d.opens, d.live_seconds]));
     } else {
-      const r = await q(`SELECT t.name store, o.order_number, o.external_reference, to_char(o.created_at AT TIME ZONE $3, 'YYYY-MM-DD HH24:MI') created, o.status,
-          (SELECT count(*) FROM link_visits v WHERE v.order_id = o.id)::int opens,
-          (SELECT count(DISTINCT visitor_id) FROM link_visits v WHERE v.order_id = o.id)::int people,
-          (SELECT COALESCE(sum(visible_seconds), 0) FROM link_visits v WHERE v.order_id = o.id)::int visible,
-          (SELECT COALESCE(sum(live_seconds), 0) FROM link_visits v WHERE v.order_id = o.id)::int live,
-          (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_sent')::int sent,
-          (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'video_download')::int downloads
-        FROM orders o JOIN tenants t ON t.id = o.tenant_id
-        WHERE o.deleted_at IS NULL AND o.created_at >= ($1::date::timestamp AT TIME ZONE $3) AND o.created_at < ($2::date::timestamp AT TIME ZONE $3)
-        ORDER BY o.created_at`, [range.from, range.to, TZ]);
-      rows = [['Loja', 'Pedido nº', 'Referência', 'Criado em', 'Situação', 'Aberturas', 'Pessoas', 'Tempo na página (s)', 'Vídeo ao vivo (s)', 'Envios pelo WhatsApp', 'Downloads']]
-        .concat(r.rows.map(x => [x.store, x.order_number, x.external_reference, x.created, x.status, x.opens, x.people, x.visible, x.live, x.sent, x.downloads]));
+      const at = d => d ? new Date(d).toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16) : '';
+      const r = (await orderRows(q, { ...range, tenantId })).reverse();
+      rows = [['Loja', 'Pedido nº', 'Referência', 'Cliente', 'Pet/item', 'Criado em', 'Concluído em', 'Situação', 'Link enviado em', 'Envios WhatsApp', 'Cópias', '1ª abertura do cliente', 'Aberturas', 'Pessoas', 'Tempo na página (s)', 'Vídeo ao vivo (s)', 'Downloads', 'Conversas', 'Aberturas da equipe']]
+        .concat(r.map(x => [x.store, x.order_number, x.external_reference, x.customer, x.item, at(x.created_at), at(x.completed_at), x.status, at(x.shared_at), x.sent, x.copied, at(x.first_open), x.opens, x.people, x.visible_seconds, x.live_seconds, x.downloads, x.talks, x.staff_opens]));
     }
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="ficoupronto-${group}-${range.from}-a-${addDays(range.to, -1)}.csv"`, 'Cache-Control': 'no-store' });
     res.send(csv(rows));
@@ -221,8 +272,8 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
     if (!enabled) return bad(res, 404, 'Não disponível');
     if (Date.now() - publicCache.at > 10 * 60000) {
       const r = await q(`SELECT (SELECT count(*) FROM orders WHERE deleted_at IS NULL)::int links,
-        (SELECT count(*) FROM link_visits)::int opens, (SELECT count(DISTINCT visitor_id) FROM link_visits)::int people,
-        (SELECT COALESCE(sum(live_seconds), 0) FROM link_visits)::bigint live_seconds,
+        (SELECT count(*) FROM link_client_visits)::int opens, (SELECT count(DISTINCT visitor_id) FROM link_client_visits)::int people,
+        (SELECT COALESCE(sum(live_seconds), 0) FROM link_client_visits)::bigint live_seconds,
         (SELECT count(*) FROM tenants WHERE status IN ('trial', 'active'))::int stores`);
       const x = r.rows[0];
       publicCache = { at: Date.now(), data: { links: x.links, opens: x.opens, people: x.people, live_hours: Math.round(Number(x.live_seconds) / 360) / 10, stores: x.stores, updated_at: new Date().toISOString() } };

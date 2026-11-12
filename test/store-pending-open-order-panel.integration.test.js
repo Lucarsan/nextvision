@@ -25,7 +25,7 @@ test('a receber: abrir pedido depois e iniciar pela visão geral', {
       { service: 'Banho de cheiro', unit_price_cents: 4300, device_model: 'MARVIM' }, { service: 'Banho de cheiro', unit_price_cents: 4300, device_model: 'MEG' }] } }, 201);
 
     await page.goto(f.base + '/loja.html');
-    await page.waitForFunction(() => /Nenhum pedido|pedidos/.test(document.querySelector('#ordersList')?.innerText || ''));
+    await page.waitForFunction(() => /Nenhum pedido/.test(document.querySelector('#ordersList')?.innerText || ''));
     assert.doesNotMatch(await page.locator('#ordersList').innerText(), /Carregando/);
     await page.locator('.nv-sidebar [data-view="cash"]').click();
     await page.locator('#fsOpen [name="opening"]').fill('0');

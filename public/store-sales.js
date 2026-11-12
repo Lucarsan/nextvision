@@ -199,7 +199,7 @@
           <div class="nv-field">Cliente<div id="fsCustomerBox"></div></div>
           <div id="fsOrderBox"></div>
           <div id="fsCbBox" aria-live="polite"></div>
-          <div class="fs-mode" role="group" aria-label="O que está sendo vendido"><button type="button" data-fs-mode="product">${FPIcon('cart')}Produto</button><button type="button" data-fs-mode="service">${FPIcon('wrench')}Serviço</button></div>
+          <div class="fs-mode" role="group" aria-label="O que está sendo vendido">${(b => isPet() ? b.reverse().join('') : b.join(''))([`<button type="button" data-fs-mode="product">${FPIcon('cart')}Produto</button>`, `<button type="button" data-fs-mode="service">${FPIcon('wrench')}Serviço</button>`])}</div>
           <div class="fs-scan" data-only="product"><label class="nv-field">Produtos <small class="nv-help">bipe o código com o leitor (não precisa clicar aqui) ou busque pelo nome</small>
             <input id="fsScan" placeholder="Código de barras ou nome do produto" aria-label="Código de barras ou nome do produto" enterkeyhint="go"></label>
             <div id="fsScanResults" class="fs-results"></div><div id="fsCart" aria-live="polite"></div></div>
@@ -231,8 +231,8 @@
     };
     sf.addEventListener('input', updChange); sf.addEventListener('change', updChange);
     sf.addEventListener('change', e => { if (e.target.name === 'method' && e.target.value === 'split') $('fsSplit').querySelector('[data-split-v]')?.focus(); });
-    setupScanInput(); drawCart(); drawService(); setMode(saleMode); updChange(); setupEye(box);
-    box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => setMode(b.dataset.fsMode, true));
+    setupScanInput(); drawCart(); drawService(); if (!modeTouched) saleMode = defaultMode(); setMode(saleMode); updChange(); setupEye(box);
+    box.querySelectorAll('[data-fs-mode]').forEach(b => b.onclick = () => { modeTouched = true; setMode(b.dataset.fsMode, true); });
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive, !!addTo); // incluindo: Enter não registra venda paga
     $('fsLaterBtn').onclick = () => submitSale({ preventDefault() {}, currentTarget: $('fsSale') }, box, alive, true);
@@ -552,13 +552,13 @@
         cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller;
         lastSale = { pending: p, live_order: p.live_order, customer: { id: p.customer_id, name: p.customer_name, phone: p.customer_phone } };
         feedback(`Venda guardada em "A receber" (#${p.number}): ${brl(p.total_cents)}.` + (p.live_order ? ` Pedido ${p.live_order.order_number} aberto.` : ''));
-        if (p.live_order) window.FPOrders?.refresh();
+        if (p.live_order) window.FPOrders?.refresh(); modeTouched = false;
         await loadCash(box, alive);
       } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
       return;
     }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+    try { lastSale = await api('/store/sales', 'POST', body); modeTouched = false; if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -673,7 +673,7 @@
     btn.disabled = true;
     try {
       const r = await api(`/store/sales/pending/${addTo.id}/add-items`, 'POST', { items, ...(body.items && body.description ? { description: body.description } : {}) });
-      cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; addTo = null; lastSale = null;
+      cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; addTo = null; lastSale = null; modeTouched = false;
       feedback(`${items.length > 1 ? `${items.length} itens incluídos` : 'Item incluído'} na venda a receber #${r.number}. Total agora: ${brl(r.total_cents)}.`);
       await loadCash(box, alive);
     } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -740,6 +740,8 @@
   // aparelho, fornecedor e custo, e a venda baixa uma unidade dela.
   // Produtos e serviços somam na MESMA venda: o botão Produto/Serviço só troca o painel de lançamento.
   // svcCart = serviços já postos na venda; o serviço em edição (svc) entra junto ao registrar, se estiver completo.
+  // Pet shop começa em Serviço (a atendente lançava banho como produto); a escolha vale até registrar a venda.
+  let modeTouched = false; const defaultMode = () => isPet() ? 'service' : 'product';
   let saleMode = 'product', svc = {}, servicesCache = null, serviceItems = null, svcCart = [];
   // Pet shop: pet do atendimento (da ficha do cliente) e preço pelas variáveis do serviço cadastrado.
   // Preço = base + (valor da raça, se a raça do pet estiver na lista; senão acréscimo do porte) + acréscimo da pelagem.
@@ -845,7 +847,7 @@
     if (focusAt != null) { const n = box.querySelector(`[data-fs-svc-price="${focusAt}"]`); if (n) { n.focus(); try { n.setSelectionRange(caret, caret); } catch {} } }
     box.querySelectorAll('[data-fs-svc-del]').forEach(b => b.onclick = () => { svcCart.splice(Number(b.dataset.fsSvcDel), 1); drawServiceChips(); $('fsSale')?.dispatchEvent(new Event('input')); });
     box.querySelectorAll('[data-fs-svc-price]').forEach(inp => inp.oninput = e => { e.stopPropagation(); const x = svcCart[Number(inp.dataset.fsSvcPrice)]; if (!x) return; x.price = inp.value; x.autoPrice = false; x.calc = ''; $('fsSale')?.dispatchEvent(new Event('input')); });
-    box.querySelectorAll('[data-fs-mode-go]').forEach(b => b.onclick = () => setMode(b.dataset.fsModeGo, true));
+    box.querySelectorAll('[data-fs-mode-go]').forEach(b => b.onclick = () => { modeTouched = true; setMode(b.dataset.fsModeGo, true); });
   }
   function setMode(mode, focus) {
     saleMode = mode === 'service' ? 'service' : 'product';

@@ -625,9 +625,10 @@
     card.innerHTML = `<div class="nv-heading"><h2>A receber <span class="nv-pill">${rows.length}</span></h2><b>${brl(sum)}</b></div>
       <div class="nv-list">${rows.map(p => `<div class="fs-sale fs-pend" data-pend="${p.id}"><div><b>#${p.number}</b> · ${custLink(p.customer_id, esc(p.customer_name))}${p.pet_name ? ' · ' + FPIcon('paw') + esc(p.pet_name) : ''}
         <br><span class="fs-pend-items">${(p.payload?.items || []).length > 1 ? p.payload.items.map((it, n) => `<span class="fs-pend-item">${esc(it.service || it.name || 'Produto')}${it.unit_price_cents != null ? ' ' + brl(it.unit_price_cents * (it.quantity || 1)) : ''}<button type="button" class="fs-full-only" data-pend-rm="${p.id}" data-pend-rm-i="${n}" aria-label="Tirar ${esc(it.service || it.name || 'item')} desta venda" title="Tirar este item">${FPIcon('x')}</button></span>`).join('') : `<small>${esc(pendingItems(p))}</small>`}</span><br><small>${ago(p.created_at)}${p.seller_name ? ' · ' + esc(p.seller_name) : ''}${p.order_number ? ` · pedido ${esc(p.order_number)} <span class="fs-tag${p.order_status === 'completed' ? ' fs-tag-ok' : ''}">${ORDER_STATUS[p.order_status] || ''}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button><button type="button" class="nv-button secondary fs-small" data-pend-add="${p.id}" title="Incluir serviços ou produtos nesta venda">+ Incluir</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
+        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button>${p.order_id ? '' : `<button type="button" class="nv-button secondary fs-small" data-pend-open="${p.id}" title="Abrir o pedido para iniciar o serviço (um por pet)">${FPIcon('camera') || ''} Abrir pedido</button>`}<button type="button" class="nv-button secondary fs-small" data-pend-add="${p.id}" title="Incluir serviços ou produtos nesta venda">+ Incluir</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
     card.querySelectorAll('[data-pend-pay]').forEach(b => b.onclick = () => payPending(rows.find(x => x.id === b.dataset.pendPay), box, alive));
     card.querySelectorAll('[data-pend-add]').forEach(b => b.onclick = () => startAdd(rows.find(x => x.id === b.dataset.pendAdd)));
+    card.querySelectorAll('[data-pend-open]').forEach(b => b.onclick = () => openPendingOrder(rows.find(x => x.id === b.dataset.pendOpen), b, box, alive));
     card.querySelectorAll('[data-pend-rm]').forEach(b => b.onclick = async () => {
       const p = rows.find(x => x.id === b.dataset.pendRm), it = p.payload.items[Number(b.dataset.pendRmI)];
       if (!confirm(`Tirar "${it.service || it.name || 'item'}" da venda a receber #${p.number} (${p.customer_name})?`)) return;
@@ -676,6 +677,19 @@
       feedback(`${items.length > 1 ? `${items.length} itens incluídos` : 'Item incluído'} na venda a receber #${r.number}. Total agora: ${brl(r.total_cents)}.`);
       await loadCash(box, alive);
     } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
+  }
+  // Venda guardada sem pedido: abre o(s) pedido(s) para a equipe iniciar o serviço (um por pet).
+  async function openPendingOrder(p, btn, box, alive) {
+    if (!processesCache) { try { processesCache = await api('/processes'); } catch { processesCache = []; } }
+    if (!processesCache.length) { feedback('Cadastre um processo de atendimento antes de abrir o pedido.', true); return; }
+    let proc = ''; try { proc = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}').proc || ''; } catch { /* sem preferência */ }
+    if (!processesCache.some(x => x.id === proc)) proc = processesCache[0].id;
+    btn.disabled = true;
+    try {
+      const r = await api(`/store/sales/pending/${p.id}/open-order`, 'POST', { process_id: proc });
+      feedback(r.orders.length > 1 ? `Pedidos ${r.orders.map(o => o.order_number + (o.pet_name ? ' (' + o.pet_name + ')' : '')).join(' e ')} abertos. Inicie pela lista de pedidos.` : `Pedido ${r.orders[0].order_number} aberto. Inicie pela lista de pedidos.`);
+      window.FPOrders?.refresh(); drawPending(box, alive);
+    } catch (err) { feedback(err.message, true); } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function payPending(p, box, alive) {
     const bal = cbOn() ? p.cashback?.balance_cents || 0 : 0, can = bal ? cbAllowed(p.total_cents, bal) : 0;

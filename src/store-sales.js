@@ -866,6 +866,40 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!merged.success) return bad(res, 400, 'Dados da venda inválidos');
     return createSale(req, res, merged.data, req.params.id);
   }));
+  // Abrir o pedido (acompanhamento) de uma venda que ficou em "A receber" sem pedido: um pedido por pet.
+  // O primeiro fica ligado à venda (ao receber, a venda aponta para ele); os outros ficam como pedidos do mesmo tutor.
+  app.post('/api/store/sales/pending/:id/open-order', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const v = valid(z.object({ process_id: uuid }).strict(), req, res); if (!v) return;
+    const c = await db.connect(); const created = [];
+    try {
+      await c.query('BEGIN');
+      const p = (await c.query('SELECT id,number,customer_id,payload,order_id FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [req.params.id, tid(req)])).rows[0];
+      if (!p) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.'); }
+      if (p.order_id) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já tem pedido aberto. Atualize a lista.'); }
+      const pet = (await c.query('SELECT niche FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.niche === 'pet';
+      const items = (p.payload?.items || []).filter(it => it.service || it.name);
+      const groups = new Map();
+      for (const it of items) { const who = String(it.device_model || '').trim(), key = who.toLocaleLowerCase('pt-BR'); if (!groups.has(key)) groups.set(key, { who, names: [] }); groups.get(key).names.push(String(it.service || it.name).trim()); }
+      if (!groups.size) groups.set('', { who: '', names: [p.payload?.description || p.description || ''].filter(Boolean) });
+      const pets = pet ? (await c.query('SELECT name,species,breed,size FROM customer_pets WHERE tenant_id=$1 AND customer_id=$2 AND deleted_at IS NULL', [tid(req), p.customer_id])).rows : [];
+      for (const g of groups.values()) {
+        const service = g.names.join(' + ').slice(0, 300);
+        let details;
+        if (pet) { const f = pets.find(x => x.name.trim().toLocaleLowerCase('pt-BR') === g.who.toLocaleLowerCase('pt-BR')) || {}; details = { item_type: 'pet', pet_name: g.who.slice(0, 80), species: f.species || '', breed: f.breed || '', size: f.size || '', service }; }
+        else details = { model: g.who.slice(0, 120), service };
+        const d = orderDetails ? orderDetails.safeParse(details) : { success: true, data: details };
+        const o = await createLiveOrder(c, tid(req), p.customer_id, v.process_id, d.success ? d.data : details);
+        if (!o) { await c.query('ROLLBACK'); return bad(res, 400, 'Processo do pedido inválido. Atualize a página.'); }
+        await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'create', 'order', o.id]);
+        created.push({ ...o, pet_name: pet ? g.who : '', details });
+      }
+      await c.query(`UPDATE pending_sales SET order_id=$1::uuid, payload=payload||jsonb_build_object('order_id',$1::text) WHERE id=$2`, [created[0].id, p.id]);
+      await c.query('COMMIT');
+      if (pet) for (const o of created) if (o.pet_name) await savePetFromOrder?.(q, tid(req), p.customer_id, o.details).catch(e => console.error('Ficha do pet não salva:', e.code || e.message));
+      res.status(201).json({ number: p.number, orders: created.map(({ details, ...o }) => o) });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
   // Tirar um item da venda a receber (ex.: a cliente desistiu da tosa higiênica). Se era o último, cancela-se a venda.
   app.post('/api/store/sales/pending/:id/remove-item', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');

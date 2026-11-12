@@ -228,6 +228,7 @@ function renderOrderList(container, orders) {
   if (!container) return;
   const existing = new Map([...container.querySelectorAll(':scope > [data-order-id]')].map(node => [node.dataset.orderId, node]));
   container.querySelector(':scope > .nv-empty')?.remove();
+  for (const n of [...container.childNodes]) if (n.nodeType === Node.TEXT_NODE) n.remove(); // tira o "Carregando pedidos…" inicial
   for (const [index, order] of orders.entries()) {
     let node = existing.get(order.id); existing.delete(order.id);
     if (!node) { node = document.createElement('article'); node.className = 'nv-order-card'; node.dataset.orderId = order.id; }

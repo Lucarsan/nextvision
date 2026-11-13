@@ -92,18 +92,18 @@
   const waLink = (phone, text) => 'https://wa.me/' + waPhone(phone) + '?text=' + encodeURIComponent(text);
 
   // promoDow: dia da semana da compra que não somou ponto por ser dia de promoção (ex.: quarta), ou null.
-  function loyaltyText(l, promoDow = null) {
+  function loyaltyText(l, promoDow = null, notCounted = false) {
     if (!l || !l.enabled) return '';
     const u = config.loyalty_unit || { one: 'compra', many: 'compras' };
     const rules = config.loyalty_rules ? '\nRegras: ' + config.loyalty_rules : '';
     if (l.complete) return `Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
     const card = `${l.checkins} de ${l.target} ${l.target === 1 ? u.one : u.many}. ${l.remaining === 1 ? 'Falta 1 ' + u.one : 'Faltam ' + l.remaining + ' ' + u.many} para ganhar ${l.reward}.`;
     // Dia de promoção: sem cartão (o cliente não precisa saber que segue em 0 de 10); só convite para voltar.
-    if (promoDow != null) {
-      const day = WEEKDAYS[promoDow] + (promoDow === 0 || promoDow === 6 ? '' : '-feira');
+    if (promoDow != null || notCounted) {
+      const day = promoDow == null ? '' : ` na promoção de ${WEEKDAYS[promoDow] + (promoDow === 0 || promoDow === 6 ? '' : '-feira')}`;
       return window.__fpNiche === 'pet'
-        ? `Foi um prazer cuidar do seu pet na promoção de ${day}. Esperamos vocês de volta em breve!`
-        : `Foi um prazer atender você na promoção de ${day}. Esperamos você de volta em breve!`;
+        ? `Foi um prazer cuidar do seu pet${day}. Esperamos vocês de volta em breve!`
+        : `Foi um prazer atender você${day}. Esperamos você de volta em breve!`;
     }
     return `Cartão fidelidade: ${card}` + rules;
   }
@@ -151,7 +151,7 @@
   }
   const statusTemplate = () => { const t = config.status_message || DEFAULT_STATUS; return t.includes('{cashback}') ? t : t.includes('{fidelidade}') ? t.replace('{fidelidade}', '{fidelidade}\n\n{cashback}') : t + '\n\n{cashback}'; };
   const statusMessage = c => render(statusTemplate(), {
-    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty, c.loyalty_promo_dow), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
+    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty, c.loyalty_promo_dow, c.loyalty_not_counted), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
     compras: c.loyalty?.checkins ?? '', meta: c.loyalty?.target ?? '', faltam: c.loyalty?.remaining ?? '', premio: c.loyalty?.reward ?? '', regras: config.loyalty_rules || ''
   });
   const offerMessage = (c, text) => `Olá, ${greetName(c.name) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;

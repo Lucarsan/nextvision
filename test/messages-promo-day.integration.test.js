@@ -25,6 +25,10 @@ test('mensagens: dia de promoção agradece sem falar do cartão e o cartão usa
     const buy = name => api('/store/sales', { method: 'POST', body: { new_customer: { name, phone: '8599999' + String(Math.floor(Math.random() * 1e4)).padStart(4, '0') }, payment_method: 'pix', items: [{ service: 'BANHO P', unit_price_cents: 4000, catalog_id: banhoP.id }] } }, 201);
     const normal = await buy('Bruna Normal');
     assert.equal(normal.loyalty_counted, true);
+    // Compra que não somou ponto num dia comum (ex.: antes da fidelidade começar, ou sem serviço que conta).
+    const semPonto = await api('/store/sales', { method: 'POST', body: { new_customer: { name: 'Carla Sem Ponto', phone: '85988887777' }, payment_method: 'pix', total_cents: 3000 } }, 201);
+    assert.equal(semPonto.loyalty_counted, false);
+    await f.db.query(`UPDATE sales SET created_at=now()-interval '1 day' WHERE id=$1`, [semPonto.sale.id]); // ontem: não é dia de promoção
     // Hoje vira dia de promoção: o banho de agora não soma.
     const today = todayDow();
     await api('/store/loyalty', { method: 'PATCH', body: { ...base, loyalty_off_weekdays: [today] } });
@@ -36,7 +40,9 @@ test('mensagens: dia de promoção agradece sem falar do cartão e o cartão usa
     const st = await api('/store/messages/status');
     const row = n => st.customers.find(c => c.name === n);
     assert.equal(row('Alexsandra Promo').loyalty_promo_dow, today);
-    assert.equal(row('Bruna Normal').loyalty_promo_dow, null);
+    assert.equal(row('Bruna Normal').loyalty_promo_dow, null); assert.equal(row('Bruna Normal').loyalty_not_counted, false);
+    assert.equal(row('Alexsandra Promo').loyalty_not_counted, true); const carla = st.pending.find(c => c.name === 'Carla Sem Ponto');
+    assert.equal(carla.loyalty_not_counted, true); assert.equal(carla.loyalty_promo_dow, null);
 
     if (process.env.BROWSER_EXECUTABLE) {
       const require = createRequire(import.meta.url);
@@ -53,9 +59,12 @@ test('mensagens: dia de promoção agradece sem falar do cartão e o cartão usa
       assert.match(promoText, new RegExp(`Foi um prazer cuidar do seu pet na promoção de ${DAY[today]}\\. Esperamos vocês de volta em breve!`));
       assert.match(promoText, /avaliar no Google\? Leva 1 minutinho: https:\/\/g\.page\/r\/teste/);
       assert.doesNotMatch(promoText, /cartão|fidelidade|Regras:|de 10/i);
+      const semPontoText = await msg(semPonto.customer.id);
+      assert.match(semPontoText, /Foi um prazer cuidar do seu pet\. Esperamos vocês de volta em breve!/);
+      assert.doesNotMatch(semPontoText, /cartão|fidelidade|Regras:|de 10|promoção/i);
       const normalText = await msg(normal.customer.id);
       assert.match(normalText, /Cartão fidelidade: 1 de 10 banhos\. Faltam 9 banhos para ganhar 1 \(uma\) hidratação grátis\./);
-      assert.match(await page.locator('.fs-daybar').first().textContent(), /0 de 2 enviados/);
+      assert.match(await page.locator('.fs-daybar').first().textContent(), /0 de 3 enviados/);
       if (process.env.SHOT_DIR) { await page.locator(`[data-fs-row="${promo.customer.id}"] summary`).click(); await page.screenshot({ path: process.env.SHOT_DIR + '/mensagem-promocao.png' }); }
       assert.deepEqual(errors, []);
     }

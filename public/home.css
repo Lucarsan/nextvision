@@ -124,3 +124,14 @@ a{color:#1E3A5F}a:hover{color:#0F2440}
 .pt-links{display:flex;flex-wrap:wrap;gap:6px 20px}
 /* Mapa em tons de cinza: só os marcadores têm cor */
 .pt-map .leaflet-tile-pane{filter:grayscale(1) contrast(.92) brightness(1.04)}
+
+/* O que é o Ficou Pronto?: índice e uma faixa por área, com as funcionalidades em duas colunas */
+.st-index{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.st-index a{display:inline-flex;align-items:center;min-height:40px;padding:0 14px;border:1px solid #D1D5DB;border-radius:999px;font-size:14px;font-weight:600;color:var(--ink);text-decoration:none;background:#fff}
+.st-index a:hover{border-color:var(--ink);color:var(--ink)}
+.st-area{display:grid;grid-template-columns:240px minmax(0,1fr);gap:40px;padding:40px 0;border-top:1px solid #D1D5DB;scroll-margin-top:16px}
+.st-area:last-of-type{margin-bottom:40px}
+.st-area h2{margin:0 0 6px;font-size:22px;letter-spacing:-.3px}.st-area header p{margin:0;font-size:15px;color:var(--muted);line-height:1.5}
+.st-feat{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 40px}
+.st-feat h3{margin:0 0 4px;font-size:16px}.st-feat p{margin:0;font-size:15px;line-height:1.6;color:var(--text)}
+@media(max-width:860px){.st-area{grid-template-columns:1fr;gap:18px;padding:32px 0}.st-feat{grid-template-columns:1fr;gap:20px}}

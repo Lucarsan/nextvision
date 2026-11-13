@@ -38,6 +38,11 @@ test('caixa guarda venda a receber com pedido ao vivo e recebe depois', {
     await page.screenshot(shot('a-receber-venda'));
     await page.getByRole('button', { name: /Pagar depois/ }).click();
     await page.waitForSelector('#fsPending:not([hidden]) [data-pend-pay]');
+    // O pedido ao vivo aberto junto já oferece o envio do link; fechar sem enviar.
+    await page.waitForSelector('#shareDialog[open]');
+    assert.match(await page.locator('#shareDialog').innerText(), /Enviar o acompanhamento para Afonso/);
+    await page.locator('#shareDialog [data-share-close]').click();
+    await page.waitForFunction(() => !document.querySelector('#shareDialog[open]'));
     assert.match(await page.locator('#fsLast').innerText(), /A receber" #1[\s\S]*R\$\s*50,00[\s\S]*Pedido \d+ aberto/);
     assert.match(await page.locator('#fsLast input').inputValue(), /^http/);
     assert.match(await page.locator('#fsPending').innerText(), /A receber\s*1[\s\S]*#1[\s\S]*Afonso Filho[\s\S]*Dom[\s\S]*Banho de cheiro[\s\S]*pedido \d+\s*na fila[\s\S]*R\$\s*50,00/);

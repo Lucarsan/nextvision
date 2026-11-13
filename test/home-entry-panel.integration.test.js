@@ -61,6 +61,7 @@ test('página de entrada com demonstração no celular e números ao vivo', {
       await page.goto(f.base + path);
       assert.equal(await page.locator('.st-nav a[aria-current=page]').innerText(), label, path);
       assert.ok((await page.locator('h1').innerText()).length > 10, path);
+      await page.screenshot({ ...shot('pagina' + path.replace('/', '-')), fullPage: true });
       await page.setViewportSize({ width: 390, height: 844 });
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 391), 'sem rolagem lateral em ' + path);
       await page.setViewportSize({ width: 1440, height: 1000 });

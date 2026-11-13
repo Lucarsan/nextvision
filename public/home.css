@@ -101,3 +101,6 @@ a{color:#1E3A5F}a:hover{color:#0F2440}
 .st-side div{border-top:1px solid #D1D5DB;padding-top:14px}.st-side h2{margin:0 0 4px;font-size:17px}.st-side p{margin:0;color:var(--text)}
 @media(max-width:860px){.st-steps{grid-template-columns:1fr 1fr}.st-row{grid-template-columns:1fr;gap:6px}.st-facts div{grid-template-columns:1fr;gap:4px}.en-show{padding:20px 20px 32px}}
 @media(max-width:520px){.st-steps{grid-template-columns:1fr}.st-head .en-btn{margin-left:0}}
+/* Celular reto (páginas internas): botões encostados na lateral, sem a espessura da versão inclinada */
+.st-demo .en-phone::before,.st-demo .en-phone::after{left:-3px;width:3px;border-radius:2px 0 0 2px}
+.st-cta{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;margin:8px 0 0}.st-cta span{font-size:15px;color:var(--muted)}

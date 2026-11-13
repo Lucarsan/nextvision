@@ -53,7 +53,7 @@ test('página de entrada com demonstração no celular e números ao vivo', {
     await page.screenshot(shot('home-entrada-larga'));
     // Menu da entrada leva às páginas do site (endereços sem .html), e cada página marca onde está.
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const pages = { '/como-funciona': 'Como funciona', '/segmentos': 'Segmentos', '/privacidade': 'Privacidade', '/lojas': 'Lojas', '/planos': 'Planos', '/fale-conosco': 'Contato' };
+    const pages = { '/o-que-e': 'O que é o Ficou Pronto?', '/segmentos': 'Segmentos', '/privacidade': 'Privacidade', '/lojas': 'Lojas', '/planos': 'Planos', '/fale-conosco': 'Contato' };
     assert.deepEqual(await page.locator('.en-show .st-nav a').evaluateAll(as => as.map(a => a.getAttribute('href'))), Object.keys(pages));
     await page.locator('.en-show .st-nav a', { hasText: 'Planos' }).click();
     await page.waitForURL(/\/planos$/);
@@ -67,7 +67,9 @@ test('página de entrada com demonstração no celular e números ao vivo', {
       await page.setViewportSize({ width: 1440, height: 1000 });
     }
     await page.screenshot(shot('pagina-contato'));
-    await page.goto(f.base + '/como-funciona'); await page.screenshot(shot('pagina-como-funciona'));
+    // Endereço antigo leva para a página nova.
+    await page.goto(f.base + '/como-funciona'); assert.match(page.url(), /\/o-que-e$/);
+    assert.equal(await page.locator('.st-area').count(), 8);
     await page.goto(f.base + '/');
     // Celular estreito: acesso primeiro, sem rolagem lateral.
     await page.setViewportSize({ width: 390, height: 844 });

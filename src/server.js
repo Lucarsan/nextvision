@@ -804,6 +804,7 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
  if(!r.rowCount)return res.status(404).sendFile('tracking.html',{root:'public'});
  res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
 }));
+app.get('/como-funciona',(_req,res)=>res.redirect(301,'/o-que-e'));// endereço antigo da página
 app.use(express.static('public',{extensions:['html']}));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');return bad(res,500,'Erro interno');});
 startDemoLoop();startAutoCloseLoop(Number(process.env.AUTO_CLOSE_INTERVAL_MS)||60000);

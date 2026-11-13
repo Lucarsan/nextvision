@@ -7,7 +7,7 @@
 <meta name="description" content="Ficou Pronto: o cliente acompanha pelo celular cada etapa do serviço, com vídeo ao vivo da bancada. Para assistências técnicas, oficinas, lava-jatos, pet shops e mais.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/home.css?v=5">
+<link rel="stylesheet" href="/home.css?v=6">
 </head>
 <body>
 <div class="en-split">
@@ -107,6 +107,31 @@
     } catch { }
   }
   facts(); setInterval(() => { if (!document.hidden) facts(); }, 120000);
+  // Inclinação do celular igual à da foto de referência: os 4 cantos medidos na foto (sup. esq., sup. dir.,
+  // inf. dir., inf. esq., em pixels da foto, com a borda de cima medindo 182) viram uma transformação exata.
+  const REF = [[0, 0], [182, 13], [135, 409], [-41, 390]];
+  function homography(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i], [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    for (let c = 0; c < 8; c++) { // eliminação de Gauss
+      let p = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+      [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+      for (let r = 0; r < 8; r++) if (r !== c) { const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; b[r] -= f * b[c]; }
+    }
+    const h = b.map((v, i) => v / A[i][i]);
+    return 'matrix3d(' + [h[0], h[3], 0, h[6], h[1], h[4], 0, h[7], 0, 0, 1, 0, h[2], h[5], 0, 1].join(',') + ')';
+  }
+  const phone = document.querySelector('.en-phone');
+  function tilt() {
+    phone.style.transform = 'none';
+    const w = phone.offsetWidth, h = phone.offsetHeight, k = w / 182;
+    phone.style.transform = homography([[0, 0], [w, 0], [w, h], [0, h]], REF.map(([x, y]) => [x * k, y * k * (h / w) / (409 / 182)]));
+  }
+  tilt(); addEventListener('resize', tilt);
 })();
 </script>
 </body>

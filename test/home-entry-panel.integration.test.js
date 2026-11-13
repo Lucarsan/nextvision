@@ -51,6 +51,23 @@ test('página de entrada com demonstração no celular e números ao vivo', {
     const gap = await page.evaluate(() => document.querySelector('.en-stage').getBoundingClientRect().left - document.querySelector('.en-facts').getBoundingClientRect().right);
     assert.ok(gap < 160, 'vão entre texto e celular: ' + gap);
     await page.screenshot(shot('home-entrada-larga'));
+    // Menu da entrada leva às páginas do site (endereços sem .html), e cada página marca onde está.
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const pages = { '/como-funciona': 'Como funciona', '/segmentos': 'Segmentos', '/privacidade': 'Privacidade', '/lojas': 'Lojas', '/planos': 'Planos', '/fale-conosco': 'Contato' };
+    assert.deepEqual(await page.locator('.en-show .st-nav a').evaluateAll(as => as.map(a => a.getAttribute('href'))), Object.keys(pages));
+    await page.locator('.en-show .st-nav a', { hasText: 'Planos' }).click();
+    await page.waitForURL(/\/planos$/);
+    for (const [path, label] of Object.entries(pages)) {
+      await page.goto(f.base + path);
+      assert.equal(await page.locator('.st-nav a[aria-current=page]').innerText(), label, path);
+      assert.ok((await page.locator('h1').innerText()).length > 10, path);
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 391), 'sem rolagem lateral em ' + path);
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
+    await page.screenshot(shot('pagina-contato'));
+    await page.goto(f.base + '/como-funciona'); await page.screenshot(shot('pagina-como-funciona'));
+    await page.goto(f.base + '/');
     // Celular estreito: acesso primeiro, sem rolagem lateral.
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 390 + 1), 'sem rolagem lateral no celular');

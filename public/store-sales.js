@@ -172,7 +172,9 @@
   function sendWhats(phone, text, record) {
     const w = window.open(waLink(phone, text), '_blank'); if (w) w.opener = null;
     if (typeof measureShare === 'function') measureShare(text, 'whatsapp');
-    return api('/store/messages/sent', 'POST', record);
+    const done = api('/store/messages/sent', 'POST', record);
+    if (record?.kind === 'status') done.then(() => setTimeout(refreshDue, 300), () => {});
+    return done;
   }
   async function redeem(customerId, name) {
     if (!confirm(`Entregar o prêmio do cartão fidelidade para ${name}? As compras usadas serão zeradas.`)) return null;
@@ -569,7 +571,7 @@
       return;
     }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); modeTouched = false; if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+    try { lastSale = await api('/store/sales', 'POST', body); setTimeout(refreshDue, 300); modeTouched = false; if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -2257,8 +2259,22 @@
     return configTab(tab, alive);
   }
 
+  // Aviso no botão "Mensagens": quantas mensagens do dia (com WhatsApp) e pendentes de dias anteriores faltam enviar.
+  const dueCount = data => data.customers.filter(r => !r.sent && waPhone(r.phone)).length + (data.pending || []).length;
+  function showDue(n) {
+    document.body.classList.toggle('fp-msg-due', n > 0);
+    document.body.style.setProperty('--fp-msg-due', n > 0 ? `"${n > 99 ? '99+' : n}"` : '""');
+    document.querySelectorAll('[data-view=messages]').forEach(b => b.setAttribute('aria-label', n > 0 ? `Mensagens: ${n} para enviar` : 'Mensagens'));
+  }
+  let dueBusy = false;
+  async function refreshDue() {
+    if (dueBusy || document.hidden || !config?.enabled) return; dueBusy = true;
+    try { showDue(dueCount(await api('/store/messages/status'))); } catch { /* sem rede: mantém o último número */ } finally { dueBusy = false; }
+  }
+
   async function statusTab(tab, alive) {
     const data = await api('/store/messages/status' + (statusDay ? '?day=' + statusDay : '')); if (!alive()) return;
+    if (data.day === data.today) showDue(dueCount(data));
     statusDay = data.day;
     const yesterday = (() => { const d = new Date(data.day + 'T12:00:00'); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
     const rows = data.customers, sent = rows.filter(r => r.sent).length, pend = data.pending || [];
@@ -2563,7 +2579,13 @@
   .fs-pend-items{display:inline-flex;flex-wrap:wrap;gap:4px;margin:3px 0}.fs-pend-item{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--nv-blue-soft,#f1f5f9);border-radius:999px;padding:2px 4px 2px 9px}.fs-pend-item button{border:0;background:transparent;padding:2px;cursor:pointer;color:var(--nv-muted);display:inline-flex}.fs-pend-item button:hover{color:#b42318}.fs-pend-item .fp-ic{width:13px;height:13px}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}
-  @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}`;
+  @media(max-width:520px){.fs-item{flex-wrap:wrap}.fs-item-total{min-width:0}}
+  body.fp-msg-due .nv-menu [data-view=messages],body.fp-msg-due .ft-qbtn[data-view=messages]{background:#FFF7E8;box-shadow:inset 0 0 0 1px #F3C66B;color:#8A4B08;font-weight:700;position:relative}
+  body.fp-msg-due .nv-menu [data-view=messages].active{background:#FDECC8}
+  body.fp-msg-due [data-view=messages]::after{content:var(--fp-msg-due);min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#C2410C;color:#fff;font:700 11px/20px "DM Sans",system-ui,sans-serif;text-align:center;box-sizing:border-box}
+  body.fp-msg-due .nv-menu [data-view=messages]{display:flex;align-items:center}body.fp-msg-due .nv-menu [data-view=messages]::after{margin-left:auto}
+  body.fp-msg-due .ft-qbtn[data-view=messages]::after,body.fp-msg-due .nv-phone-nav [data-view=messages]::after{position:absolute;top:-7px;right:-7px;box-shadow:0 0 0 2px #fff}
+  body.fp-msg-due .nv-phone-nav [data-view=messages]{position:relative}`;
 
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
@@ -2589,5 +2611,5 @@
     }
   };
   // Operador novato: some o que ele não pode usar (o servidor também recusa).
-  if (token) api('/store/sales/config').then(c => { config = c; document.body.classList.toggle('fs-basic', c.access_level === 'basic'); if (c.enabled) injectNav(); }).catch(() => {});
+  if (token) api('/store/sales/config').then(c => { config = c; document.body.classList.toggle('fs-basic', c.access_level === 'basic'); if (c.enabled) { injectNav(); refreshDue(); setInterval(refreshDue, 60000); document.addEventListener('visibilitychange', refreshDue); } }).catch(() => {});
 })();

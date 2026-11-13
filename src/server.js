@@ -2,6 +2,7 @@ import 'dotenv/config';
 import {storeProfiles} from './store-profile.js';
 import express from 'express';import helmet from 'helmet';import rateLimit from 'express-rate-limit';import jwt from 'jsonwebtoken';import bcrypt from 'bcryptjs';import crypto from 'node:crypto';import {z} from 'zod';import {q,db} from './db.js';import {registerStoreMedia,legacyMediaConfig,mediaConfigFor,streamPathFor} from './store-media.js';import {registerStoreSales} from './store-sales.js';import {registerLinkAnalytics} from './link-analytics.js';import {registerStoreQr} from './store-qr.js';import {registerReports} from './reports.js';import {registerPartners} from './partners.js';import {registerStoreBackup} from './store-backup.js';import {registerStoreTools} from './store-tools.js';import {edgeEnabledFor,edgeReady,edgeSourceFor,edgeDownloadFor,openEdgeToken,ensureEdgeWorker,edgeWorkerStatus} from './edge-video.js';
 import {registerLegacyImport} from './legacy-import.js';
+import {registerAgentReleases} from './agent-releases.js';
 import {startAutoCloseLoop,STORE_TZ} from './auto-close.js';
 import {registerPetRecords} from './pet-records.js';
 import {loyaltyBlock} from './loyalty-rules.js';
@@ -54,7 +55,7 @@ registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLim
 // Pedido ao vivo aberto pelo caixa (mesma gravação do /api/orders, dentro da transação da venda).
 const createLiveOrder=async(client,tenant,customerId,processId,details)=>{const token=crypto.randomBytes(12).toString('base64url');const r=await client.query("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,details) SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tenant,customerId,processId,digestToken(token),JSON.stringify(details)]);return r.rowCount?{...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token}:null};
 registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid,orderDetails,createLiveOrder,savePetFromOrder});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerPartners(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});registerPetRecords(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});
-registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});registerStoreTools(app,{q,db,auth,roles,route,bad,valid,audit});
+registerStoreBackup(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});registerAgentReleases(app,{q,auth,roles,deviceAuth,route,bad,valid,audit,uuid});registerStoreTools(app,{q,db,auth,roles,route,bad,valid,audit});
 app.post('/api/master/tenants/:id/activation-codes',auth,roles('master'),rateLimit({windowMs:60000,limit:20}),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Loja inválida');
  const store=await q("SELECT id,status FROM tenants WHERE id=$1",[req.params.id]);

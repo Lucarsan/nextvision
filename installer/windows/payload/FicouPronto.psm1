@@ -24,6 +24,11 @@ $script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
 $script:AgentVersion = '0.5.1'
 $script:DefaultApi = 'https://app.ficoupronto.com'
+# Atualizacao remota: so pacotes assinados por esta chave (a privada fica fora do repositorio e do instalador).
+$script:UpdateDir = Join-Path $script:DataDir 'atualizacoes'
+$script:UpdateStateFile = Join-Path $script:UpdateDir 'estado.json'
+$script:AgentUpdateKeyId = 'a15f3432592dba3c'
+$script:AgentUpdateKeyXml = '<RSAKeyValue><Modulus>xNV1H1mjBZI9vcoGrf+9KUPVQu6hFZj2AsFd8Qmyvycl5BXtxiWXdVqh+uVM/eGXregV1pW1JXVF7i1cR3OTJO2xyz2wxBnitbyqvq4BObKKIeUOkrVtMHVuV8BrCvfRA2cpww4MA4Vn663Hl5xzQhAl8bm1RsMerICHZTTUlzm33/0RIUM/iJXgp9dR7vaoaPZTLuz6PNNxIlTMUKqdaIMhkfEbTOwUGJNUOY1F7vx80hsgJxPWr+GtdgVRUUiUp/4Bfhu4NGtYUgo4vMUOwk7giyZISpWJNOsf9qO908fjzoTOXlJUjbAiqHKgU3O+zEVVHZHbgeQ/qEZv4CoOu8fuTRvhAbaBmaNKFHjU7dELH2ysFfEVWr+jbqhRHzOBKfCV6Dm0K7CK2NkrBxLhcleKbPpq9VTGAquCVxmnZE03gtISCzf83uRG3AbEx87zaFIomQS53lRsCsJjXjpeBOZKMHbBmn6710WnkcRg4XOwEGXSnzeHNDEJIJMFNIEl</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 $script:Services = @(
   @{ Id = 'FicouPronto.MediaMTX'; Name = 'Ficou Pronto - Video local (MediaMTX)' },
   @{ Id = 'FicouPronto.Tunel'; Name = 'Ficou Pronto - Tunel de video' },
@@ -513,5 +518,97 @@ function Test-FpHls([string]$Url, [string]$User, [string]$Password, [int]$Timeou
   } catch { return [pscustomobject]@{ Status = 0; Ok = $false } }
   finally { $client.Dispose() }
 }
+
+# ---------- Atualizacao remota do agente ----------
+# Fluxo: a central pede no sinal de vida -> o agente baixa e confere assinatura/hash ->
+# espera nao haver gravacao em andamento -> dispara o atualizador (tarefa SYSTEM separada),
+# que para o agente, troca os scripts, religa, confere e desfaz se a versao nova nao subir.
+function Get-FpSha256Hex([byte[]]$Bytes) {
+  $h = [Security.Cryptography.SHA256]::Create(); try { return (($h.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $h.Dispose() }
+}
+
+function Test-FpVersionNewer([string]$Candidate, [string]$Current) {
+  try { return ([version]$Candidate) -gt ([version]$Current) } catch { return $false }
+}
+
+# Confere o pacote e devolve o manifesto. Lanca erro em qualquer divergencia.
+function Test-FpAgentRelease($Envelope, [string]$ExpectedVersion, [string]$KeyXml = $script:AgentUpdateKeyXml) {
+  if ($null -eq $Envelope -or [int]$Envelope.format -ne 1) { throw 'pacote em formato desconhecido' }
+  $payload = [Convert]::FromBase64String([string]$Envelope.payload)
+  $sig = [Convert]::FromBase64String([string]$Envelope.signature)
+  $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+  try {
+    $rsa.PersistKeyInCsp = $false
+    $rsa.FromXmlString($KeyXml)
+    $ok = $rsa.VerifyData($payload, $sig, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+  } finally { $rsa.Dispose() }
+  if (-not $ok) { throw 'assinatura invalida' }
+  $m = [Text.Encoding]::UTF8.GetString($payload) | ConvertFrom-Json
+  if ([int]$m.format -ne 1) { throw 'manifesto em formato desconhecido' }
+  if ([string]$m.version -ne $ExpectedVersion) { throw ('versao do pacote (' + $m.version + ') diferente da pedida (' + $ExpectedVersion + ')') }
+  $files = @($m.files)
+  if ($files.Count -lt 1 -or $files.Count -gt 30) { throw 'quantidade de arquivos invalida' }
+  $names = @{}
+  foreach ($f in $files) {
+    $n = [string]$f.name
+    if ($n -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(ps1|psm1)$') { throw ('arquivo nao permitido: ' + $n) }
+    if ($names.ContainsKey($n.ToLowerInvariant())) { throw ('arquivo repetido: ' + $n) }
+    $names[$n.ToLowerInvariant()] = $true
+    $bytes = [Convert]::FromBase64String([string]$f.content)
+    if ($bytes.Length -ne [int64]$f.size) { throw ('tamanho diferente: ' + $n) }
+    if ((Get-FpSha256Hex $bytes) -ne ([string]$f.sha256).ToLowerInvariant()) { throw ('hash diferente: ' + $n) }
+  }
+  foreach ($need in @('ficoupronto-agent.ps1', 'ficoupronto-updater.ps1', 'ficoupronto-setup.ps1', 'FicouPronto.psm1', 'NextVision.Core.psm1')) {
+    if (-not $names.ContainsKey($need.ToLowerInvariant())) { throw ('pacote sem ' + $need) }
+  }
+  # A versao declarada no modulo tem de ser a do pacote (senao o atualizador nunca confirmaria).
+  $mod = @($files | Where-Object { ([string]$_.name).ToLowerInvariant() -eq 'ficoupronto.psm1' })[0]
+  $modText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$mod.content))
+  if ($modText -notmatch ("AgentVersion = '" + [regex]::Escape([string]$m.version) + "'")) { throw 'versao do modulo diferente da do pacote' }
+  return $m
+}
+
+# Grava os arquivos conferidos em atualizacoes\<versao>rquivos (substitui preparo anterior).
+function Save-FpAgentReleaseStage($Manifest) {
+  $dir = Join-Path $script:UpdateDir ([string]$Manifest.version)
+  $files = Join-Path $dir 'arquivos'
+  if ([IO.Directory]::Exists($dir)) { Remove-Item -LiteralPath $dir -Recurse -Force }
+  [void][IO.Directory]::CreateDirectory($files)
+  foreach ($f in @($Manifest.files)) { [IO.File]::WriteAllBytes((Join-Path $files ([string]$f.name)), [Convert]::FromBase64String([string]$f.content)) }
+  foreach ($f in @($Manifest.files)) {
+    $back = [IO.File]::ReadAllBytes((Join-Path $files ([string]$f.name)))
+    if ((Get-FpSha256Hex $back) -ne ([string]$f.sha256).ToLowerInvariant()) { throw ('arquivo corrompido ao gravar: ' + $f.name) }
+  }
+  return $files
+}
+
+function Read-FpUpdateState {
+  if (-not [IO.File]::Exists($script:UpdateStateFile)) { return $null }
+  try { return ([IO.File]::ReadAllText($script:UpdateStateFile) | ConvertFrom-Json) } catch { return $null }
+}
+
+function Write-FpUpdateState([string]$Version, [string]$RequestId, [string]$State, [string]$Detail, [string]$From = '') {
+  [void][IO.Directory]::CreateDirectory($script:UpdateDir)
+  $o = [ordered]@{ version = $Version; request_id = $RequestId; state = $State; detail = $(if ($Detail.Length -gt 200) { $Detail.Substring(0, 200) } else { $Detail }); from = $From; at = [datetime]::UtcNow.ToString('o') }
+  Write-FpFileAtomic $script:UpdateStateFile ([Text.UTF8Encoding]::new($false).GetBytes(($o | ConvertTo-Json -Compress)))
+}
+
+# Dispara o atualizador numa tarefa agendada SYSTEM (sobrevive a parada do servico do agente).
+# Roda uma copia do atualizador instalado, para nao ser sobrescrito durante a troca.
+function Start-FpAgentUpdater([string]$Version, [string]$RequestId) {
+  $src = Join-Path $script:InstallDir 'agent\ficoupronto-updater.ps1'
+  $run = Join-Path $script:UpdateDir 'executar'
+  [void][IO.Directory]::CreateDirectory($run)
+  $copy = Join-Path $run 'ficoupronto-updater.ps1'
+  Copy-Item -LiteralPath $src -Destination $copy -Force
+  $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $taskArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $copy + '" -Version ' + $Version + ' -RequestId ' + $RequestId + ' -InstallDir "' + $script:InstallDir + '"'
+  $action = New-ScheduledTaskAction -Execute $ps -Argument $taskArgs
+  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+  Register-ScheduledTask -TaskName 'FicouPronto.Atualizacao' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+  Start-ScheduledTask -TaskName 'FicouPronto.Atualizacao'
+}
+
 
 Export-ModuleMember -Function *-Fp*

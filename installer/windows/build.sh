@@ -2,7 +2,7 @@
 # Gera dist/FicouPronto-Setup-<versao>.exe (requer curl, unzip, sha256sum, makensis).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; repo="$(cd "$here/../.." && pwd)"
-version="$(grep -oP "AgentVersion = '\K[^']+" "$here/payload/FicouPronto.psm1")"
+version="$(grep -oP '^\$script:AgentVersion = .\K[0-9.]+' "$here/payload/FicouPronto.psm1")"
 cache="$here/.cache"; stage="$here/.stage"; dist="$here/dist"
 mkdir -p "$cache" "$dist"; rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/agent" "$stage/licenses"
 grep -v '^#' "$here/vendor.lock" | while IFS='|' read -r name url sum; do

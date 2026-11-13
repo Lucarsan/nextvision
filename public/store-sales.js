@@ -91,11 +91,18 @@
   }
   const waLink = (phone, text) => 'https://wa.me/' + waPhone(phone) + '?text=' + encodeURIComponent(text);
 
-  function loyaltyText(l) {
+  // promoDow: dia da semana da compra que não somou ponto por ser dia de promoção (ex.: quarta), ou null.
+  function loyaltyText(l, promoDow = null) {
     if (!l || !l.enabled) return '';
+    const u = config.loyalty_unit || { one: 'compra', many: 'compras' };
     const rules = config.loyalty_rules ? '\nRegras: ' + config.loyalty_rules : '';
     if (l.complete) return `Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
-    return `Cartão fidelidade: ${l.checkins} de ${l.target} compras. ${l.remaining === 1 ? 'Falta 1 compra' : 'Faltam ' + l.remaining + ' compras'} para ganhar: ${l.reward}.` + rules;
+    const card = `${l.checkins} de ${l.target} ${l.target === 1 ? u.one : u.many}. ${l.remaining === 1 ? 'Falta 1 ' + u.one : 'Faltam ' + l.remaining + ' ' + u.many} para ganhar ${l.reward}.`;
+    if (promoDow != null) {
+      const day = WEEKDAYS[promoDow] + (promoDow === 0 || promoDow === 6 ? '' : '-feira');
+      return `${u.many[0].toUpperCase() + u.many.slice(1)} de ${day} (promoção) não contam no cartão fidelidade.\nSeu cartão fidelidade: ${card}`;
+    }
+    return `Cartão fidelidade: ${card}` + rules;
   }
   // ---------------- Cashback ----------------
   const ymdShort = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
@@ -141,7 +148,7 @@
   }
   const statusTemplate = () => { const t = config.status_message || DEFAULT_STATUS; return t.includes('{cashback}') ? t : t.includes('{fidelidade}') ? t.replace('{fidelidade}', '{fidelidade}\n\n{cashback}') : t + '\n\n{cashback}'; };
   const statusMessage = c => render(statusTemplate(), {
-    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
+    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty, c.loyalty_promo_dow), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
     compras: c.loyalty?.checkins ?? '', meta: c.loyalty?.target ?? '', faltam: c.loyalty?.remaining ?? '', premio: c.loyalty?.reward ?? '', regras: config.loyalty_rules || ''
   });
   const offerMessage = (c, text) => `Olá, ${greetName(c.name) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;
@@ -2257,7 +2264,7 @@
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(statusMessage(r))}</pre></details></div>
         <div class="fs-actions">${old ? `<button type="button" class="nv-button secondary fs-small" data-fs-skip="${r.id}" title="Tirar da lista sem enviar">Dispensar</button>` : ''}${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`;
     tab.innerHTML = `<div class="fs-row fs-daybar"><label class="nv-field">Compras do dia<input type="date" id="fsDay" value="${data.day}"></label><button type="button" class="nv-button secondary fs-small" id="fsToday">Hoje</button><button type="button" class="nv-button secondary fs-small" id="fsYesterday">Ontem</button>
-      <span class="fs-grow"></span><b>${sent} de ${rows.length} enviados</b>${rows.length > sent || pend.length ? '<button type="button" class="nv-button fp-whats" id="fsNext">Enviar próximo</button>' : ''}</div>
+      <span class="fs-grow"></span><b>${sent} de ${rows.length + pend.length} enviados</b>${rows.length > sent || pend.length ? '<button type="button" class="nv-button fp-whats" id="fsNext">Enviar próximo</button>' : ''}</div>
       ${!config.google_review_url ? '<p class="nv-help fs-warn">Cadastre o link de avaliação do Google em "Configurar" para ele entrar na mensagem.</p>' : ''}
       <p class="nv-help">Clientes que compraram no dia (caixa e pedidos finalizados). "Enviar" abre o WhatsApp com a mensagem pronta: obrigado, cartão fidelidade${cbOn() ? ', cashback (ganho e saldo em reais)' : ''} e pedido de avaliação.</p>
       ${pend.length ? `<section class="fs-pend"><h3>${FPIcon('alert')}Pendentes de dias anteriores (${pend.length})</h3><p class="nv-help">Compraram nos últimos 30 dias e ainda não receberam a mensagem. Envie ou dispense.</p><div class="nv-list">${pend.map(r => rowHtml(r, true).replace('<br><small>', `<br><small>comprou ${when(r)} · `)).join('')}</div></section>` : ''}

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { registerStockValue } from './stock-value.js';
 import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
-import { loyaltyBlock } from './loyalty-rules.js';
+import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -146,7 +146,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
-    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, cashback_percent: Number(rest.cashback_percent) });
+    const loyalty_unit = await loyaltyUnit({ query: q }, tid(req));
+    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent) });
   }));
   // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
   app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {
@@ -1255,16 +1256,18 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.get('/api/store/messages/status', ...guard, route(async (req, res) => {
     const day = dayField.safeParse(req.query.day).success ? req.query.day : null;
     const r = await q(`WITH buys AS (
-        SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents
+        SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents,
+          EXISTS(SELECT 1 FROM loyalty_checkins l WHERE l.sale_id=x.id) counted,extract(dow FROM x.created_at AT TIME ZONE $3)::int dow
           FROM sales x WHERE x.tenant_id=$1 AND x.customer_id IS NOT NULL AND x.canceled_at IS NULL
           AND (x.created_at AT TIME ZONE $3)::date=COALESCE($2::date,(now() AT TIME ZONE $3)::date)
         UNION ALL
-        SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0
+        SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0,
+          EXISTS(SELECT 1 FROM loyalty_checkins l WHERE l.order_id=o.id),extract(dow FROM o.completed_at AT TIME ZONE $3)::int
           FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
           AND (o.completed_at AT TIME ZONE $3)::date=COALESCE($2::date,(now() AT TIME ZONE $3)::date)
       )
       SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
-        json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents) ORDER BY b.at) purchases,
+        json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents,'counted',b.counted,'dow',b.dow) ORDER BY b.at) purchases,
         sum(b.cashback_earned_cents)::int cashback_earned_cents,
         (SELECT max(m.created_at) FROM customer_messages m WHERE m.tenant_id=c.tenant_id AND m.customer_id=c.id AND m.kind='status') last_status_at
       FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1
@@ -1276,16 +1279,18 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!day || day === today) {
       const p = await q(`WITH ls AS (SELECT customer_id,max(created_at) at FROM customer_messages WHERE tenant_id=$1 AND kind='status' GROUP BY 1),
         buys AS (
-          SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents
+          SELECT x.customer_id,x.created_at at,x.total_cents,'sale' kind,x.sale_number::text ref,x.description,x.cashback_earned_cents,x.cashback_used_cents,
+            EXISTS(SELECT 1 FROM loyalty_checkins l WHERE l.sale_id=x.id) counted,extract(dow FROM x.created_at AT TIME ZONE $2)::int dow
             FROM sales x WHERE x.tenant_id=$1 AND x.customer_id IS NOT NULL AND x.canceled_at IS NULL
             AND (x.created_at AT TIME ZONE $2)::date BETWEEN (now() AT TIME ZONE $2)::date-30 AND (now() AT TIME ZONE $2)::date-1
           UNION ALL
-          SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0
+          SELECT o.customer_id,o.completed_at,NULL,'order',o.order_number::text,o.process_snapshot->>'name',0,0,
+            EXISTS(SELECT 1 FROM loyalty_checkins l WHERE l.order_id=o.id),extract(dow FROM o.completed_at AT TIME ZONE $2)::int
             FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
             AND (o.completed_at AT TIME ZONE $2)::date BETWEEN (now() AT TIME ZONE $2)::date-30 AND (now() AT TIME ZONE $2)::date-1
         )
         SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
-          json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents) ORDER BY b.at) purchases,
+          json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents,'counted',b.counted,'dow',b.dow) ORDER BY b.at) purchases,
           sum(b.cashback_earned_cents)::int cashback_earned_cents, max(ls.at) last_status_at
         FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1 AND c.deleted_at IS NULL LEFT JOIN ls ON ls.customer_id=c.id
         WHERE (ls.at IS NULL OR b.at>ls.at) AND length(regexp_replace(coalesce(c.phone,''),'\D','','g'))>=10
@@ -1296,7 +1301,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const all = [...r.rows, ...pending];
     const progress = await progressFor(tid(req), all.map(x => x.id));
     const cashback = await cashbackFor(tid(req), all.map(x => x.id));
+    // Dia de promoção: nenhuma compra desta mensagem somou ponto e alguma caiu num dia sem fidelidade (ex.: quarta).
+    const offDays = ((await q('SELECT loyalty_off_weekdays FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.loyalty_off_weekdays || []).map(Number);
+    const promoDay = x => { const p = x.purchases || []; const d = p.find(b => !b.counted && offDays.includes(b.dow)); return !p.some(b => b.counted) && d ? d.dow : null; };
     const shapeRow = ({ cashback_earned_cents, ...x }) => ({ ...x, loyalty: progress.get(x.id), cashback: { ...cashback.get(x.id), earned_cents: cashback_earned_cents || 0 },
+      loyalty_promo_dow: progress.get(x.id)?.enabled ? promoDay(x) : null,
       sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) });
     res.set('Cache-Control', 'no-store');
     res.json({ day: day || today, today, customers: r.rows.map(shapeRow), pending: pending.map(shapeRow) });

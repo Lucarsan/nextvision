@@ -271,12 +271,22 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
     const enabled = (await q('SELECT public_stats_enabled FROM platform_settings WHERE id = true')).rows[0]?.public_stats_enabled;
     if (!enabled) return bad(res, 404, 'Não disponível');
     if (Date.now() - publicCache.at > 10 * 60000) {
-      const r = await q(`SELECT (SELECT count(*) FROM orders WHERE deleted_at IS NULL)::int links,
-        (SELECT count(*) FROM link_client_visits)::int opens, (SELECT count(DISTINCT visitor_id) FROM link_client_visits)::int people,
-        (SELECT COALESCE(sum(live_seconds), 0) FROM link_client_visits)::bigint live_seconds,
-        (SELECT count(*) FROM tenants WHERE status IN ('trial', 'active'))::int stores`);
+      // Só lojas reais: a loja de demonstração (demo_mode) fica fora dos números públicos.
+      const r = await q(`WITH real AS (SELECT id FROM tenants WHERE NOT demo_mode),
+          cv AS (SELECT v.* FROM link_client_visits v JOIN real ON real.id = v.tenant_id),
+          ro AS (SELECT o.id FROM orders o JOIN real ON real.id = o.tenant_id WHERE o.deleted_at IS NULL)
+        SELECT (SELECT count(*) FROM ro)::int links,
+        (SELECT count(*) FROM cv)::int opens, (SELECT count(DISTINCT visitor_id) FROM cv)::int people,
+        (SELECT COALESCE(sum(live_seconds), 0) FROM cv)::bigint live_seconds,
+        (SELECT to_char(min(started_at) AT TIME ZONE $1, 'YYYY-MM-DD') FROM cv) since,
+        (SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY GREATEST(0, extract(epoch FROM f.first_open - f.shared_at))))::int
+          FROM (SELECT (SELECT min(e.created_at) FROM link_events e WHERE e.order_id = ro.id AND e.kind IN ('link_sent', 'link_copied')) shared_at,
+            (SELECT min(cv.started_at) FROM cv WHERE cv.order_id = ro.id) first_open FROM ro) f
+          WHERE f.shared_at IS NOT NULL AND f.first_open IS NOT NULL) median_open_seconds,
+        (SELECT count(*) FROM tenants WHERE status IN ('trial', 'active') AND NOT demo_mode)::int stores`, [TZ]);
       const x = r.rows[0];
-      publicCache = { at: Date.now(), data: { links: x.links, opens: x.opens, people: x.people, live_hours: Math.round(Number(x.live_seconds) / 360) / 10, stores: x.stores, updated_at: new Date().toISOString() } };
+      publicCache = { at: Date.now(), data: { links: x.links, opens: x.opens, people: x.people, live_hours: Math.round(Number(x.live_seconds) / 360) / 10, stores: x.stores,
+        median_open_seconds: x.median_open_seconds, since: x.since, updated_at: new Date().toISOString() } };
     }
     res.set('Cache-Control', 'public, max-age=600').json(publicCache.data);
   }));

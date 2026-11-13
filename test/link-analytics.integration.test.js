@@ -112,7 +112,8 @@ test('medição do acompanhamento, números da central e relatórios para os loj
     assert.equal((await fetch(base + '/api/public/stats')).status, 404);
     await api('/master/analytics/settings', { method: 'PATCH', token: f.masterToken, body: { public_stats_enabled: true } });
     const pub = await (await fetch(base + '/api/public/stats')).json();
-    assert.ok(pub.opens >= 3 && pub.links >= 3); assert.deepEqual(Object.keys(pub).sort(), ['links', 'live_hours', 'opens', 'people', 'stores', 'updated_at']);
+    assert.ok(pub.opens >= 3 && pub.links >= 3); assert.deepEqual(Object.keys(pub).sort(), ['links', 'live_hours', 'median_open_seconds', 'opens', 'people', 'since', 'stores', 'updated_at']);
+    assert.equal(typeof pub.median_open_seconds, 'number'); assert.match(pub.since, /^\d{4}-\d{2}-\d{2}$/);
 
     // Relatórios para os lojistas: programação diária, mensagem com os números de ontem.
     await db.query("UPDATE link_visits SET started_at=started_at-interval '1 day'");

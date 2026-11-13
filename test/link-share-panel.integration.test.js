@@ -27,8 +27,12 @@ test('envio do link na criação, aviso de link não enviado e área do cliente 
 
     // Pedido criado pela API (como pelo caixa) e o painel aberto: aviso em Próximas ações e no card.
     const o1 = await f.api('/orders', { method: 'POST', body: { customer_id: ana.id, process_id: proc.id, details: { pet_name: 'Bob' } } }, 201);
+    // Pedido antigo (de antes do recurso) não aparece como pendente.
+    const old = await f.api('/orders', { method: 'POST', body: { customer_id: ana.id, process_id: proc.id, details: { pet_name: 'Velho' } } }, 201);
+    await f.db.query('UPDATE orders SET link_due=false WHERE id=$1', [old.id]);
     await page.goto(f.base + '/loja.html');
     await page.waitForSelector('#ordersList [data-order-id] .fp-link-pending');
+    assert.equal(await page.locator('#ordersList .fp-link-pending').count(), 1, 'só o pedido novo');
     assert.match(await page.locator('.fp-action-link').innerText(), /1 pedido sem link/);
     await page.screenshot(shot('link-nao-enviado'));
 
@@ -44,7 +48,7 @@ test('envio do link na criação, aviso de link não enviado e área do cliente 
     assert.equal(await page.locator('#ordersList .fp-link-pending').count(), 1, 'depois: segue pendente');
 
     // Iniciar sem link: o painel lembra; enviar pelo WhatsApp tira o aviso.
-    await page.locator('#ordersList [data-order-id]').first().getByRole('button', { name: 'Iniciar atendimento' }).click();
+    await page.locator('#ordersList [data-order-id]', { hasText: 'Bob' }).getByRole('button', { name: 'Iniciar atendimento' }).click();
     await page.waitForSelector('#shareDialog[open]');
     assert.match(await page.locator('#shareDialog .fp-share-intro').innerText(), /atendimento começou/);
     const [popup] = await Promise.all([context.waitForEvent('page'), page.locator('[data-share-send]').click()]);

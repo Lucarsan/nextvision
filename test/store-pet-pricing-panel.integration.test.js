@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { createStoreFixture } from './helpers/store-fixture.js';
+import { createStoreFixture, FIXTURE_ADMIN } from './helpers/store-fixture.js';
 
 // Pet shop no caixa: escolhe o cliente, o pet vem da ficha e o preço do serviço sai pelas variáveis
 // (raça no lugar do porte, pelagem soma). Cadastro das variáveis, dia sem cashback e tela de metas.
@@ -114,6 +114,13 @@ test('caixa do pet shop: preço por pet, variáveis, dia sem cashback e metas', 
 
     // Metas: meta da loja e comissão de 2% sobre adicionais para a Tainá.
     await page.locator('.nv-sidebar [data-view="goals"]').click();
+    // A página mostra o faturamento: abre trancada e só mostra os números depois da senha do admin.
+    await page.waitForSelector('#fsGoalsUnlock');
+    assert.equal(await page.locator('.fs-goal-store').count(), 0);
+    assert.doesNotMatch(await page.locator('body').innerText(), /R\$\s*80,00/);
+    await page.locator('#fsGoalsUnlock').click();
+    await page.locator('#fsAdminF [name=login]').fill(FIXTURE_ADMIN.login); await page.locator('#fsAdminF [name=password]').fill(FIXTURE_ADMIN.password);
+    await page.locator('#fsAdminF button.nv-button').first().click();
     await page.waitForSelector('#fsGoalForm');
     assert.match(await page.locator('.fs-goal-store').innerText(), /R\$\s*80,00[\s\S]*1\s*banhos[\s\S]*1\s*adicionais/);
     await page.locator('#fsGoalForm [name="goal"]').fill('30.000');

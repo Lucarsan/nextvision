@@ -1306,6 +1306,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const promoDay = x => { const p = x.purchases || []; const d = p.find(b => !b.counted && offDays.includes(b.dow)); return !p.some(b => b.counted) && d ? d.dow : null; };
     const shapeRow = ({ cashback_earned_cents, ...x }) => ({ ...x, loyalty: progress.get(x.id), cashback: { ...cashback.get(x.id), earned_cents: cashback_earned_cents || 0 },
       loyalty_promo_dow: progress.get(x.id)?.enabled ? promoDay(x) : null,
+      // Nenhuma compra desta mensagem somou ponto (dia de promoção, antes da fidelidade começar, serviço que não conta):
+      // a mensagem não fala do cartão.
+      loyalty_not_counted: !!progress.get(x.id)?.enabled && !(x.purchases || []).some(b => b.counted),
       sent: !!x.last_status_at && new Date(x.last_status_at) >= new Date(x.last_buy) });
     res.set('Cache-Control', 'no-store');
     res.json({ day: day || today, today, customers: r.rows.map(shapeRow), pending: pending.map(shapeRow) });

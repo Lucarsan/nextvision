@@ -7,6 +7,19 @@ import { weekdayNow } from './store-sales.js';
 
 const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+// Nome do ponto do cartão nas mensagens ("0 de 10 banhos"): quando todos os serviços que contam começam com a
+// mesma palavra (ex.: BANHO P, BANHO E TOSA), usa essa palavra; senão, "compra(s)".
+export async function loyaltyUnit(c, tenantId) {
+  const t = (await c.query('SELECT loyalty_service_ids FROM tenants WHERE id=$1', [tenantId])).rows[0];
+  const ids = t?.loyalty_service_ids || [];
+  if (ids.length) {
+    const names = (await c.query('SELECT name FROM service_catalog WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [tenantId, ids])).rows;
+    const first = [...new Set(names.map(r => norm(r.name).split(' ')[0]).filter(Boolean))];
+    if (first.length === 1 && /^[a-z]{3,}[aeiou]$/.test(first[0])) return { one: first[0], many: first[0] + 's' };
+  }
+  return { one: 'compra', many: 'compras' };
+}
+
 // at: momento do atendimento (padrão: agora), para o dia da semana.
 export async function loyaltyBlock(c, tenantId, { items, orderId, at } = {}) {
   const t = (await c.query('SELECT loyalty_enabled,loyalty_off_weekdays,loyalty_service_ids FROM tenants WHERE id=$1', [tenantId])).rows[0];

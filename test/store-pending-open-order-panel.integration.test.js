@@ -36,7 +36,12 @@ test('a receber: abrir pedido depois e iniciar pela visão geral', {
     await page.waitForFunction(() => /Pedidos \d+ \(MARVIM\) e \d+ \(MEG\) abertos/.test(document.body.innerText));
     await page.waitForFunction(() => document.querySelectorAll('[data-pend-open]').length === 1);
     assert.match(await page.locator('.fs-pend', { hasText: 'Mayara' }).innerText(), /na fila/);
+    // Abre o envio do link do primeiro pedido; fechar sem enviar.
+    await page.waitForSelector('#shareDialog[open]');
+    assert.match(await page.locator('#shareDialog').innerText(), /Enviar o acompanhamento para Mayara/);
     await page.screenshot(shot('a-receber-abrir-pedido'));
+    await page.locator('#shareDialog [data-share-close]').click();
+    await page.waitForFunction(() => !document.querySelector('#shareDialog[open]'));
 
     await page.locator('.nv-sidebar [data-view="dashboard"], .nv-sidebar [data-view="home"]').first().click();
     await page.waitForFunction(() => document.querySelectorAll('#ordersList [data-order-id]').length === 2);

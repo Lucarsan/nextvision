@@ -117,6 +117,7 @@ export async function orderRows(q, { from, to, tenantId = null }) {
       (SELECT min(e.created_at) FROM link_events e WHERE e.order_id = o.id AND e.kind IN ('link_sent', 'link_copied')) shared_at,
       (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_sent')::int sent,
       (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_copied')::int copied,
+      (SELECT e.note FROM link_events e WHERE e.order_id = o.id AND e.kind = 'link_skipped' ORDER BY e.created_at DESC LIMIT 1) skip_reason,
       (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'video_download')::int downloads,
       (SELECT count(*) FROM link_events e WHERE e.order_id = o.id AND e.kind = 'talk_store')::int talks,
       (SELECT min(v.started_at) FROM link_client_visits v WHERE v.order_id = o.id) first_open,
@@ -215,6 +216,17 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
       WHERE ts.slug = $1 AND o.order_number = $2 AND o.tenant_id = $3 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 1`, [s[1], Number(s[2]), tid(req)]);
     if (!order?.rowCount) return bad(res, 404, 'Pedido não encontrado');
     await q('INSERT INTO link_events(tenant_id, order_id, kind, created_by) VALUES($1, $2, $3, $4)', [tid(req), order.rows[0].id, v.channel === 'copy' ? 'link_copied' : 'link_sent', req.user.id]);
+    res.status(204).end();
+  }));
+
+  // ---------- Loja: link não enviado (com motivo) ----------
+  // "later" mantém o pedido como pendente; "no_whatsapp" e "other_way" tiram o aviso de "Link não enviado".
+  app.post('/api/store/orders/:id/link-skip', auth, roles('owner', 'operator'), rateLimit({ windowMs: 60000, limit: 60 }), route(async (req, res) => {
+    const v = valid(z.object({ reason: z.enum(['no_whatsapp', 'other_way', 'later']) }).strict(), req, res); if (!v) return;
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return bad(res, 404, 'Pedido não encontrado');
+    const r = await q(`INSERT INTO link_events(tenant_id, order_id, kind, note, created_by)
+      SELECT o.tenant_id, o.id, 'link_skipped', $3, $4 FROM orders o WHERE o.id = $1 AND o.tenant_id = $2 AND o.deleted_at IS NULL`, [req.params.id, tid(req), v.reason, req.user.id]);
+    if (!r.rowCount) return bad(res, 404, 'Pedido não encontrado');
     res.status(204).end();
   }));
 

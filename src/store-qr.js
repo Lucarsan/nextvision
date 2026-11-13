@@ -53,6 +53,32 @@ export function registerStoreQr(app, { q, auth, roles, route, bad, valid, audit 
     res.status(created ? 201 : 200).json({ whatsapp_url: 'https://wa.me/' + s.whatsapp + '?text=' + encodeURIComponent(text) });
   }));
 
+  // Área do cliente pelo QR fixo: sem login por número (número não é senha).
+  // Só reconhece o aparelho que já abriu um link de pedido enviado pela loja (visitor_id aleatório guardado nele).
+  // Aparelhos "de dentro" (equipe, ou que abriram links de clientes diferentes) ficam de fora pela view link_client_visits.
+  app.post('/api/public/stores/:slug/my-orders', publicRead, route(async (req, res) => {
+    const v = valid(z.object({ visitor: z.string().uuid() }).strict(), req, res); if (!v) return;
+    const s = await storeBySlug(req.params.slug); if (!s) return bad(res, 404, 'Loja não encontrada');
+    res.set('Cache-Control', 'no-store');
+    const who = await q(`SELECT DISTINCT o.customer_id FROM link_client_visits lv JOIN orders o ON o.id = lv.order_id
+      WHERE lv.visitor_id = $1 AND lv.tenant_id = $2 AND o.customer_id IS NOT NULL LIMIT 2`, [v.visitor, s.id]);
+    if (who.rowCount !== 1) return res.json({ known: false });
+    const customerId = who.rows[0].customer_id;
+    const c = (await q('SELECT name FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, s.id])).rows[0];
+    if (!c) return res.json({ known: false });
+    const orders = (await q(`SELECT o.order_number, o.external_reference, o.status, o.step_index, o.created_at, o.completed_at, o.share_code,
+        o.process_snapshot->'steps' steps, NULLIF(o.details->>'pet_name', '') pet_name, NULLIF(trim(concat_ws(' ', o.details->>'brand', o.details->>'model')), '') item,
+        NULLIF(o.details->>'service', '') service
+      FROM orders o WHERE o.tenant_id = $1 AND o.customer_id = $2 AND o.deleted_at IS NULL AND o.share_code IS NOT NULL
+        AND (o.status <> 'completed' OR o.created_at > now() - interval '90 days')
+      ORDER BY (o.status = 'completed'), o.created_at DESC LIMIT 20`, [s.id, customerId])).rows;
+    res.json({ known: true, name: firstName(c.name), orders: orders.map(o => ({
+      number: o.external_reference || o.order_number, status: o.status, created_at: o.created_at, completed_at: o.completed_at,
+      step: o.status === 'completed' ? null : (Array.isArray(o.steps) ? o.steps[o.step_index] || null : null),
+      item: o.pet_name || o.item || null, service: o.service, link: '/p/' + o.share_code
+    })) });
+  }));
+
   app.get('/api/public/stores/:slug/qr.svg', publicRead, route(async (req, res) => {
     const s = await storeBySlug(req.params.slug); if (!s) return bad(res, 404, 'Loja não encontrada');
     const svg = await QRCode.toString(pageUrl(s.slug), { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });

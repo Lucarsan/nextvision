@@ -106,6 +106,41 @@ function startMessage(o) {
   return (nome ? 'Olá, ' + nome + '! ' : 'Olá! ') + 'Recebemos seu ' + itemLabel(o) + ' na ' + (storeSettings.name || 'loja') + ' (pedido ' + (o.external_reference || o.order_number || '') + '). Acompanhe por aqui, inclusive ao vivo: ' + trackingUrl(o);
 }
 const whatsUrl = o => whatsFor(o, o.status === 'queued' ? 'created' : o.status === 'paused' ? 'paused' : o.status === 'completed' ? 'ready' : 'started');
+// ---------- Envio do link de acompanhamento ----------
+// Todo pedido criado abre na hora a janela de envio. Sem envio (ou motivo), o pedido fica marcado "Link não enviado".
+const sharedNow = new Set(); // enviado agora, antes da próxima atualização da lista
+const linkPending = o => !!o && o.status !== 'completed' && !!o.share_code && !o.link_shared_at && !sharedNow.has(o.id) && !['no_whatsapp', 'other_way'].includes(o.link_skip);
+const linkBadge = o => linkPending(o) ? `<button type="button" class="fp-link-pending" data-share-order="${safe(o.id)}" title="O cliente ainda não recebeu o link de acompanhamento">Link não enviado · Enviar</button>` : '';
+const SKIP_LABELS = { no_whatsapp: 'Cliente sem WhatsApp', other_way: 'Enviei de outro jeito', later: 'Envio depois' };
+function shareSheet(o, { key = 'created', intro = '' } = {}) {
+  if (!o?.share_code) return;
+  let dlg = $('shareDialog');
+  if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'shareDialog'; dlg.className = 'nv-dialog fp-share-dialog'; dlg.setAttribute('aria-labelledby', 'shareTitle'); document.body.append(dlg); }
+  const link = trackingUrl(o), phone = whatsPhone(o), name = greetName(o.customer);
+  dlg.dataset.orderId = o.id;
+  dlg.innerHTML = `<div class="fp-share"><button type="button" class="fp-share-x" data-share-close aria-label="Fechar">×</button>
+    <h2 id="shareTitle">Enviar o acompanhamento${name ? ' para ' + safe(name) : ''}</h2>
+    <p class="fp-share-intro">${safe(intro || orderRef(o) + ' criado. Envie o link para o cliente acompanhar a fila e assistir ao vivo.')}</p>
+    <a class="nv-button fp-whats fp-share-main" data-share-send target="_blank" rel="noopener" href="${safe(whatsFor(o, key))}">${phone ? 'Enviar no WhatsApp do cliente' : 'Escolher o contato no WhatsApp'}</a>
+    ${phone ? '' : '<p class="fp-share-hint">Este cliente está sem WhatsApp no cadastro. O WhatsApp vai abrir para você escolher o contato.</p>'}
+    <div class="fp-share-link"><input readonly value="${safe(link)}" aria-label="Link de acompanhamento"><button type="button" class="nv-button secondary" data-share-copy>Copiar</button></div>
+    <details class="fp-share-skip"><summary>Não vou enviar agora</summary><div class="fp-share-reasons">${Object.entries(SKIP_LABELS).map(([k, v]) => `<button type="button" class="nv-button secondary" data-share-skip="${k}">${v}</button>`).join('')}</div>
+    <p class="fp-share-hint">"Envio depois" mantém o aviso de link não enviado no pedido.</p></details></div>`;
+  const done = msg => { sharedNow.add(o.id); dlg.close(); feedback(msg); renderLiveLists(); setTimeout(() => reload(true).catch(() => {}), 1500); };
+  dlg.querySelector('[data-share-send]').addEventListener('click', () => setTimeout(() => done('Link enviado pelo WhatsApp.'), 50));
+  dlg.querySelector('[data-share-copy]').onclick = async () => {
+    try { await navigator.clipboard.writeText(link); } catch { dlg.querySelector('.fp-share-link input').select(); document.execCommand?.('copy'); }
+    measureShare(link, 'copy'); done('Link copiado. Cole na conversa com o cliente.');
+  };
+  dlg.querySelectorAll('[data-share-skip]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/store/orders/' + o.id + '/link-skip', 'POST', { reason: b.dataset.shareSkip }); dlg.close(); feedback(b.dataset.shareSkip === 'later' ? 'Ok. O pedido fica marcado como "Link não enviado".' : 'Registrado: ' + SKIP_LABELS[b.dataset.shareSkip].toLowerCase() + '.'); await reload(true); }
+    catch (err) { feedback(err.message, true); } finally { b.disabled = false; }
+  });
+  dlg.querySelector('[data-share-close]').onclick = () => dlg.close();
+  if (!dlg.open) dlg.showModal();
+  dlg.querySelector('[data-share-send]').focus();
+}
 function compressPhoto(file) {
   return new Promise((resolve, reject) => {
     const img = new Image(), url = URL.createObjectURL(file);
@@ -191,7 +226,7 @@ function liveActions(o) {
 function liveCard(o) {
   const steps = (o.steps || []).map((step, i) => `<span class="${i < o.step_index ? 'done' : i === o.step_index ? 'current' : ''}">${safe(cap(step))}</span>`).join('');
   const pill = o.status === 'paused' ? '<span class="nv-pill orange">Pausado</span>' : isLastStep(o) ? '<span class="nv-pill green">Pronto</span>' : '<span class="nv-pill">Em andamento</span>';
-  return `<article class="fp-card" data-live-id="${safe(o.id)}"><div class="fp-card-head"><div><strong>${safe(orderRef(o))}</strong> ${pill}<p>${custLink(o.customer_id, safe(cap(o.customer || 'Cliente não vinculado')))} · ${safe(itemLabel(o))}</p></div><span class="nv-help">${safe(cap(currentStep(o)))}</span></div><div class="fp-bar" aria-label="Etapas">${steps}</div><div class="fp-buttons">${liveActions(o)}</div>${expandedLive.has(o.id) ? liveDetails(o) : ''}</article>`;
+  return `<article class="fp-card" data-live-id="${safe(o.id)}"><div class="fp-card-head"><div><strong>${safe(orderRef(o))}</strong> ${pill}<p>${custLink(o.customer_id, safe(cap(o.customer || 'Cliente não vinculado')))} · ${safe(itemLabel(o))}</p>${linkBadge(o)}</div><span class="nv-help">${safe(cap(currentStep(o)))}</span></div><div class="fp-bar" aria-label="Etapas">${steps}</div><div class="fp-buttons">${liveActions(o)}</div>${expandedLive.has(o.id) ? liveDetails(o) : ''}</article>`;
 }
 const expandedLive = new Set();
 function liveDetails(o) {
@@ -210,6 +245,8 @@ function renderNow() {
   const actions = [];
   const ready = live.find(o => o.status === 'live' && isLastStep(o));
   if (ready) actions.push(`<div class="fp-action ready"><span class="fp-kind"><span class="fp-dot"></span>Pronto para avisar</span><strong>${safe(orderRef(ready))} · ${safe(itemLabel(ready))}</strong><p>Chegou em ${safe(cap(currentStep(ready)))}. Finalize e avise o cliente.</p><div class="fp-buttons">${finishButtons(ready)}</div></div>`);
+  const noLink = cachedOrders.filter(linkPending).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  if (noLink.length) { const first = noLink[0]; actions.push(`<div class="fp-action next fp-action-link" data-link-pending="${noLink.length}"><span class="fp-kind"><span class="fp-dot"></span>Link não enviado</span><strong>${noLink.length === 1 ? '1 pedido sem link' : noLink.length + ' pedidos sem link'}</strong><p>${safe(orderRef(first))} · ${safe(cap(first.customer || 'Cliente não vinculado'))}. Sem o link o cliente não acompanha nem assiste ao vivo.</p><button type="button" class="nv-button" data-share-order="${safe(first.id)}">Enviar link${noLink.length > 1 ? ' do mais antigo' : ''}</button></div>`); }
   // Pausados já aparecem com "Retomar" no card Em atendimento; não repetir aqui.
   // O próximo da fila já aparece com "Iniciar" no card Fila ao lado; não repetir aqui.
   setHtml($('nowActions'), actions.join('')); const nowBox = document.querySelector('.fp-now'); if (nowBox) nowBox.hidden = !actions.length;
@@ -218,7 +255,7 @@ function orderCard(o) {
   const d = o.details || {};
   const item = FP.itemLabel(storeSettings.niche, d);
   const info = (label, value) => `<div><dt>${label}</dt><dd>${safe(value || 'Não informado')}</dd></div>`;
-  return `<div class="fp-row"><div class="fp-row-main"><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))} · ${new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span><h3>${custLink(o.customer_id, safe(cap(o.customer || 'Cliente não vinculado')))}</h3><p>${safe(item)} · ${safe(o.process)}</p></div>
+  return `<div class="fp-row"><div class="fp-row-main"><span class="nv-eyebrow">Pedido #${safe(o.external_reference || o.order_number || o.id.slice(0, 8))} · ${new Date(o.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span><h3>${custLink(o.customer_id, safe(cap(o.customer || 'Cliente não vinculado')))}</h3><p>${safe(item)} · ${safe(o.process)}</p>${linkBadge(o)}</div>
     <div class="fp-row-step"><div><span class="nv-pill ${o.status === 'completed' ? 'green' : o.status === 'paused' ? 'orange' : ''}">${labels[o.status]}</span> <strong>${safe(currentStep(o))}</strong></div>${stepsView(o)}</div>
     <div class="fp-row-actions">${transitionActions(o)}<button class="fp-icon-btn" data-delete-order="${safe(o.id)}" aria-label="Excluir pedido" title="Excluir pedido"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div></div>
     <details class="nv-order-details" data-details-id="${safe(o.id)}" ${openedOrders.has(o.id) ? 'open' : ''}><summary>Detalhes do pedido</summary>
@@ -356,6 +393,7 @@ async function loadOrders(box, version) {
       $('completeLink').innerHTML = `<label class="nv-field">Link de acompanhamento<input readonly value="${safe(link)}"></label><div class="nv-order-actions"><a class="nv-button fp-whats" target="_blank" rel="noopener" href="${safe(whatsFor({ ...created, status: 'queued', steps: [] }, 'created'))}">${whatsPhone(created) ? 'Enviar no WhatsApp do cliente' : 'Enviar no WhatsApp'}</a><a class="nv-button secondary" target="_blank" rel="noopener" href="${safe(link)}">Abrir acompanhamento</a></div>`;
       orderDate = isoLocal(new Date()); $('orderDate').value = orderDate; filters.orders.search = ''; filters.orders.status = ''; document.querySelectorAll('[data-filter-scope="orders"]').forEach(node => { if (node.dataset.filter !== 'sort') node.value = ''; });
       await reload(true); feedback('Pedido criado com sucesso.');
+      shareSheet(cachedOrders.find(x => x.id === result.id) || { ...created, status: 'queued', steps: [] });
     } catch (error) { $('completeStatus').textContent = error.message; }
     finally { button.disabled = false; }
   };
@@ -504,6 +542,7 @@ document.addEventListener('click', async e => {
     if (button.hasAttribute('data-close-dialog')) { $('editorDialog').close(); return; }
     if (button.dataset.expandLive) { const id = button.dataset.expandLive; expandedLive.has(id) ? expandedLive.delete(id) : expandedLive.add(id); renderNow(); return; }
     if (button.dataset.editOrder) { await editOrder(button.dataset.editOrder); return; }
+    if (button.dataset.shareOrder) { const o = cachedOrders.find(x => x.id === button.dataset.shareOrder); if (o) shareSheet(o, { key: o.status === 'queued' ? 'created' : 'started', intro: o.status === 'queued' ? '' : 'O cliente ainda não recebeu o link. Envie para ele acompanhar e assistir ao vivo.' }); return; }
     if (button.dataset.historyCustomer) { window.FPCustomerHistory?.open(button.dataset.historyCustomer); return; }
     if (button.dataset.editCustomer) { editCustomer(button.dataset.editCustomer); return; }
     if (button.dataset.deleteCustomer) {
@@ -521,7 +560,7 @@ document.addEventListener('click', async e => {
           if (error.code !== 'camera_busy' || !confirm('A câmera está sendo usada por outro pet. Iniciar este atendimento sem vídeo?\n\nO cliente continua vendo as etapas e a fila, só não vê a imagem deste pet.')) throw error;
           await api('/orders/' + o.id + '/transition', 'POST', { ...body, without_video: true }); noVideo = true;
         }
-        await reload(true); feedback(noVideo ? 'Atendimento seguindo sem vídeo.' : 'Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); const fresh = cachedOrders.find(x => x.id === o.id) || o; const key = { start: 'started', advance: 'advanced', pause: 'paused', resume: 'started' }[action]; if (key) showWhatsOffer(fresh, key); }
+        await reload(true); feedback(noVideo ? 'Atendimento seguindo sem vídeo.' : 'Pedido atualizado.'); if (undoOf[action]) showUndo(o.id, undoOf[action]); const fresh = cachedOrders.find(x => x.id === o.id) || o; const key = { start: 'started', advance: 'advanced', pause: 'paused', resume: 'started' }[action]; if (['start', 'resume'].includes(action) && linkPending(fresh)) shareSheet(fresh, { key: 'started', intro: 'O atendimento começou e o cliente ainda não recebeu o link. Envie agora para ele assistir ao vivo.' }); else if (key) showWhatsOffer(fresh, key); }
       catch (error) { await reload(true); throw error; }
       finally { if (button.isConnected) button.disabled = false; }
     }
@@ -556,7 +595,7 @@ $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.re
 $('createQuick').onclick = async () => {
   const reference = $('reference').value.trim(); if (!reference) { $('quickError').textContent = 'Informe o número do pedido.'; return; }
   $('createQuick').disabled = true;
-  try { const result = await api('/orders/quick', 'POST', { reference, process_id: $('quickProcess').value || null }); $('trackingLink').value = result.tracking_url; $('waLink').href = 'https://wa.me/?text=' + encodeURIComponent('Acompanhe seu pedido: ' + result.tracking_url); $('quickResult').hidden = false; $('quickError').textContent = ''; $('reference').value = ''; await reload(true); }
+  try { const result = await api('/orders/quick', 'POST', { reference, process_id: $('quickProcess').value || null }); $('trackingLink').value = result.tracking_url; $('waLink').href = 'https://wa.me/?text=' + encodeURIComponent('Acompanhe seu pedido: ' + result.tracking_url); $('quickResult').hidden = false; $('quickError').textContent = ''; $('reference').value = ''; await reload(true); const fresh = cachedOrders.find(x => x.id === result.id); if (fresh) shareSheet(fresh); }
   catch (error) { $('quickError').textContent = error.message; }
   finally { $('createQuick').disabled = false; }
 };
@@ -614,10 +653,10 @@ function settingsTabs(box, settings) {
   $('templatesForm').onsubmit = async e => { e.preventDefault(); const f = e.currentTarget; const body = Object.fromEntries(Object.keys(TEMPLATE_LABELS).map(k => [k, f.elements[k].value.trim()])); try { const r = await api('/store/message-templates', 'PATCH', body); storeSettings.message_templates = r.message_templates; $('templatesStatus').textContent = 'Mensagens salvas'; } catch (err) { $('templatesStatus').textContent = err.message; } };
 }
 // QR code de atendimento: cliente novo escaneia, informa nome e WhatsApp, entra em Clientes
-// e abre o WhatsApp da loja com a mensagem configurada aqui.
+// e abre o WhatsApp da loja com a mensagem configurada aqui. Celular já reconhecido vê os próprios pedidos.
 async function loadQrCard(card) {
   let d; try { d = await api('/store/qr'); } catch (error) { card.innerHTML = '<h2>QR code de atendimento</h2><p class="nv-help">' + safe(error.message) + '</p>'; return; }
-  card.innerHTML = '<h2>QR code de atendimento</h2><p class="nv-help">Imprima e deixe no balcão. Quem escanear informa nome e WhatsApp, <b>entra sozinho em Clientes</b> e abre o WhatsApp da loja com a mensagem abaixo, pronto para mandar os arquivos.</p>'
+  card.innerHTML = '<h2>QR code de atendimento</h2><p class="nv-help">Imprima e deixe no balcão. Quem escanear informa nome e WhatsApp, <b>entra sozinho em Clientes</b> e abre o WhatsApp da loja com a mensagem abaixo. No celular onde o cliente já abriu um link de pedido, o QR também mostra os pedidos dele.</p>'
     + (d.has_whatsapp ? '' : '<p class="nv-help" style="color:#b42318">Cadastre o WhatsApp da loja em Perfil → Endereço e contato para o QR funcionar.</p>')
     + '<div class="fp-qr-wrap"><img class="fp-qr-img" src="' + safe(d.qr_url) + '" alt="QR code de atendimento da loja" width="180" height="180"><div class="fp-qr-side">'
     + '<label class="nv-field">Link do QR<input id="qrLink" readonly value="' + safe(d.url) + '"></label>'
@@ -665,8 +704,8 @@ function printQrPoster(d) {
   const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir o cartaz.', true); return; }
   const qrSrc = new URL(d.qr_url, location.origin).href;
   w.document.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>QR code · ' + safe(d.name) + '</title><style>@page{size:A4;margin:16mm}body{font-family:system-ui,"Segoe UI",sans-serif;text-align:center;color:#111827;margin:0}h1{font-size:34px;margin:10mm 0 4mm}h2{font-size:24px;font-weight:600;margin:0 0 8mm;color:#374151}img{width:120mm;height:120mm}ol{display:inline-block;text-align:left;font-size:20px;line-height:1.7;margin:8mm 0}.url{font-size:14px;color:#6B7280}.brand{margin-top:6mm;font-size:13px;color:#6B7280}.brand b{color:#F25C1F}</style></head><body>'
-    + '<h1>' + safe(d.name) + '</h1><h2>Envie seus arquivos pelo WhatsApp</h2><img src="' + safe(qrSrc) + '" alt="QR code">'
-    + '<ol><li>Aponte a câmera do celular para o código</li><li>Informe seu nome e WhatsApp</li><li>Envie os arquivos na conversa que abrir</li></ol>'
+    + '<h1>' + safe(d.name) + '</h1><h2>' + safe(storeSettings.niche === 'pet' ? 'Acompanhe seu pet e fale com a loja' : 'Acompanhe seus pedidos e fale com a loja') + '</h2><img src="' + safe(qrSrc) + '" alt="QR code">'
+    + '<ol><li>Aponte a câmera do celular para o código</li><li>Informe seu nome e WhatsApp</li><li>Veja seus pedidos ou fale com a loja no WhatsApp</li></ol>'
     + '<div class="url">' + safe(d.url) + '</div><div class="brand">ficou<b>pronto!</b></div>'
     + '<script>document.querySelector("img").onload=()=>setTimeout(()=>print(),200)<\/script></body></html>');
   w.document.close();
@@ -756,4 +795,6 @@ async function loadEditor(view, box, version) {
  }else if(view==='support'){await loadSupport(box,version)}
 }
 // Para o caixa: link de acompanhamento e mensagem de WhatsApp do pedido aberto junto com a venda.
-window.FPOrders = { link: o => trackingUrl(o), whats: o => whatsFor({ status: 'queued', steps: [], ...o }, 'created'), hasPhone: o => !!whatsPhone(o), refresh: () => reload(true).catch(() => {}) };
+window.FPOrders = { link: o => trackingUrl(o), whats: o => whatsFor({ status: 'queued', steps: [], ...o }, 'created'), hasPhone: o => !!whatsPhone(o), refresh: () => reload(true).catch(() => {}),
+  // Abre a janela de envio do link (usada pelo caixa ao abrir pedido junto com a venda ou pelo "A receber").
+  share: async ids => { await reload(true).catch(() => {}); const list = [].concat(ids).map(id => cachedOrders.find(o => o.id === id)).filter(linkPending); if (list[0]) shareSheet(list[0], { intro: list.length > 1 ? orderRef(list[0]) + ' criado. Depois de enviar, os outros pedidos aparecem em "Link não enviado".' : '' }); } };

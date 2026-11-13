@@ -105,6 +105,7 @@ Section "Uninstall"
   ${Else}
     ExecWait '${PS} -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\agent\ficoupronto-setup.ps1" -Mode uninstall'
   ${EndIf}
+  nsExec::Exec 'schtasks.exe /Delete /TN FicouPronto.Atualizacao /F'
   Delete "$DESKTOP\Ficou Pronto - Manutencao.lnk"
   RMDir /r "$SMPROGRAMS\Ficou Pronto"
   RMDir /r "$INSTDIR\bin"

@@ -1,6 +1,7 @@
 # Ficou Pronto - servico das cameras (roda como SYSTEM, antes do login).
 # Mantem um FFmpeg por camera publicando no MediaMTX local, recupera quedas,
-# reencontra a camera pelo MAC se o IP mudar e envia sinal de vida a central.
+# reencontra a camera pelo MAC se o IP mudar, envia sinal de vida a central
+# e aplica atualizacoes assinadas pedidas pela central (ficoupronto-updater.ps1).
 # Falha da internet ou da central NAO derruba o video local.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
@@ -48,6 +49,8 @@ $nextRecordingSync = [datetime]::UtcNow
 # Backup: primeira conferencia 2 min depois de ligar; depois a cada 30 min (baixa so se o ultimo tem mais de 24 h).
 $backupStatus = Get-FpBackupStatus
 $nextBackup = [datetime]::UtcNow.AddMinutes(2)
+# Atualizacao remota pedida pela central (ver Start-FpAgentUpdater).
+$updateJob = $null
 Log ('Agente ' + $paths.Version + ' iniciado com ' + @($config.cameras).Count + ' camera(s).')
 
 try {
@@ -121,20 +124,88 @@ try {
       catch { $backupStatus = @{ state = 'degraded'; detail = 'erro no backup' }; Log ('Backup: ' + $_.Exception.Message) }
     }
 
+    # Atualizacao remota: baixa e confere; instala so sem gravacao em andamento.
+    if ($null -ne $updateJob -and -not $blocked -and $now -ge $updateJob.NextTry) {
+      try {
+        if ($updateJob.Phase -eq 'download') {
+          Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'downloading' 'baixando' $paths.Version
+          $d = Invoke-FpApi -Base $config.api_base -Method GET -Path $updateJob.Url -Token $secrets.device_token -TimeoutSec 120
+          if (-not $d.Ok) {
+            Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'downloading' ('falha ao baixar (' + $d.Error + '); nova tentativa em 5 min') $paths.Version
+            $updateJob.NextTry = $now.AddMinutes(5)
+          } else {
+            $m = Test-FpAgentRelease $d.Data $updateJob.Version
+            [void](Save-FpAgentReleaseStage $m)
+            Log ('Atualizacao ' + $updateJob.Version + ' baixada e conferida.')
+            $updateJob.Phase = 'wait'; $updateJob.NextTry = $now
+          }
+        } elseif ($updateJob.Phase -eq 'wait') {
+          $busy = @($recording.Keys | Where-Object { $recording[$_] }).Count
+          if ($busy -gt 0) {
+            if ($updateJob.Waiting -ne $true) { Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'waiting' 'aguardando terminar o atendimento com camera' $paths.Version; $updateJob.Waiting = $true }
+            $updateJob.NextTry = $now.AddSeconds(5)
+          } else {
+            Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'installing' 'iniciando o atualizador' $paths.Version
+            Log ('Atualizacao ' + $updateJob.Version + ': iniciando o atualizador.')
+            Start-FpAgentUpdater $updateJob.Version $updateJob.RequestId
+            $updateJob.Phase = 'started'; $updateJob.NextTry = $now.AddMinutes(10)
+          }
+        } else {
+          # O atualizador para este agente; se ainda estamos aqui depois de 10 min, ele nao concluiu.
+          $st = Read-FpUpdateState
+          if ($st -and $st.state -eq 'installing') { Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'failed' 'o atualizador nao concluiu' $paths.Version }
+          $updateJob = $null
+        }
+      } catch {
+        Log ('Atualizacao recusada: ' + $_.Exception.Message)
+        Write-FpUpdateState $updateJob.Version $updateJob.RequestId 'failed' ('recusada: ' + $_.Exception.Message) $paths.Version
+        $updateJob = $null
+      }
+    }
+
     if ($now -ge $nextHeartbeat) {
-      $camStates = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; state = $s.State; detail = [string]$s.Status } })
+      # Rede do PC: nome do Wi-Fi (ou cabo), IP e roteador, para diagnosticar de longe.
+      $netInfo = $(try { Get-FpNetworkInfo } catch { [pscustomobject]@{ State = 'unknown'; Detail = 'rede nao lida'; Prefix = '' } })
+      $camStates = @(@($config.cameras) | ForEach-Object {
+          $s = $state[$_.id]; $d = [string]$s.Status
+          # Camera numa faixa diferente da do PC: o PC esta em outra rede (ou a camera mudou de roteador).
+          if ($s.State -ne 'ok' -and $_.source -ne 'test' -and $netInfo.Prefix -and ([string]$_.host -match '^\d+\.\d+\.\d+\.\d+$') -and (([string]$_.host -replace '\.\d+$', '') -ne $netInfo.Prefix)) {
+            $d = $d + ' - fora da rede do PC (' + $netInfo.Prefix + '.x)'
+          }
+          if ($d.Length -gt 200) { $d = $d.Substring(0, 200) }
+          @{ id = $_.id; state = $s.State; detail = $d } })
       $okCount = @($camStates | Where-Object { $_.state -eq 'ok' }).Count
       $tunnel = Get-Service -Name 'FicouPronto.Tunel' -ErrorAction SilentlyContinue
       $free = [math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1)
       $body = @{ agent_version = $paths.Version; clock = [datetime]::UtcNow.ToString('o'); recording = $recordingStatus; cameras = $camStates; components = @{
           service = @{ state = 'ok' }
+          network = @{ state = [string]$netInfo.State; detail = [string]$netInfo.Detail }
           relay = @{ state = $(if (Test-FpTcpPort '127.0.0.1' 8554 500) { 'ok' } else { 'down' }) }
           tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
           publisher = @{ state = $(if ($camStates.Count -eq 0) { 'unknown' } elseif ($okCount -eq $camStates.Count) { 'ok' } elseif ($okCount -gt 0) { 'degraded' } else { 'down' }) }
           disk = @{ state = $(if ($free -ge 5) { 'ok' } else { 'degraded' }); detail = ([string]$free + ' GB livres') }
           backup = @{ state = [string]$backupStatus.state; detail = [string]$backupStatus.detail }
         } }
+      $ust = Read-FpUpdateState
+      if ($ust -and ([string]$ust.version -match '^\d+\.\d+\.\d+$') -and ([string]$ust.state -in @('downloading', 'waiting', 'installing', 'done', 'failed', 'rolled_back'))) {
+        $rep = @{ version = [string]$ust.version; state = [string]$ust.state; detail = [string]$ust.detail }
+        if ([string]$ust.request_id -match '^[0-9a-fA-F-]{36}$') { $rep.request_id = [string]$ust.request_id }
+        $body.update = $rep
+      }
       $r = Invoke-FpApi -Base $config.api_base -Method POST -Path '/api/connect/heartbeat' -Body $body -Token $secrets.device_token -TimeoutSec 15
+      # Pedido de atualizacao da central (uma vez por pedido; falha nao repete sozinha).
+      if ($r.Ok -and $null -ne $r.Data -and $r.Data.PSObject.Properties['update'] -and $null -eq $updateJob) {
+        $u = $r.Data.update
+        if (([string]$u.version -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$') -and ([string]$u.request_id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') -and
+            (Test-FpVersionNewer ([string]$u.version) $paths.Version) -and ([string]$u.url -eq ('/api/connect/agent-release/' + [string]$u.version))) {
+          $prev = Read-FpUpdateState
+          $sameRequest = $prev -and [string]$prev.request_id -eq [string]$u.request_id -and [string]$prev.state -in @('failed', 'rolled_back', 'done', 'installing')
+          if (-not $sameRequest) {
+            Log ('Central pediu atualizacao para ' + $u.version + '.')
+            $updateJob = @{ Version = [string]$u.version; RequestId = [string]$u.request_id; Url = [string]$u.url; Phase = 'download'; NextTry = $now; Waiting = $false }
+          }
+        }
+      }
       if ($r.Status -in @(401, 403)) { if (-not $blocked) { Log ('Central recusou o computador: ' + $r.Error) }; $blocked = $true; $nextHeartbeat = $now.AddSeconds(60) }
       else { if ($blocked -and $r.Ok) { Log 'Computador liberado pela central.' }; if ($r.Ok) { $blocked = $false }; $nextHeartbeat = $now.AddSeconds($heartbeatEvery) }
       $central = $(if ($r.Ok) { 'ok' } elseif ($blocked) { 'bloqueado' } else { 'sem conexao: ' + $r.Error })

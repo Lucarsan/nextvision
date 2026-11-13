@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import * as cf from './cloudflare.js';
 import { seal, open, randomPassword } from './secret-box.js';
+import { heartbeatUpdateSchema, pendingUpdate } from './agent-releases.js';
 
 const mediaDomain = () => (process.env.MEDIA_DOMAIN || 'ficoupronto.com').toLowerCase();
 const hostLabel = slug => String(slug || '').toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 40);
@@ -92,7 +93,9 @@ const heartbeatSchema = z.object({
   cameras: z.array(z.object({ id: z.string().uuid(), state: componentState, detail: z.string().max(200).optional() })).max(64).default([]),
   // Relógio do PC: as gravações são achadas pelo horário, então a central corrige a diferença.
   clock: z.string().datetime({ offset: true }).optional(),
-  recording: z.object({ state: componentState, detail: z.string().max(200).optional() }).optional()
+  recording: z.object({ state: componentState, detail: z.string().max(200).optional() }).optional(),
+  // Andamento da atualização remota do agente (0.5.1+).
+  update: heartbeatUpdateSchema
 });
 
 export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route, bad, valid, audit, rateLimit, uuid }) {
@@ -105,7 +108,8 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
   app.get('/api/master/tenants/:id/media', auth, roles('master'), route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Loja inválida');
     const media = await q('SELECT * FROM store_media WHERE tenant_id=$1', [req.params.id]);
-    const devices = await q(`SELECT id,name,enabled,last_seen_at,agent_version,health,health_at,provisioned_at FROM shop_devices
+    const devices = await q(`SELECT id,name,enabled,last_seen_at,agent_version,health,health_at,provisioned_at,
+      agent_update_target,agent_update_requested_at,agent_update_status,agent_update_status_at FROM shop_devices
       WHERE tenant_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC`, [req.params.id]);
     res.set('Cache-Control', 'no-store').json({ ...publicMedia(media.rows[0], cf.cloudflareConfigured()), devices: devices.rows });
   }));
@@ -181,7 +185,11 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
     const health = { components: v.components, cameras: v.cameras.filter(c => allowed.has(c.id)) };
     if (v.recording) health.recording = v.recording;
     if (v.clock) { const skew = Date.parse(v.clock) - Date.now(); if (Math.abs(skew) < 86400000) health.clock_skew_ms = Math.round(skew); }
-    await q('UPDATE shop_devices SET agent_version=$2,health=$3,health_at=now(),last_seen_at=now() WHERE id=$1', [req.device.id, v.agent_version, health]);
-    res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30 });
+    const dev = await q(`UPDATE shop_devices SET agent_version=$2,health=$3,health_at=now(),last_seen_at=now(),
+        agent_update_status=CASE WHEN $4::jsonb IS NULL THEN agent_update_status ELSE $4::jsonb END,
+        agent_update_status_at=CASE WHEN $4::jsonb IS NULL THEN agent_update_status_at ELSE now() END
+      WHERE id=$1 RETURNING agent_update_target,agent_update_request`, [req.device.id, v.agent_version, health, v.update ? JSON.stringify(v.update) : null]);
+    const update = pendingUpdate(dev.rows[0] || {}, v.agent_version);
+    res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30, ...(update ? { update } : {}) });
   }));
 }

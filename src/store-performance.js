@@ -5,7 +5,10 @@
 // - Comissão por login (quem aparece como vendedor da venda): percentual sobre os adicionais, os serviços
 //   ou o total vendido. "Adicional" é o que estava marcado no cadastro do serviço na hora da venda.
 // - Banhos: itens de serviço com "banho" no nome.
+// - A página mostra quanto a loja fatura: ver ou mudar pede a senha do admin (a mesma do "Valor do estoque"),
+//   para não ficar aberta para a atendente.
 import { z } from 'zod';
+import { requireAdmin } from './store-admin.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const monthField = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
@@ -18,7 +21,7 @@ export function registerStorePerformance(app, { q, route, bad, valid, audit, gua
     return m.success ? m.data : null;
   };
 
-  app.get('/api/store/sales/performance', ...guard, route(async (req, res) => {
+  app.get('/api/store/sales/performance', ...guard, requireAdmin, route(async (req, res) => {
     const month = monthOf(req); if (!month) return bad(res, 400, 'Mês inválido');
     const first = month + '-01';
     const people = (await q(`WITH s AS (
@@ -61,7 +64,7 @@ export function registerStorePerformance(app, { q, route, bad, valid, audit, gua
   }));
 
   // Meta do mês (da loja ou de uma pessoa). target_cents nulo = tira a meta a partir deste mês.
-  app.put('/api/store/sales/goals', ...owner, route(async (req, res) => {
+  app.put('/api/store/sales/goals', ...owner, requireAdmin, route(async (req, res) => {
     const v = valid(z.object({ month: monthField, user_id: uuid.nullable().optional(), target_cents: z.number().int().min(1).max(1000000000).nullable() }).strict(), req, res); if (!v) return;
     const userId = v.user_id || null;
     if (userId && !(await q("SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2 AND role IN ('owner','operator')", [userId, tid(req)])).rowCount) return bad(res, 400, 'Pessoa inválida');
@@ -74,7 +77,7 @@ export function registerStorePerformance(app, { q, route, bad, valid, audit, gua
   }));
 
   // Comissão de uma pessoa: percentual e sobre o quê (adicionais, serviços ou tudo).
-  app.patch('/api/store/sales/commission/:id', ...owner, route(async (req, res) => {
+  app.patch('/api/store/sales/commission/:id', ...owner, requireAdmin, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Pessoa inválida');
     const v = valid(z.object({ commission_percent: z.number().min(0).max(100).multipleOf(0.01), commission_base: z.enum(['addons', 'services', 'all']) }).strict(), req, res); if (!v) return;
     const r = await q(`UPDATE users SET commission_percent=$3,commission_base=$4 WHERE id=$1 AND tenant_id=$2 AND role IN ('owner','operator') RETURNING id,name,commission_percent,commission_base`,

@@ -2396,8 +2396,18 @@
   const BASES = { addons: 'adicionais', services: 'serviços', all: 'tudo que vendeu' };
   const monthName = m => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }); };
   const bar = (v, goal) => { const pct = goal ? Math.min(100, Math.round(100 * v / goal)) : 0; return goal ? `<div class="fs-goal-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>` : ''; };
+  // Mostra quanto a loja fatura: só abre com a senha do admin (liberação de 15 minutos).
+  function goalsLocked(box, alive, msg) {
+    box.innerHTML = `<section class="nv-card"><h2>Metas e comissões</h2><p class="nv-help">${FPIcon('lock')} Área restrita: esta página mostra quanto a loja está faturando. Para ver ou mudar, digite a senha do admin.</p>
+      ${msg ? `<p class="nv-help fs-neg">${esc(msg)}</p>` : ''}<button type="button" class="nv-button" id="fsGoalsUnlock">${FPIcon('lock')} Desbloquear</button></section>`;
+    $('fsGoalsUnlock').onclick = async () => { if (await ensureAdmin('Metas e comissões pedem a senha do admin.') && alive()) loadGoals(box, alive); };
+  }
   async function loadGoals(box, alive) {
-    const d = await api('/store/sales/performance' + (goalMonth ? '?month=' + goalMonth : '')); if (!alive()) return;
+    if (!(adminGrant && adminGrant.until > Date.now())) return goalsLocked(box, alive, '');
+    let d;
+    try { d = await api('/store/sales/performance' + (goalMonth ? '?month=' + goalMonth : ''), 'GET', undefined, { 'X-Admin-Token': adminGrant.token }); }
+    catch (err) { if (err.admin_required) { adminGrant = null; if (alive()) goalsLocked(box, alive, 'A liberação expirou. Digite a senha de novo.'); return; } throw err; }
+    if (!alive()) return;
     goalMonth = d.month;
     const st = d.store, goal = st.goal_cents, left = goal ? Math.max(0, goal - st.services_cents) : 0;
     const pace = goal && left && d.days_left ? `Faltam <b>${brl(left)}</b> · ${brl(Math.ceil(left / d.days_left))} por dia nos ${d.days_left} dia${d.days_left > 1 ? 's' : ''} que restam.` : goal && !left ? '<b>Meta batida!</b>' : goal ? `Faltaram ${brl(left)}.` : '';
@@ -2426,7 +2436,7 @@
     if ($('fsGoalForm')) $('fsGoalForm').onsubmit = async e => {
       e.preventDefault(); const c = money(e.currentTarget.elements.goal.value), out = $('fsGoalStatus');
       if (Number.isNaN(c)) { out.textContent = 'Valor da meta inválido.'; return; }
-      try { await api('/store/sales/goals', 'PUT', { month: goalMonth, target_cents: c || null }); await loadGoals(box, alive); } catch (err) { out.textContent = err.message; }
+      try { await adminApi('/store/sales/goals', 'PUT', { month: goalMonth, target_cents: c || null }, 'Mudar a meta pede a senha do admin.'); await loadGoals(box, alive); } catch (err) { out.textContent = err.message; }
     };
     box.querySelectorAll('[data-goal-edit]').forEach(b => b.onclick = () => { const f = box.querySelector(`[data-goal-form="${b.dataset.goalEdit}"]`); f.hidden = !f.hidden; if (!f.hidden) f.elements.pct.focus(); });
     box.querySelectorAll('[data-goal-form]').forEach(f => f.onsubmit = async e => {
@@ -2434,8 +2444,8 @@
       if (!(pct >= 0 && pct <= 100)) { out.textContent = 'Comissão deve ficar entre 0 e 100%.'; return; }
       if (Number.isNaN(g)) { out.textContent = 'Meta inválida.'; return; }
       try {
-        await api('/store/sales/commission/' + f.dataset.goalForm, 'PATCH', { commission_percent: Math.round(pct * 100) / 100, commission_base: f.elements.base.value });
-        await api('/store/sales/goals', 'PUT', { month: goalMonth, user_id: f.dataset.goalForm, target_cents: g || null });
+        await adminApi('/store/sales/commission/' + f.dataset.goalForm, 'PATCH', { commission_percent: Math.round(pct * 100) / 100, commission_base: f.elements.base.value }, 'Mudar a comissão pede a senha do admin.');
+        await adminApi('/store/sales/goals', 'PUT', { month: goalMonth, user_id: f.dataset.goalForm, target_cents: g || null }, 'Mudar a meta pede a senha do admin.');
         await loadGoals(box, alive);
       } catch (err) { out.textContent = err.message; }
     });

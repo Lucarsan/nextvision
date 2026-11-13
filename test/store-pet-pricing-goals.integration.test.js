@@ -65,34 +65,40 @@ test('pet shop: dia sem cashback, serviços com variáveis, comissão, metas e g
     await api(`/store/sales/${canceled.sale.id}/cancel`, { method: 'POST', body: { reason: 'Lançado errado' } });
 
     // ---- Comissão e metas ----
-    assert.equal((await request('/store/sales/commission/' + taina.id, { method: 'PATCH', token: taina.token, body: { commission_percent: 2, commission_base: 'addons' } })).status, 403);
-    const comm = await api('/store/sales/commission/' + taina.id, { method: 'PATCH', body: { commission_percent: 2, commission_base: 'addons' } });
+    // A página mostra o faturamento: sem a senha do admin, ninguém vê nem muda (nem o dono).
+    assert.equal((await request('/store/sales/performance')).status, 401);
+    assert.equal((await request('/store/sales/performance')).data.admin_required, true);
+    assert.equal((await request('/store/sales/performance', { token: taina.token })).status, 401);
+    assert.equal((await request('/store/sales/goals', { method: 'PUT', body: { month: thisMonth(), target_cents: 1 } })).status, 401);
+    assert.equal((await request('/store/sales/commission/' + taina.id, { method: 'PATCH', body: { commission_percent: 1, commission_base: 'addons' } })).status, 401);
+    assert.equal((await request('/store/sales/commission/' + taina.id, { admin: true, method: 'PATCH', token: taina.token, body: { commission_percent: 2, commission_base: 'addons' } })).status, 403);
+    const comm = await api('/store/sales/commission/' + taina.id, { admin: true, method: 'PATCH', body: { commission_percent: 2, commission_base: 'addons' } });
     assert.equal(comm.commission_percent, 2);
     const month = thisMonth();
-    await api('/store/sales/goals', { method: 'PUT', body: { month, target_cents: 3000000 } });
-    await api('/store/sales/goals', { method: 'PUT', body: { month, user_id: taina.id, target_cents: 1000000 } });
-    let perf = await api('/store/sales/performance');
+    await api('/store/sales/goals', { admin: true, method: 'PUT', body: { month, target_cents: 3000000 } });
+    await api('/store/sales/goals', { admin: true, method: 'PUT', body: { month, user_id: taina.id, target_cents: 1000000 } });
+    let perf = await api('/store/sales/performance', { admin: true });
     assert.equal(perf.month, month); assert.equal(perf.is_owner, true);
     assert.equal(perf.store.goal_cents, 3000000);
     assert.equal(perf.store.services_cents, 14400); assert.equal(perf.store.baths, 1); assert.equal(perf.store.addons, 1); assert.equal(perf.store.addons_cents, 2100);
     const t = perf.people.find(p => p.user_id === taina.id);
     assert.equal(t.commission_cents, 42, '2% de R$ 21,00 de adicionais'); assert.equal(t.goal_cents, 1000000); assert.equal(t.baths, 1); assert.equal(t.sales, 1);
     // Base "serviços": 2% de R$ 144,00.
-    await api('/store/sales/commission/' + taina.id, { method: 'PATCH', body: { commission_percent: 2, commission_base: 'services' } });
-    assert.equal((await api('/store/sales/performance')).people.find(p => p.user_id === taina.id).commission_cents, 288);
-    await api('/store/sales/commission/' + taina.id, { method: 'PATCH', body: { commission_percent: 2, commission_base: 'addons' } });
+    await api('/store/sales/commission/' + taina.id, { admin: true, method: 'PATCH', body: { commission_percent: 2, commission_base: 'services' } });
+    assert.equal((await api('/store/sales/performance', { admin: true })).people.find(p => p.user_id === taina.id).commission_cents, 288);
+    await api('/store/sales/commission/' + taina.id, { admin: true, method: 'PATCH', body: { commission_percent: 2, commission_base: 'addons' } });
     // A operadora vê a meta da loja e só a própria linha.
-    perf = await api('/store/sales/performance', { token: taina.token });
+    perf = await api('/store/sales/performance', { admin: true, token: taina.token });
     assert.equal(perf.is_owner, false); assert.deepEqual(perf.people.map(p => p.user_id), [taina.id]); assert.equal(perf.store.goal_cents, 3000000);
-    assert.equal((await request('/store/sales/goals', { method: 'PUT', token: taina.token, body: { month, target_cents: 1 } })).status, 403);
+    assert.equal((await request('/store/sales/goals', { admin: true, method: 'PUT', token: taina.token, body: { month, target_cents: 1 } })).status, 403);
     // A meta continua no mês seguinte; tirar a meta (null) vale dali em diante.
     const next = nextMonth(month);
-    assert.equal((await api('/store/sales/performance?month=' + next)).store.goal_cents, 3000000);
-    assert.equal((await api('/store/sales/performance?month=' + next)).store.services_cents, 0);
-    await api('/store/sales/goals', { method: 'PUT', body: { month: next, target_cents: null } });
-    assert.equal((await api('/store/sales/performance?month=' + next)).store.goal_cents, null);
-    assert.equal((await api('/store/sales/performance?month=' + month)).store.goal_cents, 3000000);
-    assert.equal((await request('/store/sales/performance?month=2026-13')).status, 400);
+    assert.equal((await api('/store/sales/performance?month=' + next, { admin: true })).store.goal_cents, 3000000);
+    assert.equal((await api('/store/sales/performance?month=' + next, { admin: true })).store.services_cents, 0);
+    await api('/store/sales/goals', { admin: true, method: 'PUT', body: { month: next, target_cents: null } });
+    assert.equal((await api('/store/sales/performance?month=' + next, { admin: true })).store.goal_cents, null);
+    assert.equal((await api('/store/sales/performance?month=' + month, { admin: true })).store.goal_cents, 3000000);
+    assert.equal((await request('/store/sales/performance?month=2026-13', { admin: true })).status, 400);
 
     // ---- Gravação desligada ----
     assert.equal((await api('/store/settings')).recordings_enabled, true);

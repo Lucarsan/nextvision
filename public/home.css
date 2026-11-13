@@ -23,7 +23,7 @@ a{color:#1E3A5F}a:hover{color:#0F2440}
 .en-muted{color:var(--muted)}.en-small{font-size:12px;color:var(--soft)}
 .en-link{font-size:14px;font-weight:600}
 
-.en-show{flex:999 1 560px;min-width:0;background:var(--panel);padding:56px 64px;display:flex;flex-wrap:wrap;gap:48px;align-items:center;justify-content:space-between}
+.en-show{flex:999 1 560px;min-width:0;background:var(--panel);padding:56px 64px;display:flex;flex-wrap:wrap;gap:clamp(40px,5vw,96px);align-items:center;justify-content:center}
 
 /* Celular grande (proporção de um modelo de 6,7"), inclinado em perspectiva, com a página real de demonstração dentro */
 .en-stage{flex:none;padding:30px 30px 50px 70px}

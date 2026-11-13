@@ -78,3 +78,36 @@ test('link não enviado com motivo e área do cliente pelo QR fixo', {
     assert.deepEqual(r.data.orders.map(o => o.item), ['Thor']);
   } finally { await f.cleanup(); }
 });
+
+// Pedidos de antes do recurso não cobram envio, a não ser que o cliente esteja com venda em "A receber" aberta.
+test('link não enviado só cobra pedidos novos ou com venda a receber aberta', {
+  skip: process.env.TEST_DATABASE_URL ? false : 'Set TEST_DATABASE_URL', timeout: 90000
+}, async () => {
+  const f = await createStoreFixture();
+  const { api, db } = f;
+  try {
+    await api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { sales_enabled: true } });
+    const proc = await api('/processes', { method: 'POST', body: { name: 'Banho', steps: ['Banho'] } }, 201);
+    const bia = await api('/customers', { method: 'POST', body: { name: 'Bia', phone: '85911112222' } }, 201);
+    const caio = await api('/customers', { method: 'POST', body: { name: 'Caio', phone: '85933334444' } }, 201);
+    const oldGone = await api('/orders', { method: 'POST', body: { customer_id: bia.id, process_id: proc.id } }, 201);
+    const oldWaiting = await api('/orders', { method: 'POST', body: { customer_id: caio.id, process_id: proc.id } }, 201);
+    // Como a migração 057 deixa os pedidos que já existiam.
+    await db.query('UPDATE orders SET link_due=false WHERE id = ANY($1)', [[oldGone.id, oldWaiting.id]]);
+    const fresh = await api('/orders', { method: 'POST', body: { customer_id: bia.id, process_id: proc.id } }, 201);
+    const due = async () => Object.fromEntries((await api('/orders')).map(o => [o.id, o.link_due]));
+    let d = await due();
+    assert.equal(d[fresh.id], true, 'pedido novo cobra');
+    assert.equal(d[oldGone.id], false, 'antigo dispensado');
+    assert.equal(d[oldWaiting.id], false);
+    // Caio com venda em "A receber" aberta: o pet ainda está na loja, volta a cobrar.
+    const p = await api('/store/sales/pending', { method: 'POST', body: { customer_id: caio.id, total_cents: 5000, description: 'Banho' } }, 201);
+    d = await due();
+    assert.equal(d[oldWaiting.id], true, 'a receber aberto cobra');
+    assert.equal(d[oldGone.id], false);
+    // Cancelada a venda, volta a ficar dispensado.
+    await api('/store/sales/pending/' + p.id + '/cancel', { method: 'POST', body: { reason: 'Teste' } });
+    d = await due();
+    assert.equal(d[oldWaiting.id], false);
+  } finally { await f.cleanup(); }
+});

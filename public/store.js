@@ -108,8 +108,9 @@ function startMessage(o) {
 const whatsUrl = o => whatsFor(o, o.status === 'queued' ? 'created' : o.status === 'paused' ? 'paused' : o.status === 'completed' ? 'ready' : 'started');
 // ---------- Envio do link de acompanhamento ----------
 // Todo pedido criado abre na hora a janela de envio. Sem envio (ou motivo), o pedido fica marcado "Link não enviado".
+// Pedidos de antes do recurso não cobram envio (link_due=false), a não ser que o cliente tenha venda em "A receber" aberta.
 const sharedNow = new Set(); // enviado agora, antes da próxima atualização da lista
-const linkPending = o => !!o && o.status !== 'completed' && !!o.share_code && !o.link_shared_at && !sharedNow.has(o.id) && !['no_whatsapp', 'other_way'].includes(o.link_skip);
+const linkPending = o => !!o && o.status !== 'completed' && !!o.share_code && o.link_due !== false && !o.link_shared_at && !sharedNow.has(o.id) && !['no_whatsapp', 'other_way'].includes(o.link_skip);
 const linkBadge = o => linkPending(o) ? `<button type="button" class="fp-link-pending" data-share-order="${safe(o.id)}" title="O cliente ainda não recebeu o link de acompanhamento">Link não enviado · Enviar</button>` : '';
 const SKIP_LABELS = { no_whatsapp: 'Cliente sem WhatsApp', other_way: 'Enviei de outro jeito', later: 'Envio depois' };
 function shareSheet(o, { key = 'created', intro = '' } = {}) {

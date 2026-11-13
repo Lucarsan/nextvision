@@ -55,10 +55,11 @@ function drawList(){const list=partners.filter(p=>!niche||p.niche===niche);$('pt
 function drawMap(){if(map){map.invalidateSize();return}
  const pins=partners.filter(p=>typeof p.lat==='number'&&typeof p.lng==='number');
  map=L.map('ptMap',{scrollWheelZoom:false}).setView([-3.7319,-38.5267],12);
- L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,referrerPolicy:'strict-origin-when-cross-origin',attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
  const icon=L.divIcon({className:'pt-pin',html:'<span></span>',iconSize:[22,30],iconAnchor:[11,30],popupAnchor:[0,-28]});
  pins.forEach(p=>L.marker([p.lat,p.lng],{icon,title:p.name,alt:p.name}).addTo(map).bindPopup('<strong>'+esc(p.name)+'</strong><br>'+esc(p.niche_label)+'<br>'+esc(place(p))+(p.whatsapp?'<br><a href="https://wa.me/'+esc(p.whatsapp)+'" target="_blank" rel="noopener">WhatsApp</a>':'')+'<br><a href="'+esc(gmaps(p))+'" target="_blank" rel="noopener">Abrir no Google Maps</a>'));
- if(pins.length>1)map.fitBounds(pins.map(p=>[p.lat,p.lng]),{padding:[40,40],maxZoom:15});else if(pins.length)map.setView([pins[0].lat,pins[0].lng],14);
+ // Começa afastado (Fortaleza e região metropolitana), centrado nas lojas.
+ if(pins.length)map.setView([pins.reduce((a,p)=>a+p.lat,0)/pins.length+0.05,pins.reduce((a,p)=>a+p.lng,0)/pins.length-0.02],11);
  const off=partners.filter(p=>!pins.includes(p));
  if(off.length){$('ptNoPin').hidden=false;$('ptNoPin').textContent='Ainda sem endereço no mapa: '+off.map(p=>p.name).join(', ')+'. Veja em "Nicho".'}}
 function show(view){document.querySelectorAll('.pt-tab').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));

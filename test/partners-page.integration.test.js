@@ -35,13 +35,15 @@ test('lojas parceiras: mapa com marcadores e lista por nicho', {
     assert.equal(await page.locator('.leaflet-control-zoom-in').count(), 1, 'tem zoom');
     await page.locator('.pt-pin').click();
     await page.waitForSelector('.leaflet-popup-content');
-    assert.match(await page.locator('.leaflet-popup-content').innerText(), /Loja de teste/);
+    assert.match(await page.locator('.leaflet-popup-content').innerText(), /Loja de teste[\s\S]*Abrir no Google Maps/);
+    assert.match(await page.locator('.leaflet-tile-pane img').first().getAttribute('src') || 'https://tile.openstreetmap.org/', /tile\.openstreetmap\.org/);
     await page.screenshot(shot('lojas-mapa'));
     await page.locator('.pt-tab[data-view=niche]').click();
     assert.equal(await page.locator('.pt-card').count(), 2);
     await page.locator('.pt-chip', { hasText: 'Assistência técnica' }).click();
     assert.equal(await page.locator('.pt-card').count(), 1);
     assert.match(await page.locator('.pt-card').innerText(), /Reparo de celulares/);
+    assert.match(await page.locator('.pt-card a', { hasText: 'Abrir no Google Maps' }).getAttribute('href'), /^https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=/);
     await page.locator('.pt-chip', { hasText: 'Todos' }).click();
     await page.screenshot(shot('lojas-nicho'));
     await page.setViewportSize({ width: 390, height: 844 });

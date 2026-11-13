@@ -2398,7 +2398,7 @@
   const bar = (v, goal) => { const pct = goal ? Math.min(100, Math.round(100 * v / goal)) : 0; return goal ? `<div class="fs-goal-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>` : ''; };
   // Mostra quanto a loja fatura: só abre com a senha do admin (liberação de 15 minutos).
   function goalsLocked(box, alive, msg) {
-    box.innerHTML = `<section class="nv-card"><h2>Metas e comissões</h2><p class="nv-help">${FPIcon('lock')} Área restrita: esta página mostra quanto a loja está faturando. Para ver ou mudar, digite a senha do admin.</p>
+    box.innerHTML = `<section class="nv-card"><h2>Metas e comissões</h2><p class="nv-help">${FPIcon('lock')} Área restrita. Para ver ou mudar, digite a senha do admin.</p>
       ${msg ? `<p class="nv-help fs-neg">${esc(msg)}</p>` : ''}<button type="button" class="nv-button" id="fsGoalsUnlock">${FPIcon('lock')} Desbloquear</button></section>`;
     $('fsGoalsUnlock').onclick = async () => { if (await ensureAdmin('Metas e comissões pedem a senha do admin.') && alive()) loadGoals(box, alive); };
   }

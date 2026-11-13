@@ -205,8 +205,14 @@ function progressView(p,steps,head,compact){
 function queueView(p){
  if(p.status!=='queued')return '';
  const position=Number(p.queue_position),ahead=aheadOf(p),services=Array.isArray(p.active_services)?p.active_services:[];
- return '<section class="card status"><h2>Sua vez na fila</h2><div class="queue"><span class="queue-num">'+(ahead===null?'–':ahead)+'</span><div><b>'+(ahead===0?'Ninguém na sua frente':ahead===1?'pedido na sua frente':'pedidos na sua frente')+'</b><span>'+(position>0?(ahead===0?'Você é o próximo a ser atendido':'Você é o '+position+'º da fila'):'Aguardando atualização da fila')+'</span></div></div>'
- +'<div class="others"><strong>Em atendimento agora</strong>'+(services.length?services.map(x=>'<p><span class="qdot"></span>'+safe(cap(x.step_name||'Em atendimento'))+' <span class="muted">· etapa '+(Number(x.step_index)+1)+' de '+Number(x.total_steps)+(x.status==='paused'?' · pausado':'')+'</span></p>').join(''):'<p class="muted">Nenhum atendimento em andamento.</p>')+'</div></section>';
+ // Um bloco só: quem espera antes do cliente (o número) e quem já está sendo atendido (a linha "Agora").
+ const busy=services.length,title=ahead===null?'Aguardando atualização da fila':ahead===0?'Você é o próximo':ahead===1?'1 pedido esperando antes de você':ahead+' pedidos esperando antes de você';
+ const sub=ahead===null?'':ahead===0?(busy?(busy===1?'Assim que o atendimento atual terminar':'Assim que um dos atendimentos atuais terminar'):'Seu atendimento deve começar em instantes'):'Você é o '+position+'º da fila';
+ const now=x=>safe(cap(x.step_name||'Em atendimento'))+' <span class="muted">('+(Number(x.step_index)+1)+' de '+Number(x.total_steps)+(x.status==='paused'?', pausado':'')+')</span>';
+ const others=busy===1?'<p><span class="qdot"></span><strong>Agora:</strong> 1 em atendimento · '+now(services[0])+'</p>'
+  :busy>1?'<p><strong>Agora:</strong> '+busy+' em atendimento</p>'+services.map(x=>'<p><span class="qdot"></span>'+now(x)+'</p>').join(''):'';
+ return '<section class="card status"><h2>Sua vez na fila</h2><div class="queue"><span class="queue-num">'+(ahead===null?'–':ahead)+'</span><div><b>'+title+'</b>'+(sub?'<span>'+sub+'</span>':'')+'</div></div>'
+ +(others?'<div class="others">'+others+'</div>':'')+'</section>';
 }
 function duration(sec){sec=Math.max(0,Number(sec)||0);const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),x=sec%60;return h?h+' h '+m+' min':m?m+' min'+(x?' '+x+' s':''):x+' s'}
 // Download: a central confere o pedido e devolve um link curto que baixa direto do computador da loja.

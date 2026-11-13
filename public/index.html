@@ -107,9 +107,9 @@
     } catch { }
   }
   facts(); setInterval(() => { if (!document.hidden) facts(); }, 120000);
-  // Inclinação do celular igual à da foto de referência: os 4 cantos medidos na foto (sup. esq., sup. dir.,
-  // inf. dir., inf. esq., em pixels da foto, com a borda de cima medindo 182) viram uma transformação exata.
-  const REF = [[0, 0], [182, 13], [135, 409], [-41, 390]];
+  // Inclinação do celular igual à da imagem de referência (1024×711): cantos externos medidos nos pixels
+  // (sup. esq. 695,75 · sup. dir. 953,96 · inf. dir. 891,624 · inf. esq. 635,601), relativos ao sup. esq.
+  const REF = [[0, 0], [257.4, 21.6], [195.8, 548.9], [-60.3, 526.6]];
   function homography(src, dst) {
     const A = [], b = [];
     for (let i = 0; i < 4; i++) {
@@ -128,8 +128,8 @@
   const phone = document.querySelector('.en-phone');
   function tilt() {
     phone.style.transform = 'none';
-    const w = phone.offsetWidth, h = phone.offsetHeight, k = w / 182;
-    phone.style.transform = homography([[0, 0], [w, 0], [w, h], [0, h]], REF.map(([x, y]) => [x * k, y * k * (h / w) / (409 / 182)]));
+    const w = phone.offsetWidth, h = phone.offsetHeight, k = w / Math.hypot(257.4, 21.6);
+    phone.style.transform = homography([[0, 0], [w, 0], [w, h], [0, h]], REF.map(([x, y]) => [x * k, y * k]));
   }
   tilt(); addEventListener('resize', tilt);
 })();

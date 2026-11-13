@@ -172,6 +172,21 @@
   function sendWhats(phone, text, record) {
     const w = window.open(waLink(phone, text), '_blank'); if (w) w.opener = null;
     if (typeof measureShare === 'function') measureShare(text, 'whatsapp');
+    return markSent(record);
+  }
+  // PC lento: copiar a mensagem para colar no WhatsApp aberto à mão e depois marcar "Já enviei".
+  async function copyText(text) {
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch { /* plano B abaixo */ }
+    const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;left:-9999px'; document.body.append(t); t.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; } t.remove(); return ok;
+  }
+  async function copyMsg(text, btn) {
+    if (await copyText(text)) {
+      feedback('Mensagem copiada. Cole no WhatsApp do cliente e depois clique em "Já enviei".');
+      if (btn) { const old = btn.textContent; btn.textContent = 'Copiada'; setTimeout(() => { btn.textContent = old; }, 2500); }
+    } else feedback('Não foi possível copiar. Abra "Ver mensagem", selecione o texto e copie (Ctrl+C).', true);
+  }
+  function markSent(record) {
     const done = api('/store/messages/sent', 'POST', record);
     if (record?.kind === 'status') done.then(() => setTimeout(refreshDue, 300), () => {});
     return done;
@@ -2281,7 +2296,7 @@
     const when = r => new Date(r.last_buy).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
     const rowHtml = (r, old) => `<div class="fs-msg ${r.sent ? 'sent' : ''}" data-fs-row="${r.id}"><div class="fs-grow"><b>${custLink(r.id, esc(r.name))}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small> ${cbBadge(r.cashback)}<br><small>${r.purchases.map(p => p.kind === 'sale' ? `venda #${esc(p.ref)} ${brl(p.total_cents)}` : `pedido ${esc(p.ref)} finalizado`).join(' · ')}</small>${progressBar(r.loyalty)}
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(statusMessage(r))}</pre></details></div>
-        <div class="fs-actions">${old ? `<button type="button" class="nv-button secondary fs-small" data-fs-skip="${r.id}" title="Tirar da lista sem enviar">Dispensar</button>` : ''}${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`;
+        <div class="fs-actions">${old ? `<button type="button" class="nv-button secondary fs-small" data-fs-skip="${r.id}" title="Tirar da lista sem enviar">Dispensar</button>` : ''}${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-copy="${r.id}" title="Copiar a mensagem para colar no WhatsApp">Copiar</button>${r.sent ? '' : `<button type="button" class="nv-button secondary fs-small" data-fs-done="${r.id}" title="Marcar como enviada (já mandou pelo WhatsApp)">Já enviei</button>`}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-send="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}${r.loyalty?.complete ? `<button type="button" class="nv-button secondary fs-small" data-fs-redeem="${r.id}">Entregar prêmio</button>` : ''}</div></div>`;
     tab.innerHTML = `<div class="fs-row fs-daybar"><label class="nv-field">Compras do dia<input type="date" id="fsDay" value="${data.day}"></label><button type="button" class="nv-button secondary fs-small" id="fsToday">Hoje</button><button type="button" class="nv-button secondary fs-small" id="fsYesterday">Ontem</button>
       <span class="fs-grow"></span><b>${sent} de ${rows.length + pend.length} enviados</b>${rows.length > sent || pend.length ? '<button type="button" class="nv-button fp-whats" id="fsNext">Enviar próximo</button>' : ''}</div>
       ${!config.google_review_url ? '<p class="nv-help fs-warn">Cadastre o link de avaliação do Google em "Configurar" para ele entrar na mensagem.</p>' : ''}
@@ -2296,6 +2311,9 @@
       try { await sendWhats(r.phone, statusMessage(r), { customer_id: r.id, kind: 'status' }); r.sent = true; statusTab(tab, alive); } catch (err) { feedback(err.message, true); }
     };
     tab.querySelectorAll('[data-fs-send]').forEach(b => b.onclick = () => send(b.dataset.fsSend));
+    const find = id => rows.find(x => x.id === id) || pend.find(x => x.id === id);
+    tab.querySelectorAll('[data-fs-copy]').forEach(b => b.onclick = () => { const r = find(b.dataset.fsCopy); if (r) copyMsg(statusMessage(r), b); });
+    tab.querySelectorAll('[data-fs-done]').forEach(b => b.onclick = async () => { const r = find(b.dataset.fsDone); if (!r) return; b.disabled = true; try { await markSent({ customer_id: r.id, kind: 'status' }); r.sent = true; statusTab(tab, alive); } catch (err) { b.disabled = false; feedback(err.message, true); } });
     tab.querySelectorAll('[data-fs-skip]').forEach(b => b.onclick = async () => { const r = pend.find(x => x.id === b.dataset.fsSkip); if (!r || !confirm(`Tirar ${r.name} da lista sem enviar a mensagem?`)) return; try { await api('/store/messages/sent', 'POST', { customer_id: r.id, kind: 'status', campaign: 'dispensada' }); statusTab(tab, alive); } catch (err) { feedback(err.message, true); } });
     tab.querySelectorAll('[data-fs-redeem]').forEach(b => b.onclick = async () => { const r = rows.find(x => x.id === b.dataset.fsRedeem) || pend.find(x => x.id === b.dataset.fsRedeem); try { if (await redeem(r.id, r.name)) statusTab(tab, alive); } catch (err) { feedback(err.message, true); } });
     if ($('fsNext')) $('fsNext').onclick = () => { const next = pend.find(r => !r.sent && waPhone(r.phone)) || rows.find(r => !r.sent && waPhone(r.phone)); if (next) send(next.id); else feedback('Os clientes restantes não têm WhatsApp cadastrado.', true); };
@@ -2312,7 +2330,7 @@
     const row = r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${custLink(r.id, esc(r.name))}</b> <small>${esc(r.phone || 'sem WhatsApp')}</small><br>
         <small><b class="${r.days_left <= 1 ? 'fs-neg' : ''}">${brl(r.expiring_cents)} vence ${cbWhen(r)}</b>${r.expiring_cents < r.balance_cents ? ` · saldo total ${brl(r.balance_cents)}` : ''} · aviso de ${r.stage === 1 ? '1 dia' : r.stage + ' dias'}${r.sent ? ` · avisado ${dmy(r.sent_at)} ${hhmm(r.sent_at)}` : ''}</small>
         <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(reminderMessage(r))}</pre></details></div>
-        <div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Avisado</span>` : ''}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-cb="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}</div></div>`;
+        <div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Avisado</span>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-cb-copy="${r.id}" title="Copiar a mensagem para colar no WhatsApp">Copiar</button>${r.sent ? '' : `<button type="button" class="nv-button secondary fs-small" data-fs-cb-done="${r.id}" title="Marcar como avisado (já mandou pelo WhatsApp)">Já enviei</button>`}${waPhone(r.phone) ? `<button type="button" class="nv-button ${r.sent ? 'secondary' : 'fp-whats'} fs-small" data-fs-cb="${r.id}">${r.sent ? 'Reenviar' : 'Enviar'}</button>` : ''}</div></div>`;
     tab.innerHTML = `<div class="fs-row fs-daybar"><div><small class="nv-help">Saldo em aberto na loja</small><br><b>${brl(data.total_balance_cents)}</b> <small>· ${data.customers_with_balance} cliente(s)</small></div>
         <span class="fs-grow"></span><b>${rows.length - rows.filter(r => !r.sent).length} de ${rows.length} avisados</b>${pending.length ? '<button type="button" class="nv-button fp-whats" id="fsCbNext">Enviar próximo</button>' : ''}</div>
       <p class="nv-help">Clientes com cashback vencendo nos próximos 15 dias. O aviso aparece quando faltam 15, 10, 5 e 1 dia (uma vez em cada etapa). "Enviar" abre o WhatsApp com o valor, a data e as regras.</p>
@@ -2323,6 +2341,8 @@
       try { await sendWhats(r.phone, reminderMessage(r), { customer_id: r.id, kind: 'cashback', campaign: r.campaign }); cashbackTab(tab, alive); } catch (err) { feedback(err.message, true); }
     };
     tab.querySelectorAll('[data-fs-cb]').forEach(b => b.onclick = () => send(b.dataset.fsCb));
+    tab.querySelectorAll('[data-fs-cb-copy]').forEach(b => b.onclick = () => { const r = rows.find(x => x.id === b.dataset.fsCbCopy); if (r) copyMsg(reminderMessage(r), b); });
+    tab.querySelectorAll('[data-fs-cb-done]').forEach(b => b.onclick = async () => { const r = rows.find(x => x.id === b.dataset.fsCbDone); if (!r) return; b.disabled = true; try { await markSent({ customer_id: r.id, kind: 'cashback', campaign: r.campaign }); cashbackTab(tab, alive); } catch (err) { b.disabled = false; feedback(err.message, true); } });
     if ($('fsCbNext')) $('fsCbNext').onclick = () => { const next = rows.find(r => !r.sent && waPhone(r.phone)); if (next) send(next.id); };
     $('fsCbAll').ontoggle = async e => {
       if (!e.target.open) return;
@@ -2354,9 +2374,11 @@
     const sent = rows.filter(r => r.sent).length;
     out.innerHTML = `<div class="fs-row fs-daybar"><b>${sent} de ${rows.length} enviados</b><span class="fs-grow"></span>${rows.length > sent ? '<button type="button" class="nv-button fp-whats" id="fsOfferNext">Enviar próximo</button>' : ''}</div>
       <details><summary>Ver mensagem</summary><pre class="fs-pre">${esc(offerMessage({ name: 'Maria' }, offerText))}</pre></details>
-      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${custLink(r.id, esc(r.name))}</b> <small>${esc(r.phone)}${r.last_buy ? ' · última compra ' + dmy(r.last_buy) : ''}</small></div><div class="fs-actions">${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : `<button type="button" class="nv-button fp-whats fs-small" data-fs-offer="${r.id}">Enviar</button>`}<button type="button" class="nv-button secondary fs-small" data-fs-optout="${r.id}" title="Cliente pediu para não receber ofertas">Não quer ofertas</button></div></div>`).join('') || '<p class="nv-help">Nenhum cliente nesse filtro.</p>'}</div>`;
+      <div class="nv-list">${rows.map(r => `<div class="fs-msg ${r.sent ? 'sent' : ''}"><div class="fs-grow"><b>${custLink(r.id, esc(r.name))}</b> <small>${esc(r.phone)}${r.last_buy ? ' · última compra ' + dmy(r.last_buy) : ''}</small></div><div class="fs-actions"><button type="button" class="nv-button secondary fs-small" data-fs-offer-copy="${r.id}" title="Copiar a mensagem para colar no WhatsApp">Copiar</button>${r.sent ? `<span class="fs-ok">${FPIcon('check')}Enviado</span>` : `<button type="button" class="nv-button secondary fs-small" data-fs-offer-done="${r.id}" title="Marcar como enviada (já mandou pelo WhatsApp)">Já enviei</button><button type="button" class="nv-button fp-whats fs-small" data-fs-offer="${r.id}">Enviar</button>`}<button type="button" class="nv-button secondary fs-small" data-fs-optout="${r.id}" title="Cliente pediu para não receber ofertas">Não quer ofertas</button></div></div>`).join('') || '<p class="nv-help">Nenhum cliente nesse filtro.</p>'}</div>`;
     const send = async id => { const r = rows.find(x => x.id === id); try { await sendWhats(r.phone, offerMessage(r, offerText), { customer_id: r.id, kind: 'offer', campaign: key }); drawOfferList(alive); } catch (err) { feedback(err.message, true); } };
     out.querySelectorAll('[data-fs-offer]').forEach(b => b.onclick = () => send(b.dataset.fsOffer));
+    out.querySelectorAll('[data-fs-offer-copy]').forEach(b => b.onclick = () => { const r = rows.find(x => x.id === b.dataset.fsOfferCopy); if (r) copyMsg(offerMessage(r, offerText), b); });
+    out.querySelectorAll('[data-fs-offer-done]').forEach(b => b.onclick = async () => { b.disabled = true; try { await markSent({ customer_id: b.dataset.fsOfferDone, kind: 'offer', campaign: key }); drawOfferList(alive); } catch (err) { b.disabled = false; feedback(err.message, true); } });
     out.querySelectorAll('[data-fs-optout]').forEach(b => b.onclick = async () => { try { await api(`/store/sales/customers/${b.dataset.fsOptout}/offers`, 'PATCH', { opt_out: true }); feedback('Cliente não receberá mais ofertas.'); drawOfferList(alive); } catch (err) { feedback(err.message, true); } });
     if ($('fsOfferNext')) $('fsOfferNext').onclick = () => { const next = rows.find(r => !r.sent); if (next) send(next.id); };
   }

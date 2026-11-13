@@ -46,6 +46,11 @@ test('página de entrada com demonstração no celular e números ao vivo', {
     await page.locator('#email').fill('ninguem@example.test'); await page.locator('#password').fill('errada');
     await page.locator('#loginBtn').click();
     await page.waitForFunction(() => document.getElementById('loginError').textContent.length > 0);
+    // Tela larga: texto e celular ficam juntos (sem um vão enorme entre eles).
+    await page.setViewportSize({ width: 1915, height: 1000 });
+    const gap = await page.evaluate(() => document.querySelector('.en-stage').getBoundingClientRect().left - document.querySelector('.en-facts').getBoundingClientRect().right);
+    assert.ok(gap < 160, 'vão entre texto e celular: ' + gap);
+    await page.screenshot(shot('home-entrada-larga'));
     // Celular estreito: acesso primeiro, sem rolagem lateral.
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 390 + 1), 'sem rolagem lateral no celular');

@@ -7,7 +7,7 @@
 <meta name="description" content="Fale com o Ficou Pronto pelo WhatsApp.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/home.css?v=9">
+<link rel="stylesheet" href="/home.css?v=10">
 </head>
 <body>
 <header class="st-head">
@@ -16,14 +16,14 @@
   <a class="en-btn" href="/#entrar">Entrar</a>
 </header>
 <main class="st-main">
-<h1>Fale com a gente</h1>
-<p class="st-lead">Mostramos a demonstração, explicamos os planos e, se fizer sentido, marcamos a instalação.</p>
+<h1>Solicite agora um orçamento</h1>
+<p class="st-lead">Respondemos em até 15 minutos.</p>
 <div class="st-cols" style="border:0">
   <form class="st-form" id="contactForm" style="border:0;padding:0">
     <label>Nome da loja<input id="cStore" required autocomplete="organization"></label>
     <label>Seu nome<input id="cName" autocomplete="name"></label>
-    <label>Ramo<select id="cKind"><option>Pet shop · banho e tosa</option><option>Assistência técnica</option><option>Oficina ou funilaria</option><option>Lava-jato</option><option>Outro</option></select></label>
-    <button class="en-btn" type="submit">Continuar no WhatsApp</button>
+    <label>Ramo<select id="cKind"><option>Pet shop · banho e tosa</option><option>Assistência técnica</option><option>Oficina ou funilaria</option><option>Estética automotiva</option><option>Outro</option></select></label>
+    <button class="en-btn" type="submit">Solicitar orçamento pelo WhatsApp</button>
     <p class="en-error" id="cError" role="alert"></p>
   </form>
   <div class="st-side" style="border:0;padding:0">
@@ -38,7 +38,7 @@
 (()=>{const $=id=>document.getElementById(id);let wa='';
 fetch('/api/public/contact').then(r=>r.ok?r.json():{}).then(c=>{wa=c.sales_whatsapp||'';$('cPhone').innerHTML=wa?'<a href="https://wa.me/'+wa+'" target="_blank" rel="noopener">+'+wa.replace(/^(\d{2})(\d{2})(\d{4,5})(\d{4})$/,'$1 $2 $3-$4')+'</a>':'Em breve.'}).catch(()=>{$('cPhone').textContent='Em breve.'});
 $('contactForm').addEventListener('submit',e=>{e.preventDefault();if(!wa){$('cError').textContent='O WhatsApp comercial ainda não está disponível.';return}
-const t='Olá! Quero saber mais sobre o Ficou Pronto.\nLoja: '+$('cStore').value.trim()+($('cName').value.trim()?'\nNome: '+$('cName').value.trim():'')+'\nRamo: '+$('cKind').value;
+const t='Olá! Quero um orçamento do Ficou Pronto.\nLoja: '+$('cStore').value.trim()+($('cName').value.trim()?'\nNome: '+$('cName').value.trim():'')+'\nRamo: '+$('cKind').value;
 const w=window.open('https://wa.me/'+wa+'?text='+encodeURIComponent(t),'_blank','noopener');if(!w)location.href='https://wa.me/'+wa+'?text='+encodeURIComponent(t)})})();</script>
 </body>
 </html>

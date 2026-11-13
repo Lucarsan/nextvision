@@ -22,7 +22,7 @@ $script:BackupDir = Join-Path $script:DataDir 'backups'
 $script:BackupKeep = 30
 $script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
-$script:AgentVersion = '0.5.0'
+$script:AgentVersion = '0.5.1'
 $script:DefaultApi = 'https://app.ficoupronto.com'
 $script:Services = @(
   @{ Id = 'FicouPronto.MediaMTX'; Name = 'Ficou Pronto - Video local (MediaMTX)' },
@@ -130,6 +130,31 @@ function Get-FpLocalNetwork {
   if (-not $cfg) { return $null }
   $ip = @($cfg.IPv4Address)[0].IPAddress
   return [pscustomobject]@{ Interface = $cfg.InterfaceAlias; IP = $ip; Gateway = @($cfg.IPv4DefaultGateway)[0].NextHop; Prefix = ($ip -replace '\.\d+$', '') }
+}
+
+# Rede em que o PC esta agora, para a central ver de longe (sem senhas):
+# Wi-Fi (nome da rede) ou cabo, IP do PC e roteador. O nome do Wi-Fi vem do
+# netsh; se o Windows nao entregar, usa o nome do perfil de rede.
+function Get-FpNetworkInfo {
+  $net = Get-FpLocalNetwork
+  if (-not $net) { return [pscustomobject]@{ State = 'down'; Detail = 'PC sem rede com roteador'; Prefix = '' } }
+  $adapter = Get-NetAdapter -InterfaceAlias $net.Interface -ErrorAction SilentlyContinue
+  $wifi = ($adapter -and ([string]$adapter.PhysicalMediaType -match '802\.11|Wireless')) -or ($net.Interface -match 'Wi-?Fi|WLAN|Wireless|Sem fio')
+  $name = ''
+  if ($wifi) {
+    try {
+      $lines = @(& netsh.exe wlan show interfaces 2>$null)
+      foreach ($l in $lines) { if ($l -match '^\s*SSID\s*:\s*(.+?)\s*$') { $name = $Matches[1]; break } }
+    } catch { }
+  }
+  if (-not $name) {
+    try { $p = Get-NetConnectionProfile -InterfaceAlias $net.Interface -ErrorAction Stop | Select-Object -First 1; if ($p) { $name = [string]$p.Name } } catch { }
+  }
+  $name = ($name -replace '[\r\n"]', '').Trim()
+  if ($name.Length -gt 60) { $name = $name.Substring(0, 60) }
+  $kind = $(if ($wifi) { 'Wi-Fi' } else { 'Cabo' })
+  $label = $(if ($name) { $kind + ' "' + $name + '"' } else { $kind })
+  return [pscustomobject]@{ State = 'ok'; Detail = ($label + ' - PC ' + $net.IP + ' - roteador ' + $net.Gateway); Prefix = $net.Prefix }
 }
 
 function Format-FpMac([string]$Mac) { return (($Mac -replace '[^0-9A-Fa-f]', '').ToUpper() -replace '(..)(?!$)', '$1-') }

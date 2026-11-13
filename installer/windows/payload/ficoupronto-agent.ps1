@@ -122,12 +122,22 @@ try {
     }
 
     if ($now -ge $nextHeartbeat) {
-      $camStates = @(@($config.cameras) | ForEach-Object { $s = $state[$_.id]; @{ id = $_.id; state = $s.State; detail = [string]$s.Status } })
+      # Rede do PC: nome do Wi-Fi (ou cabo), IP e roteador, para diagnosticar de longe.
+      $netInfo = $(try { Get-FpNetworkInfo } catch { [pscustomobject]@{ State = 'unknown'; Detail = 'rede nao lida'; Prefix = '' } })
+      $camStates = @(@($config.cameras) | ForEach-Object {
+          $s = $state[$_.id]; $d = [string]$s.Status
+          # Camera numa faixa diferente da do PC: o PC esta em outra rede (ou a camera mudou de roteador).
+          if ($s.State -ne 'ok' -and $_.source -ne 'test' -and $netInfo.Prefix -and ([string]$_.host -match '^\d+\.\d+\.\d+\.\d+$') -and (([string]$_.host -replace '\.\d+$', '') -ne $netInfo.Prefix)) {
+            $d = $d + ' - fora da rede do PC (' + $netInfo.Prefix + '.x)'
+          }
+          if ($d.Length -gt 200) { $d = $d.Substring(0, 200) }
+          @{ id = $_.id; state = $s.State; detail = $d } })
       $okCount = @($camStates | Where-Object { $_.state -eq 'ok' }).Count
       $tunnel = Get-Service -Name 'FicouPronto.Tunel' -ErrorAction SilentlyContinue
       $free = [math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1)
       $body = @{ agent_version = $paths.Version; clock = [datetime]::UtcNow.ToString('o'); recording = $recordingStatus; cameras = $camStates; components = @{
           service = @{ state = 'ok' }
+          network = @{ state = [string]$netInfo.State; detail = [string]$netInfo.Detail }
           relay = @{ state = $(if (Test-FpTcpPort '127.0.0.1' 8554 500) { 'ok' } else { 'down' }) }
           tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
           publisher = @{ state = $(if ($camStates.Count -eq 0) { 'unknown' } elseif ($okCount -eq $camStates.Count) { 'ok' } elseif ($okCount -gt 0) { 'degraded' } else { 'down' }) }

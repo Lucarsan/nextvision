@@ -98,9 +98,12 @@
     const rules = config.loyalty_rules ? '\nRegras: ' + config.loyalty_rules : '';
     if (l.complete) return `Você completou o cartão fidelidade e já pode resgatar: ${l.reward}. É só pedir aqui na loja.` + rules;
     const card = `${l.checkins} de ${l.target} ${l.target === 1 ? u.one : u.many}. ${l.remaining === 1 ? 'Falta 1 ' + u.one : 'Faltam ' + l.remaining + ' ' + u.many} para ganhar ${l.reward}.`;
+    // Dia de promoção: sem cartão (o cliente não precisa saber que segue em 0 de 10); só convite para voltar.
     if (promoDow != null) {
       const day = WEEKDAYS[promoDow] + (promoDow === 0 || promoDow === 6 ? '' : '-feira');
-      return `${u.many[0].toUpperCase() + u.many.slice(1)} de ${day} (promoção) não contam no cartão fidelidade.\nSeu cartão fidelidade: ${card}`;
+      return window.__fpNiche === 'pet'
+        ? `Foi um prazer cuidar do seu pet na promoção de ${day}. Esperamos vocês de volta em breve!`
+        : `Foi um prazer atender você na promoção de ${day}. Esperamos você de volta em breve!`;
     }
     return `Cartão fidelidade: ${card}` + rules;
   }

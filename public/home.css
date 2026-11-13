@@ -104,3 +104,19 @@ a{color:#1E3A5F}a:hover{color:#0F2440}
 /* Celular reto (páginas internas): botões encostados na lateral, sem a espessura da versão inclinada */
 .st-demo .en-phone::before,.st-demo .en-phone::after{left:-3px;width:3px;border-radius:2px 0 0 2px}
 .st-cta{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;margin:8px 0 0}.st-cta span{font-size:15px;color:var(--muted)}
+
+/* Lojas parceiras: mapa e lista por nicho */
+.pt-by{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;margin:0 0 20px}
+.pt-by span{font-size:15px;color:var(--muted);margin-right:4px}
+.pt-tab,.pt-chip{min-height:44px;padding:0 18px;border:1px solid #D1D5DB;border-radius:6px;background:#fff;color:var(--ink);font:inherit;font-size:15px;font-weight:500;cursor:pointer}
+.pt-tab[aria-pressed=true],.pt-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:#fff}
+.pt-map{height:460px;border:1px solid var(--line);border-radius:6px;z-index:0}
+.pt-pin span{display:block;width:22px;height:22px;border-radius:50% 50% 50% 0;background:var(--accent);border:2px solid #fff;box-shadow:0 1px 4px rgba(17,24,39,.4);transform:rotate(-45deg)}
+.pt-chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.pt-chip{min-height:40px;padding:0 14px;font-size:14px}
+.pt-list{border-bottom:1px solid #D1D5DB}
+.pt-card{display:grid;grid-template-columns:88px minmax(0,1fr);gap:24px;padding:24px 0;border-top:1px solid #D1D5DB}
+.pt-logo{width:88px;height:88px;border:1px solid var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff}
+.pt-logo img{width:100%;height:100%;object-fit:contain}.pt-logo span{font-weight:700;color:var(--muted)}
+.pt-card h2{margin:0 0 2px;font-size:19px}.pt-card p{margin:0 0 6px;font-size:16px;line-height:1.55;color:var(--text)}.pt-card .pt-meta{font-size:14px;color:var(--soft)}
+@media(max-width:520px){.pt-map{height:360px}.pt-card{grid-template-columns:64px minmax(0,1fr);gap:16px}.pt-logo{width:64px;height:64px}}

@@ -17,11 +17,17 @@ button:disabled{background:#E5E7EB;color:#9CA3AF;cursor:not-allowed}button svg{w
 input.bad{border-color:#F04438}
 .err{color:#b42318;font-size:14px;min-height:20px;margin:10px 0 0}.note{font-size:12px;color:#6B7280;text-align:center;line-height:1.5}
 .wordmark{font-size:13px;font-weight:700;color:#6B7280;text-align:center;margin-top:auto}.wordmark span{color:#F25C1F}
+.mine h1{margin-bottom:4px}.mine p.lead{margin-bottom:12px}
+.order{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid #EAECF0;border-radius:14px;text-decoration:none;color:inherit;margin-top:10px}
+.order:hover{border-color:#F25C1F}.order div{flex:1;min-width:0}.order b{display:block;font-size:16px}.order small{display:block;color:#4B5563;font-size:13px;margin-top:2px}
+.st{flex:none;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:#FFF7ED;color:#9A3412}.st.live{background:#FEF3F2;color:#B42318}.st.done{background:#ECFDF3;color:#027a48}
+.go{flex:none;color:#9CA3AF;font-size:20px}
 .done{display:none}.done a{display:block;text-align:center;margin-top:12px;color:#027a48;font-weight:700}
 </style></head><body><main>
-<div class="store"><div class="mark" id="mark">·</div><div><b id="storeName">Carregando…</b><span>Atendimento pelo WhatsApp</span></div></div>
+<div class="store"><div class="mark" id="mark">·</div><div><b id="storeName">Carregando…</b><span>Seus pedidos e atendimento</span></div></div>
+<section class="card mine" id="mineCard" hidden><h1 id="mineTitle">Seus pedidos</h1><p class="lead">Toque no pedido para acompanhar a fila, as etapas e o ao vivo.</p><div id="mineList"></div></section>
 <section class="card" id="formCard">
-  <h1>Fale com a loja</h1><p class="lead">Informe seu nome e WhatsApp. Em seguida abrimos a conversa com a loja para você enviar seus arquivos.</p>
+  <h1>Fale com a loja</h1><p class="lead">Informe seu nome e WhatsApp. Em seguida abrimos a conversa com a loja.</p>
   <form id="f" autocomplete="on" novalidate>
     <label for="name">Seu nome</label><input id="name" name="name" autocomplete="name" maxlength="80" required placeholder="Ex.: Maria Souza">
     <label for="phone">Seu WhatsApp (com DDD)</label><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" required placeholder="(85) 99999-9999">
@@ -30,8 +36,9 @@ input.bad{border-color:#F04438}
     <p class="err" id="err" role="alert"></p>
   </form>
   <p class="note">Seu nome e número ficam só no cadastro desta loja, para o atendimento.</p>
+  <p class="note" id="mineNote">Já recebeu um link de pedido desta loja neste celular? Seus pedidos aparecem aqui no topo.</p>
 </section>
-<section class="card done" id="doneCard"><h1>Tudo certo!</h1><p class="lead">Abrimos o WhatsApp da loja. Envie seus arquivos por lá.</p><a id="again" href="#">Abrir o WhatsApp de novo</a></section>
+<section class="card done" id="doneCard"><h1>Tudo certo!</h1><p class="lead">Abrimos o WhatsApp da loja. Continue a conversa por lá.</p><a id="again" href="#">Abrir o WhatsApp de novo</a></section>
 <div class="wordmark">ficou<span>pronto!</span></div>
 </main>
 <script>
@@ -63,6 +70,19 @@ input.bad{border-color:#F04438}
     storeOk = !!s.ready;
     if (!s.ready) fail('A loja ainda está configurando o atendimento por aqui. Fale com o balcão.'); else update();
   }).catch(() => { $('storeName').textContent = 'Loja não encontrada'; storeOk = false; fail('Este QR code não está mais ativo. Fale com o balcão.'); });
+  // Área do cliente: só aparece no celular que já abriu um link de pedido enviado pela loja.
+  const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const STATUS = { queued: ['Na fila', ''], live: ['Em atendimento', 'live'], paused: ['Pausado', ''], completed: ['Pronto', 'done'] };
+  let visitor = null; try { visitor = localStorage.getItem('fp_visitor'); } catch {}
+  if (/^[0-9a-f-]{36}$/.test(visitor || '')) fetch('/api/public/stores/' + encodeURIComponent(slug) + '/my-orders', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visitor }) })
+    .then(r => r.ok ? r.json() : null).then(d => {
+      if (!d?.known || !d.orders?.length) return;
+      $('mineTitle').textContent = (d.name ? 'Olá, ' + d.name + '! ' : '') + 'Seus pedidos';
+      $('mineList').innerHTML = d.orders.map(o => { const [label, cls] = STATUS[o.status] || ['', '']; const when = new Date(o.completed_at || o.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        return '<a class="order" href="' + esc(o.link) + '"><div><b>' + esc(o.item || ('Pedido ' + (o.number || ''))) + '</b><small>' + esc([o.service, o.step && o.status !== 'queued' ? o.step : '', 'pedido ' + (o.number || ''), when].filter(Boolean).join(' · ')) + '</small></div><span class="st ' + cls + '">' + esc(label) + '</span><span class="go" aria-hidden="true">›</span></a>'; }).join('');
+      $('mineCard').hidden = false; $('mineNote').hidden = true;
+      document.querySelector('#formCard h1').textContent = 'Falar com a loja';
+    }).catch(() => {});
   try { const saved = JSON.parse(localStorage.getItem('fp_contact') || 'null'); if (saved) { $('name').value = saved.name || ''; $('phone').value = saved.phone || ''; } } catch {}
   for (const id of ['name', 'phone']) for (const ev of ['input', 'change', 'blur']) $(id).addEventListener(ev, update);
   // Preenchimento automático do navegador às vezes não dispara "input".

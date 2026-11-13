@@ -565,13 +565,13 @@
         cbWanted = false; svc = {}; svcCart = []; servicesCache = null; cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller;
         lastSale = { pending: p, live_order: p.live_order, customer: { id: p.customer_id, name: p.customer_name, phone: p.customer_phone } };
         feedback(`Venda guardada em "A receber" (#${p.number}): ${brl(p.total_cents)}.` + (p.live_order ? ` Pedido ${p.live_order.order_number} aberto.` : ''));
-        if (p.live_order) window.FPOrders?.refresh(); modeTouched = false;
+        if (p.live_order) window.FPOrders?.share?.(p.live_order.id); modeTouched = false;
         await loadCash(box, alive);
       } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
       return;
     }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); setTimeout(refreshDue, 300); modeTouched = false; if (lastSale.live_order) window.FPOrders?.refresh(); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+    try { lastSale = await api('/store/sales', 'POST', body); setTimeout(refreshDue, 300); modeTouched = false; if (lastSale.live_order) window.FPOrders?.share?.(lastSale.live_order.id); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
       receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
       if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
@@ -701,7 +701,7 @@
     try {
       const r = await api(`/store/sales/pending/${p.id}/open-order`, 'POST', { process_id: proc });
       feedback(r.orders.length > 1 ? `Pedidos ${r.orders.map(o => o.order_number + (o.pet_name ? ' (' + o.pet_name + ')' : '')).join(' e ')} abertos. Inicie pela lista de pedidos.` : `Pedido ${r.orders[0].order_number} aberto. Inicie pela lista de pedidos.`);
-      window.FPOrders?.refresh(); drawPending(box, alive);
+      window.FPOrders?.share?.(r.orders.map(o => o.id)); drawPending(box, alive);
     } catch (err) { feedback(err.message, true); } finally { if (btn.isConnected) btn.disabled = false; }
   }
   function payPending(p, box, alive) {

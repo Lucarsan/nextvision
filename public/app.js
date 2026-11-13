@@ -107,7 +107,7 @@ async function cameraAdmin(){
 }
 
 el('logout').onclick=()=>{sessionStorage.removeItem('nv_token');location.replace('/');};
-if(!token)location.replace('/#entrar');else api('/me').then(enter).catch(()=>{sessionStorage.removeItem('nv_token');location.replace('/#entrar')});
+if(!token)location.replace('/entrar');else api('/me').then(enter).catch(()=>{sessionStorage.removeItem('nv_token');location.replace('/entrar')});
 
 // ---- Visão geral: responde "todas as lojas estão funcionando e em dia?" ----
 const chip=(kind,text)=>'<span class="ct-chip '+kind+'">'+safe(text)+'</span>';

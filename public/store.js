@@ -569,7 +569,7 @@ document.addEventListener('visibilitychange', refreshVisible);
 window.addEventListener('focus', refreshVisible);
 setInterval(refreshVisible, 5000);
 (async () => {
-  if (!token) { location.replace('/#entrar'); return; }
+  if (!token) { location.replace('/entrar'); return; }
   try {
     const me = await api('/me'); if (!['owner', 'operator'].includes(me.role)) { location.replace('/'); return; } window.__fpRole = me.role;
     storeSettings = await api('/store/settings'); window.__fpNiche = storeSettings.niche;

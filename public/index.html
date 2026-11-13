@@ -3,64 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ficou Pronto — seu cliente acompanha o serviço ao vivo</title>
-<meta name="description" content="Ficou Pronto: o cliente acompanha pelo celular cada etapa do serviço, com vídeo ao vivo da bancada. Para assistências técnicas, oficinas, lava-jatos, pet shops e mais.">
+<title>Ficou Pronto — instale no seu petshop</title>
+<meta name="description" content="Câmeras instaladas, sistema completo da loja e o tutor acompanhando o pet ao vivo pelo celular. A gente instala e cuida da parte técnica.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/home.css?v=13">
+<link rel="stylesheet" href="/home.css?v=14">
 </head>
 <body>
-<div class="en-split">
-  <section class="en-access" aria-labelledby="loginTitle">
-    <a class="fp-wordmark" href="/" aria-label="Ficou Pronto">ficou<span class="p">pronto</span></a>
-    <form class="en-form" id="loginForm">
-      <div>
-        <h1 id="loginTitle">Entrar no painel</h1>
-        <p class="en-muted">Para lojas, técnicos e central.</p>
-      </div>
-      <div class="en-session" id="session"><span>Este navegador já está conectado.</span><a class="en-btn light" id="openPanel" href="/loja.html">Abrir painel</a></div>
-      <label>E-mail<input id="email" name="email" type="email" autocomplete="username" required></label>
-      <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
-      <button type="submit" class="en-btn" id="loginBtn">Entrar</button>
-      <p id="loginError" class="en-error" role="alert"></p>
-      <a class="en-link" id="ctaWhats" href="#contato">Ainda não usa? Fale com a gente</a>
-    </form>
-    <p class="en-small">© <span id="year"></span> Ficou Pronto · Fortaleza, CE</p>
-  </section>
-
-  <section class="en-show" aria-labelledby="showTitle">
-    <nav class="st-nav" aria-label="Páginas"><a href="/o-que-e">O que é o Ficou Pronto?</a><a href="/segmentos">Segmentos</a><a href="/privacidade">Privacidade</a><a href="/lojas">Lojas</a><a href="/planos">Planos</a><a href="/fale-conosco">Contato</a></nav>
-    <div class="en-show-row">
-    <div class="en-facts">
-      <h2 id="showTitle">Instale no seu petshop.</h2>
-      <p class="en-muted" style="margin:0">Demonstração ao vivo: o pedido anda pelas etapas sozinho, como numa loja de verdade.</p>
-      <dl id="facts" hidden>
+<header class="st-head">
+  <a class="fp-wordmark" href="/" aria-label="Ficou Pronto, página inicial">ficou<span class="p">pronto</span></a>
+  <nav class="st-nav" aria-label="Páginas"><a href="/o-que-e">O que é o Ficou Pronto?</a><a href="/segmentos">Segmentos</a><a href="/privacidade">Privacidade</a><a href="/lojas">Lojas</a><a href="/planos">Planos</a><a href="/fale-conosco">Contato</a></nav>
+  <a class="en-btn" id="enterBtn" href="/entrar">Entrar</a>
+</header>
+<section class="hb-hero" aria-labelledby="heroTitle">
+  <div class="hb-wrap">
+    <div class="hb-copy">
+      <h1 id="heroTitle">Instale no seu petshop.</h1>
+      <p class="hb-lead">Um conjunto só: câmeras instaladas, sistema da loja e o tutor acompanhando o pet ao vivo pelo celular.</p>
+      <div class="hb-ctas"><a class="en-btn hb-accent" id="ctaWhats" href="#contato">Quero no meu petshop</a><a class="en-btn light" href="/o-que-e">O que é o Ficou Pronto?</a></div>
+      <p class="en-small">Instalação e manutenção pela nossa equipe · Fortaleza, CE</p>
+      <dl id="facts" class="hb-facts" hidden>
         <div><dt>vezes que um cliente abriu o acompanhamento</dt><dd id="fOpens">—</dd></div>
         <div><dt>até abrir, depois de receber o link</dt><dd id="fOpen">—</dd></div>
         <div><dt>pedidos acompanhados</dt><dd id="fLinks">—</dd></div>
       </dl>
       <p class="en-note" id="factsNote" hidden></p>
     </div>
-    <div class="en-stage">
-      <div class="en-phone">
+    <div class="hb-stage">
+      <img class="hb-kit" src="/img/site/kit.webp" width="1024" height="572" alt="Kit de instalação: câmeras, cabos, fontes e acessórios (imagem ilustrativa)">
+      <div class="en-phone hb-phone">
         <div class="en-island" aria-hidden="true"></div>
         <div class="en-screen">
           <iframe id="demoFrame" title="Demonstração: a página de acompanhamento que o cliente recebe" loading="lazy" src="/p/62fce6047564204fa4db22e8"></iframe>
         </div>
       </div>
     </div>
-    </div>
-  </section>
-</div>
-
+  </div>
+</section>
+<section class="hb-kitlist" aria-labelledby="kitTitle">
+  <div class="hb-wrap-col">
+    <h2 id="kitTitle">O que vem no conjunto</h2>
+    <ol class="st-steps">
+      <li><b>01</b><h3>Câmeras instaladas</h3><p>Nas áreas de banho, tosa e espera. A quantidade depende do plano.</p></li>
+      <li><b>02</b><h3>Computador da loja conectado</h3><p>Nosso programa transmite as câmeras, e a nossa central acompanha se está tudo funcionando.</p></li>
+      <li><b>03</b><h3>Sistema completo</h3><p>Pedidos, caixa, clientes, animais, metas, cashback e mensagens.</p></li>
+      <li><b>04</b><h3>Link para o tutor</h3><p>Vai pelo WhatsApp. Ele acompanha a fila, as etapas e o vídeo ao vivo.</p></li>
+    </ol>
+    <p><a class="en-link" href="/o-que-e">Ver tudo o que o Ficou Pronto faz</a></p>
+  </div>
+</section>
 <main class="en-more">
-  <h2 id="como-funciona">Como funciona</h2>
-  <ol class="en-steps">
-    <li><b>01</b><h3>Recebeu, registrou</h3><p>A loja abre o pedido no celular ou no computador, registra como o item chegou e envia o link ao cliente pelo WhatsApp.</p></li>
-    <li><b>02</b><h3>O cliente acompanha</h3><p>Pelo link, ele vê a posição na fila, a etapa atual e o vídeo ao vivo nas etapas que a loja escolher.</p></li>
-    <li><b>03</b><h3>Ficou pronto, avisou</h3><p>Ao concluir, a loja avisa no WhatsApp com um toque. O histórico do pedido fica guardado.</p></li>
-  </ol>
-  <p><a class="en-link" href="/o-que-e">Ver tudo o que o Ficou Pronto faz</a></p>
   <h2>Para quem</h2>
   <p class="en-niches">Pet shops e banho e tosa, assistências técnicas, oficinas, funilarias, lava-jatos e cozinhas. Cada loja define as etapas do seu serviço e em quais delas a câmera aparece. A instalação das câmeras é feita pela nossa equipe.</p>
   <div class="en-contact" id="contato">
@@ -68,32 +60,21 @@
     <a class="en-btn" id="ctaWhats2" href="#contato">Conversar no WhatsApp</a>
   </div>
 </main>
-<footer class="en-foot"><span>© <span id="year2"></span> Ficou Pronto</span><span>Contagem anônima: sem nomes nem telefones; aberturas feitas pelas lojas e pela demonstração não entram.</span></footer>
+<footer class="en-foot"><span>© <span id="year"></span> Ficou Pronto · Fortaleza, CE</span><span>Contagem anônima: sem nomes nem telefones; aberturas feitas pelas lojas e pela demonstração não entram.</span></footer>
 
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  $('year').textContent = $('year2').textContent = new Date().getFullYear();
-  if (location.hash === '#entrar') setTimeout(() => $('email').focus(), 30);
+  // Endereço antigo do acesso: o login agora fica em /entrar.
+  if (location.hash === '#entrar') { location.replace('/entrar'); return; }
+  $('year').textContent = new Date().getFullYear();
   const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html';
-  const go = role => location.replace(panelFor(role));
-  // Sessão já aberta neste navegador: mostra o atalho para o painel.
+  // Sessão já aberta neste navegador: o botão do topo leva direto ao painel.
   const saved = sessionStorage.getItem('nv_token');
-  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openPanel').href = panelFor(u.role); $('session').classList.add('on'); } }).catch(() => {});
-  $('loginForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
-    try {
-      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw Error(data.error || 'Não foi possível entrar');
-      sessionStorage.setItem('nv_token', data.token); try { localStorage.setItem('fp_staff', '1'); } catch { }
-      go(data.user.role);
-    } catch (err) { $('loginError').textContent = err.message; btn.disabled = false; }
-  });
+  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('enterBtn').href = panelFor(u.role); $('enterBtn').textContent = 'Abrir painel'; } }).catch(() => {});
   fetch('/api/public/contact').then(r => r.ok ? r.json() : {}).then(c => {
     if (!c.sales_whatsapp) return;
-    const href = 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent('Olá! Quero saber mais sobre o Ficou Pronto para a minha loja.');
+    const href = 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent('Olá! Quero o Ficou Pronto no meu petshop.');
     for (const id of ['ctaWhats', 'ctaWhats2']) { const a = $(id); a.href = href; a.target = '_blank'; a.rel = 'noopener'; }
   }).catch(() => {});
   // Números ao vivo (só aparecem se a central ligou os números públicos).
@@ -111,31 +92,6 @@
     } catch { }
   }
   facts(); setInterval(() => { if (!document.hidden) facts(); }, 120000);
-  // Inclinação do celular igual à da imagem de referência (1024×711): cantos externos medidos nos pixels
-  // (sup. esq. 695,75 · sup. dir. 953,96 · inf. dir. 891,624 · inf. esq. 635,601), relativos ao sup. esq.
-  const REF = [[0, 0], [257.4, 21.6], [195.8, 548.9], [-60.3, 526.6]];
-  function homography(src, dst) {
-    const A = [], b = [];
-    for (let i = 0; i < 4; i++) {
-      const [x, y] = src[i], [u, v] = dst[i];
-      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
-      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
-    }
-    for (let c = 0; c < 8; c++) { // eliminação de Gauss
-      let p = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
-      [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
-      for (let r = 0; r < 8; r++) if (r !== c) { const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; b[r] -= f * b[c]; }
-    }
-    const h = b.map((v, i) => v / A[i][i]);
-    return 'matrix3d(' + [h[0], h[3], 0, h[6], h[1], h[4], 0, h[7], 0, 0, 1, 0, h[2], h[5], 0, 1].join(',') + ')';
-  }
-  const phone = document.querySelector('.en-phone');
-  function tilt() {
-    phone.style.transform = 'none';
-    const w = phone.offsetWidth, h = phone.offsetHeight, k = w / Math.hypot(257.4, 21.6);
-    phone.style.transform = homography([[0, 0], [w, 0], [w, h], [0, h]], REF.map(([x, y]) => [x * k, y * k]));
-  }
-  tilt(); addEventListener('resize', tilt);
 })();
 </script>
 </body>

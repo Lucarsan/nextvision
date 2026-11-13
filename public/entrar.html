@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Entrar · Ficou Pronto</title>
+<meta name="description" content="Câmeras instaladas, sistema completo da loja e o tutor acompanhando o pet ao vivo pelo celular. A gente instala e cuida da parte técnica.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/home.css?v=14">
+</head>
+<body>
+<header class="st-head">
+  <a class="fp-wordmark" href="/" aria-label="Ficou Pronto, página inicial">ficou<span class="p">pronto</span></a>
+  <nav class="st-nav" aria-label="Páginas"><a href="/o-que-e">O que é o Ficou Pronto?</a><a href="/segmentos">Segmentos</a><a href="/privacidade">Privacidade</a><a href="/lojas">Lojas</a><a href="/planos">Planos</a><a href="/fale-conosco">Contato</a></nav>
+</header>
+<main class="en-login">
+  <form class="en-form" id="loginForm">
+      <div>
+        <h1 id="loginTitle">Entrar no painel</h1>
+        <p class="en-muted">Para lojas, técnicos e central.</p>
+      </div>
+      <div class="en-session" id="session"><span>Este navegador já está conectado.</span><a class="en-btn light" id="openPanel" href="/loja.html">Abrir painel</a></div>
+      <label>E-mail<input id="email" name="email" type="email" autocomplete="username" required></label>
+      <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="en-btn" id="loginBtn">Entrar</button>
+      <p id="loginError" class="en-error" role="alert"></p>
+      <a class="en-link" id="ctaWhats" href="/fale-conosco">Ainda não usa? Fale com a gente</a>
+    </form>
+</main>
+<footer class="en-foot"><span>© <span id="year"></span> Ficou Pronto · Fortaleza, CE</span><a href="/fale-conosco">Fale com a gente</a></footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  $('year').textContent = new Date().getFullYear();
+  setTimeout(() => $('email').focus(), 30);
+  const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html';
+  const go = role => location.replace(panelFor(role));
+  // Sessão já aberta neste navegador: mostra o atalho para o painel.
+  const saved = sessionStorage.getItem('nv_token');
+  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openPanel').href = panelFor(u.role); $('session').classList.add('on'); } }).catch(() => {});
+  $('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
+    try {
+      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw Error(data.error || 'Não foi possível entrar');
+      sessionStorage.setItem('nv_token', data.token); try { localStorage.setItem('fp_staff', '1'); } catch { }
+      go(data.user.role);
+    } catch (err) { $('loginError').textContent = err.message; btn.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

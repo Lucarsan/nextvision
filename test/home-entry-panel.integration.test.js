@@ -42,20 +42,25 @@ test('página de entrada com demonstração no celular e números ao vivo', {
     await page.waitForTimeout(1500);
     assert.equal((await f.db.query('SELECT count(*)::int n FROM link_visits WHERE order_id = $1', [demo])).rows[0].n, before, 'celular de demonstração não conta visita');
     await page.screenshot(shot('home-entrada'));
-    // Login continua funcionando a partir da nova tela.
+    // Página inicial: conjunto completo (foto do kit + celular) e o botão Entrar no topo.
+    assert.equal(await page.locator('h1').innerText(), 'Instale no seu petshop.');
+    assert.equal(await page.locator('.hb-kitlist .st-steps li').count(), 4);
+    assert.ok(await page.locator('img.hb-kit').evaluate(i => i.complete && i.naturalWidth > 0), 'foto do kit carrega');
+    assert.equal(await page.locator('#enterBtn').getAttribute('href'), '/entrar');
+    // Login fica em /entrar; o endereço antigo /#entrar leva para lá.
+    await page.goto('about:blank'); await page.goto(f.base + '/#entrar'); await page.waitForURL(/\/entrar$/);
     await page.locator('#email').fill('ninguem@example.test'); await page.locator('#password').fill('errada');
     await page.locator('#loginBtn').click();
     await page.waitForFunction(() => document.getElementById('loginError').textContent.length > 0);
-    // Tela larga: texto e celular ficam juntos (sem um vão enorme entre eles).
+    await page.screenshot(shot('entrar'));
+    await page.goto(f.base + '/');
     await page.setViewportSize({ width: 1915, height: 1000 });
-    const gap = await page.evaluate(() => document.querySelector('.en-stage').getBoundingClientRect().left - document.querySelector('.en-facts').getBoundingClientRect().right);
-    assert.ok(gap < 160, 'vão entre texto e celular: ' + gap);
     await page.screenshot(shot('home-entrada-larga'));
     // Menu da entrada leva às páginas do site (endereços sem .html), e cada página marca onde está.
     await page.setViewportSize({ width: 1440, height: 1000 });
     const pages = { '/o-que-e': 'O que é o Ficou Pronto?', '/segmentos': 'Segmentos', '/privacidade': 'Privacidade', '/lojas': 'Lojas', '/planos': 'Planos', '/fale-conosco': 'Contato' };
-    assert.deepEqual(await page.locator('.en-show .st-nav a').evaluateAll(as => as.map(a => a.getAttribute('href'))), Object.keys(pages));
-    await page.locator('.en-show .st-nav a', { hasText: 'Planos' }).click();
+    assert.deepEqual(await page.locator('.st-head .st-nav a').evaluateAll(as => as.map(a => a.getAttribute('href'))), Object.keys(pages));
+    await page.locator('.st-head .st-nav a', { hasText: 'Planos' }).click();
     await page.waitForURL(/\/planos$/);
     for (const [path, label] of Object.entries(pages)) {
       await page.goto(f.base + path);
@@ -70,6 +75,9 @@ test('página de entrada com demonstração no celular e números ao vivo', {
     // Endereço antigo leva para a página nova.
     await page.goto(f.base + '/como-funciona'); assert.match(page.url(), /\/o-que-e$/);
     assert.equal(await page.locator('.st-area').count(), 8);
+    assert.equal(await page.locator('.st-area img').count(), 9);
+    for (const img of await page.locator('.st-area img').all()) { await img.scrollIntoViewIfNeeded(); assert.ok(await img.evaluate(i => i.complete && i.naturalWidth > 0), await img.getAttribute('src')); }
+    await page.screenshot({ ...shot('pagina-o-que-e-completa'), fullPage: true });
     await page.goto(f.base + '/');
     // Celular estreito: acesso primeiro, sem rolagem lateral.
     await page.setViewportSize({ width: 390, height: 844 });

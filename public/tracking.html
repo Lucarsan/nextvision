@@ -109,6 +109,9 @@ const token=location.pathname.split('/').filter(Boolean).pop();
 // Medição anônima do acompanhamento: um número aleatório do aparelho (sem nome, telefone ou IP),
 // tempo com a página visível e tempo assistindo ao vivo. Enviado a cada 30 s e ao sair da página.
 const fpStats=(()=>{
+ // Dentro de outra página (ex.: o celular de demonstração da página inicial) não mede nada.
+ let framed=true;try{framed=window.top!==window.self}catch{}
+ if(framed)return{visitor:null,event:()=>{}};
  const rid=()=>{try{return crypto.randomUUID()}catch{const b=crypto.getRandomValues(new Uint8Array(16));b[6]=b[6]&15|64;b[8]=b[8]&63|128;const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20)}};
  let visitor;try{visitor=localStorage.getItem('fp_visitor');if(!/^[0-9a-f-]{36}$/.test(visitor||'')){visitor=rid();localStorage.setItem('fp_visitor',visitor)}}catch{visitor=rid()}
  const visit=rid(),ua=navigator.userAgent||'';

@@ -7,99 +7,73 @@
 <meta name="description" content="Ficou Pronto: o cliente acompanha pelo celular cada etapa do serviço, com vídeo ao vivo da bancada. Para assistências técnicas, oficinas, lava-jatos, pet shops e mais.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/home.css?v=1">
+<link rel="stylesheet" href="/home.css?v=2">
 </head>
 <body>
-<header class="hm-top">
-  <a class="fp-wordmark" href="/" aria-label="Ficou Pronto">ficou<span class="p">pronto</span><span class="mark">!</span></a>
-  <nav class="hm-nav" aria-label="Seções">
-    <a href="#como-funciona">Como funciona</a>
-    <a href="#para-quem">Para quem</a>
-    <a href="#lojas">Lojas</a>
-  </nav>
-  <button type="button" class="hm-btn hm-btn-dark" id="openLogin">Entrar</button>
-</header>
+<div class="en-split">
+  <section class="en-access" aria-labelledby="loginTitle">
+    <a class="fp-wordmark" href="/" aria-label="Ficou Pronto">ficou<span class="p">pronto</span></a>
+    <form class="en-form" id="loginForm">
+      <div>
+        <h1 id="loginTitle">Entrar no painel</h1>
+        <p class="en-muted">Para lojas, técnicos e central.</p>
+      </div>
+      <div class="en-session" id="session"><span>Este navegador já está conectado.</span><a class="en-btn light" id="openPanel" href="/loja.html">Abrir painel</a></div>
+      <label>E-mail<input id="email" name="email" type="email" autocomplete="username" required></label>
+      <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="en-btn" id="loginBtn">Entrar</button>
+      <p id="loginError" class="en-error" role="alert"></p>
+      <a class="en-link" id="ctaWhats" href="#contato">Ainda não usa? Fale com a gente</a>
+    </form>
+    <p class="en-small">© <span id="year"></span> Ficou Pronto · Fortaleza, CE</p>
+  </section>
 
-<main>
-  <section class="hm-hero">
-    <div class="hm-hero-text">
-      <span class="hm-eyebrow">Acompanhamento de serviços</span>
-      <h1>Seu cliente vê o serviço ficando pronto. Ao vivo.</h1>
-      <p>O cliente recebe um link no WhatsApp e acompanha pelo celular a fila, cada etapa e o vídeo da bancada enquanto o serviço é feito. Menos ligação perguntando "já ficou pronto?", mais confiança na sua loja.</p>
-      <div class="hm-cta">
-        <a class="hm-btn hm-btn-accent" id="ctaWhats" href="#contato">Quero na minha loja</a>
-        <a class="hm-btn hm-btn-ghost" href="#como-funciona">Ver como funciona</a>
+  <section class="en-show" aria-labelledby="showTitle">
+    <div class="en-phone">
+      <div class="en-island" aria-hidden="true"></div>
+      <div class="en-screen">
+        <iframe id="demoFrame" title="Demonstração: a página de acompanhamento que o cliente recebe" loading="lazy" src="/p/62fce6047564204fa4db22e8"></iframe>
       </div>
     </div>
-    <div class="hm-phone" aria-hidden="true">
-      <div class="hm-phone-card">
-        <span class="hm-chip">Em atendimento</span>
-        <strong>Seu iPhone 13 está em reparo</strong>
-        <span class="hm-muted">Etapa 2 de 3</span>
-        <div class="hm-video"><span class="hm-live">AO VIVO</span></div>
-        <ol class="hm-steps"><li class="done">Recebido</li><li class="now">Reparo</li><li>Pronto para retirada</li></ol>
-      </div>
+    <div class="en-facts">
+      <h2 id="showTitle">Esta é a tela que o cliente recebe no WhatsApp.</h2>
+      <p class="en-muted" style="margin:0">Demonstração ao vivo: o pedido anda pelas etapas sozinho, como numa loja de verdade.</p>
+      <dl id="facts" hidden>
+        <div><dt>vezes que um cliente abriu o acompanhamento</dt><dd id="fOpens">—</dd></div>
+        <div><dt>até abrir, depois de receber o link</dt><dd id="fOpen">—</dd></div>
+        <div><dt>pedidos acompanhados</dt><dd id="fLinks">—</dd></div>
+      </dl>
+      <p class="en-note" id="factsNote" hidden></p>
     </div>
   </section>
+</div>
 
-  <section class="hm-section" id="como-funciona">
-    <h2>Como funciona</h2>
-    <div class="hm-grid3">
-      <article class="hm-card"><span class="hm-num">1</span><h3>Recebeu, registrou</h3><p>A loja abre o pedido no celular ou no computador, tira fotos de como o item chegou e envia o link ao cliente pelo WhatsApp.</p></article>
-      <article class="hm-card"><span class="hm-num">2</span><h3>O cliente acompanha</h3><p>Pelo link, ele vê a posição na fila, a etapa atual e o vídeo ao vivo da bancada nas etapas que a loja escolher.</p></article>
-      <article class="hm-card"><span class="hm-num">3</span><h3>Ficou pronto, avisou</h3><p>Ao concluir, a loja avisa no WhatsApp com um toque. O histórico do pedido fica guardado para consulta.</p></article>
-    </div>
-  </section>
-
-  <section class="hm-section" id="para-quem">
-    <h2>Para quem</h2>
-    <ul class="hm-tags">
-      <li>Assistência técnica</li><li>Oficina mecânica</li><li>Funilaria e pintura</li><li>Lava-jato</li><li>Pet shop · banho e tosa</li><li>Delivery e cozinha</li>
-    </ul>
-    <p class="hm-muted">Cada loja configura as etapas do seu serviço e quais câmeras aparecem em cada etapa. A instalação das câmeras é feita pela nossa equipe.</p>
-  </section>
-
-  <section class="hm-section hm-map" id="lojas">
-    <div>
-      <h2>Encontre lojas com Ficou Pronto</h2>
-      <p class="hm-muted">Em breve: um mapa com as lojas perto de você que mostram o serviço ao vivo.</p>
-    </div>
-    <div class="hm-map-box" aria-hidden="true"><span></span><span></span><span></span></div>
-  </section>
-
-  <section class="hm-section hm-contact" id="contato">
-    <h2>Quer o Ficou Pronto na sua loja?</h2>
-    <p>Fale com a gente: explicamos o funcionamento, os planos por quantidade de câmeras e agendamos a instalação.</p>
-    <a class="hm-btn hm-btn-accent" id="ctaWhats2" href="#contato">Conversar no WhatsApp</a>
-  </section>
+<main class="en-more">
+  <h2 id="como-funciona">Como funciona</h2>
+  <ol class="en-steps">
+    <li><b>01</b><h3>Recebeu, registrou</h3><p>A loja abre o pedido no celular ou no computador, registra como o item chegou e envia o link ao cliente pelo WhatsApp.</p></li>
+    <li><b>02</b><h3>O cliente acompanha</h3><p>Pelo link, ele vê a posição na fila, a etapa atual e o vídeo ao vivo nas etapas que a loja escolher.</p></li>
+    <li><b>03</b><h3>Ficou pronto, avisou</h3><p>Ao concluir, a loja avisa no WhatsApp com um toque. O histórico do pedido fica guardado.</p></li>
+  </ol>
+  <h2>Para quem</h2>
+  <p class="en-niches">Pet shops e banho e tosa, assistências técnicas, oficinas, funilarias, lava-jatos e cozinhas. Cada loja define as etapas do seu serviço e em quais delas a câmera aparece. A instalação das câmeras é feita pela nossa equipe.</p>
+  <div class="en-contact" id="contato">
+    <p><strong>Quer o Ficou Pronto na sua loja?</strong> Explicamos o funcionamento, os planos por quantidade de câmeras e agendamos a instalação.</p>
+    <a class="en-btn" id="ctaWhats2" href="#contato">Conversar no WhatsApp</a>
+  </div>
 </main>
-
-<footer class="hm-foot"><span class="fp-wordmark">ficou<span class="p">pronto</span><span class="mark">!</span></span><span>© <span id="year"></span> Ficou Pronto</span></footer>
-
-<dialog class="hm-login" id="loginDialog" aria-labelledby="loginTitle">
-  <form id="loginForm">
-    <div class="hm-login-head"><h2 id="loginTitle">Entrar</h2><button type="button" class="hm-x" id="closeLogin" aria-label="Fechar">×</button></div>
-    <p class="hm-muted">Acesso para lojas, técnicos e central.</p>
-    <label>E-mail<input id="email" name="email" type="email" autocomplete="username" required></label>
-    <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
-    <button type="submit" class="hm-btn hm-btn-accent hm-full" id="loginBtn">Entrar</button>
-    <p id="loginError" class="hm-error" role="alert"></p>
-  </form>
-</dialog>
+<footer class="en-foot"><span>© <span id="year2"></span> Ficou Pronto</span><span>Contagem anônima: sem nomes nem telefones; aberturas feitas pelas lojas e pela demonstração não entram.</span></footer>
 
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  $('year').textContent = new Date().getFullYear();
-  const dialog = $('loginDialog');
-  const open = () => { if (!dialog.open) dialog.showModal(); setTimeout(() => $('email').focus(), 30); };
-  $('openLogin').onclick = open;
-  $('closeLogin').onclick = () => dialog.close();
-  if (location.hash === '#entrar') open();
-  const go = role => location.replace(role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html');
-  // Sessão já aberta neste navegador: o botão leva direto ao painel.
+  $('year').textContent = $('year2').textContent = new Date().getFullYear();
+  if (location.hash === '#entrar') setTimeout(() => $('email').focus(), 30);
+  const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html';
+  const go = role => location.replace(panelFor(role));
+  // Sessão já aberta neste navegador: mostra o atalho para o painel.
   const saved = sessionStorage.getItem('nv_token');
-  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openLogin').textContent = 'Abrir painel'; $('openLogin').onclick = () => go(u.role); } }).catch(() => {});
+  if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openPanel').href = panelFor(u.role); $('session').classList.add('on'); } }).catch(() => {});
   $('loginForm').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
@@ -116,6 +90,21 @@
     const href = 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent('Olá! Quero saber mais sobre o Ficou Pronto para a minha loja.');
     for (const id of ['ctaWhats', 'ctaWhats2']) { const a = $(id); a.href = href; a.target = '_blank'; a.rel = 'noopener'; }
   }).catch(() => {});
+  // Números ao vivo (só aparecem se a central ligou os números públicos).
+  const num = v => Number(v || 0).toLocaleString('pt-BR');
+  const mins = s => s == null ? '—' : s < 60 ? Math.round(s) + ' s' : Math.round(s / 60) + ' min';
+  async function facts() {
+    try {
+      const r = await fetch('/api/public/stats', { cache: 'no-store' }); if (!r.ok) return;
+      const d = await r.json();
+      $('fOpens').textContent = num(d.opens); $('fOpen').textContent = mins(d.median_open_seconds); $('fLinks').textContent = num(d.links);
+      const since = d.since ? new Date(d.since + 'T12:00:00').toLocaleDateString('pt-BR') : null;
+      const at = new Date(d.updated_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      $('factsNote').textContent = (since ? 'Desde ' + since + ', ' : '') + 'atualizado às ' + at + '. Sem nomes nem telefones; as aberturas da própria loja não entram.';
+      $('facts').hidden = $('factsNote').hidden = false;
+    } catch { }
+  }
+  facts(); setInterval(() => { if (!document.hidden) facts(); }, 120000);
 })();
 </script>
 </body>

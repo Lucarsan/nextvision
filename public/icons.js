@@ -61,7 +61,8 @@
   .fp-h-ic{display:flex;align-items:center;gap:9px}.fp-h-ic .fp-ic{width:20px;height:20px;color:var(--nv-blue,#F25C1F)}
   .fs-cb-badge{gap:5px}.fs-cb-title{display:inline-flex;align-items:center;gap:6px}
   .fs-ok{display:inline-flex;align-items:center;gap:4px}.fs-ok .fp-ic{width:15px;height:15px}
-  .fs-tag-svc,.fs-cb-badge{display:inline-flex;align-items:center;gap:5px}.fs-tag-svc .fp-ic,.fs-cb-badge .fp-ic{width:13px;height:13px}
+  .fs-tag-svc,.fs-cb-badge{display:inline-flex;align-items:center;gap:5px}
+.fs-tag-off{display:inline-block;padding:0 6px;border-radius:6px;background:#f2f4f7;color:#475467;font-size:12px}.fs-tag-svc .fp-ic,.fs-cb-badge .fp-ic{width:13px;height:13px}
   .fp-icon .fp-ic,.fs-cart-del .fp-ic,[data-close-dialog] .fp-ic{width:16px;height:16px}
   .ct-answer-icon .fp-ic{width:24px;height:24px;stroke-width:2.4}
   details>summary{list-style:none;display:flex;align-items:center;gap:6px;cursor:pointer}details>summary::-webkit-details-marker{display:none}

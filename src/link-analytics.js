@@ -6,6 +6,7 @@
 // fila diária/semanal de mensagens de resultados para enviar a cada lojista pelo WhatsApp.
 import { z } from 'zod';
 import { localNow } from './reports.js';
+import { reviewStatsByTenant, reviewCustomerRows, REVIEW_KEYS } from './review-links.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,8 +24,9 @@ export const DEFAULT_TEMPLATE = 'Olá, {loja}! 📊 Seus resultados no Ficou Pro
   + '• {retornos} clientes voltaram para acompanhar de novo\n'
   + '• {horas_video} de vídeo ao vivo assistido\n'
   + '• Tempo médio na página: {tempo_medio}\n'
+  + '• {avaliacao_cliques} clientes abriram o link para avaliar no Google\n'
   + 'Seus clientes estão acompanhando. Qualquer dúvida, é só chamar!';
-export const PLACEHOLDERS = ['loja', 'periodo', 'links', 'enviados', 'aberturas', 'pessoas', 'taxa', 'retornos', 'tempo_medio', 'horas_video', 'downloads', 'conversas', 'concluidos'];
+export const PLACEHOLDERS = ['loja', 'periodo', 'links', 'enviados', 'aberturas', 'pessoas', 'taxa', 'retornos', 'tempo_medio', 'horas_video', 'downloads', 'conversas', 'concluidos', 'avaliacao_enviadas', 'avaliacao_cliques', 'avaliacoes_confirmadas'];
 
 export function duration(seconds) {
   const s = Math.max(0, Math.round(Number(seconds) || 0)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
@@ -41,7 +43,7 @@ export async function linkStats(q, { from, to, tenantId = null }) {
   const p = [from, to, TZ, tenantId];
   const inRange = col => `${col} >= ($1::date::timestamp AT TIME ZONE $3) AND ${col} < ($2::date::timestamp AT TIME ZONE $3)`;
   const tf = col => `($4::uuid IS NULL OR ${col} = $4::uuid)`;
-  const [stores, days, funnelTotal] = await Promise.all([
+  const [stores, days, funnelTotal, reviews] = await Promise.all([
     q(`WITH oc AS (${cohortSql(inRange('o.created_at'), tf('o.tenant_id'))}),
       o AS (SELECT tenant_id, ${funnelCols} FROM oc GROUP BY tenant_id),
       c AS (SELECT tenant_id, count(*)::int completed FROM orders WHERE deleted_at IS NULL AND ${inRange('completed_at')} AND ${tf('tenant_id')} GROUP BY tenant_id),
@@ -83,10 +85,13 @@ export async function linkStats(q, { from, to, tenantId = null }) {
           AND v.started_at >= (d.d::timestamp AT TIME ZONE $3) AND v.started_at < ((d.d + 1)::timestamp AT TIME ZONE $3))::int live_seconds
       FROM d ORDER BY d.d`, p),
     // Mediana não se soma entre lojas: calculada à parte para o total.
-    q(`WITH oc AS (${cohortSql(inRange('o.created_at'), tf('o.tenant_id'))}) SELECT ${funnelCols} FROM oc`, p)
+    q(`WITH oc AS (${cohortSql(inRange('o.created_at'), tf('o.tenant_id'))}) SELECT ${funnelCols} FROM oc`, p),
+    reviewStatsByTenant(q, { from, to, tenantId })
   ]);
+  // Avaliações do Google (link /a/<código> da mensagem e botão da página do pedido).
+  for (const r of stores.rows) { const x = reviews.get(r.tenant_id) || {}; for (const k of REVIEW_KEYS) r[k] = x[k] || 0; }
   const sum = k => stores.rows.reduce((a, r) => a + Number(r[k] || 0), 0);
-  const keys = ['links', 'shared', 'links_opened', 'shared_opened', 'live_orders', 'opened_during', 'completed', 'opens', 'people', 'orders_opened', 'visible_seconds', 'live_seconds', 'mobile', 'staff_opens', 'returns', 'sent', 'copied', 'downloads', 'talks', 'claims'];
+  const keys = ['links', 'shared', 'links_opened', 'shared_opened', 'live_orders', 'opened_during', 'completed', 'opens', 'people', 'orders_opened', 'visible_seconds', 'live_seconds', 'mobile', 'staff_opens', 'returns', 'sent', 'copied', 'downloads', 'talks', 'claims', ...REVIEW_KEYS];
   const totals = Object.fromEntries(keys.map(k => [k, sum(k)]));
   totals.median_open_seconds = funnelTotal.rows[0]?.median_open_seconds ?? null;
   return { from, to, totals: withDerived(totals), stores: stores.rows.map(withDerived), days: days.rows };
@@ -105,7 +110,7 @@ const funnelCols = `count(*)::int links, count(shared_at)::int shared, count(fir
     FILTER (WHERE shared_at IS NOT NULL AND first_open IS NOT NULL))::int median_open_seconds`;
 function withDerived(r) {
   const rate = (a, b) => b ? Math.round(a * 100 / b) : null;
-  return { ...r, open_rate: rate(r.links_opened, r.links), share_rate: rate(r.shared, r.links), shared_open_rate: rate(r.shared_opened, r.shared),
+  return { ...r, review_rate: rate(r.review_clicked_of_sent, r.review_sent_customers), open_rate: rate(r.links_opened, r.links), share_rate: rate(r.shared, r.links), shared_open_rate: rate(r.shared_opened, r.shared),
     avg_visible_seconds: r.opens ? Math.round(r.visible_seconds / r.opens) : 0 };
 }
 
@@ -147,7 +152,11 @@ export function fillTemplate(template, store, period) {
   const v = {
     loja: store.name || '', periodo: period.title, links: store.links, enviados: store.shared, aberturas: store.opens, pessoas: store.people,
     taxa: store.links ? pct(store.links_opened, store.links) : null, retornos: store.returns, tempo_medio: duration(store.avg_visible_seconds),
-    horas_video: duration(store.live_seconds), downloads: store.downloads, conversas: store.talks, concluidos: store.completed
+    horas_video: duration(store.live_seconds), downloads: store.downloads, conversas: store.talks, concluidos: store.completed,
+    // Sem mensagem de avaliação nem clique no período: a linha sai (loja sem link do Google cadastrado).
+    avaliacao_enviadas: store.review_sent || store.review_clicked ? store.review_sent : null,
+    avaliacao_cliques: store.review_sent || store.review_clicked ? store.review_clicked : null,
+    avaliacoes_confirmadas: store.review_confirmed ? store.review_confirmed : null
   };
   return String(template || DEFAULT_TEMPLATE).split('\n')
     .filter(line => ![...line.matchAll(/\{([a-z_]+)\}/g)].some(m => Object.hasOwn(v, m[1]) && v[m[1]] === null))
@@ -242,22 +251,27 @@ export function registerLinkAnalytics(app, { q, auth, roles, route, bad, valid, 
   app.get('/api/master/analytics/orders', auth, roles('master'), route(async (req, res) => {
     const range = parseRange(req.query, 1); if (!range) return bad(res, 400, 'Período inválido (até 400 dias)');
     const tenantId = uuidRe.test(req.query.tenant || '') ? req.query.tenant : null;
-    const [stats, orders] = await Promise.all([linkStats(q, { ...range, tenantId }), orderRows(q, { ...range, tenantId })]);
-    res.set('Cache-Control', 'no-store').json({ ...stats, orders });
+    const [stats, orders, reviews] = await Promise.all([linkStats(q, { ...range, tenantId }), orderRows(q, { ...range, tenantId }), reviewCustomerRows(q, { ...range, tenantId })]);
+    res.set('Cache-Control', 'no-store').json({ ...stats, orders, reviews });
   }));
 
   app.get('/api/master/analytics.csv', auth, roles('master'), route(async (req, res) => {
     const range = parseRange(req.query); if (!range) return bad(res, 400, 'Período inválido (até 400 dias)');
-    const group = ['store', 'day', 'order'].includes(req.query.group) ? req.query.group : 'store';
+    const group = ['store', 'day', 'order', 'review'].includes(req.query.group) ? req.query.group : 'store';
     const tenantId = uuidRe.test(req.query.tenant || '') ? req.query.tenant : null;
     let rows;
     if (group === 'store') {
       const s = await linkStats(q, { ...range, tenantId });
-      rows = [['Loja', 'Pedidos criados', 'Com link enviado ou copiado', 'Envios WhatsApp', 'Cópias do link', 'Abertos pelo cliente', 'Taxa de abertura (%)', 'Abertos entre os enviados (%)', 'Tempo mediano até abrir (s)', 'Viram ao vivo', 'Aberturas', 'Pessoas (aparelhos)', 'Retornos', 'Tempo na página (s)', 'Tempo médio por abertura (s)', 'Vídeo ao vivo assistido (s)', 'Downloads de vídeo', 'Conversas com a loja', 'Recompensas pedidas', 'Pedidos concluídos', 'Aberturas da equipe (fora da conta)']]
-        .concat(s.stores.map(r => [r.name, r.links, r.shared, r.sent, r.copied, r.links_opened, r.open_rate ?? '', r.shared_open_rate ?? '', r.median_open_seconds ?? '', r.live_orders, r.opens, r.people, r.returns, r.visible_seconds, r.avg_visible_seconds, r.live_seconds, r.downloads, r.talks, r.claims, r.completed, r.staff_opens]));
+      rows = [['Loja', 'Pedidos criados', 'Com link enviado ou copiado', 'Envios WhatsApp', 'Cópias do link', 'Abertos pelo cliente', 'Taxa de abertura (%)', 'Abertos entre os enviados (%)', 'Tempo mediano até abrir (s)', 'Viram ao vivo', 'Aberturas', 'Pessoas (aparelhos)', 'Retornos', 'Tempo na página (s)', 'Tempo médio por abertura (s)', 'Vídeo ao vivo assistido (s)', 'Downloads de vídeo', 'Conversas com a loja', 'Recompensas pedidas', 'Pedidos concluídos', 'Aberturas da equipe (fora da conta)', 'Mensagens com link de avaliação', 'Clientes que abriram o link de avaliação', 'Abriram entre os que receberam (%)', 'Cliques no link de avaliação', 'Cliques em Avaliar na página do pedido', 'Avaliações confirmadas']]
+        .concat(s.stores.map(r => [r.name, r.links, r.shared, r.sent, r.copied, r.links_opened, r.open_rate ?? '', r.shared_open_rate ?? '', r.median_open_seconds ?? '', r.live_orders, r.opens, r.people, r.returns, r.visible_seconds, r.avg_visible_seconds, r.live_seconds, r.downloads, r.talks, r.claims, r.completed, r.staff_opens, r.review_sent, r.review_clicked, r.review_rate ?? '', r.review_clicks, r.review_page_clicks, r.review_confirmed]));
     } else if (group === 'day') {
       const s = await linkStats(q, { ...range, tenantId });
       rows = [['Dia', 'Pedidos criados', 'Pedidos com link enviado', 'Aberturas de clientes', 'Vídeo ao vivo assistido (s)']].concat(s.days.map(d => [d.day, d.links, d.shared, d.opens, d.live_seconds]));
+    } else if (group === 'review') {
+      const at = d => d ? new Date(d).toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16) : '';
+      const r = await reviewCustomerRows(q, { ...range, tenantId });
+      rows = [['Loja', 'Cliente', 'Mensagem com link enviada em', 'Mensagens', 'Abriu o link em', 'Cliques (mensagem)', 'Cliques (página do pedido)', 'Avaliação confirmada em']]
+        .concat(r.map(x => [x.store, x.customer, at(x.first_sent), x.sent, at(x.first_click), x.clicks, x.page_clicks, at(x.review_confirmed_at)]));
     } else {
       const at = d => d ? new Date(d).toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16) : '';
       const r = (await orderRows(q, { ...range, tenantId })).reverse();

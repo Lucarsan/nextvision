@@ -129,6 +129,9 @@ const fpStats=(()=>{
  return{visitor,event:kind=>{try{fetch('/api/public/orders/'+encodeURIComponent(token)+'/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,visitor}),keepalive:true}).catch(()=>{})}catch{}}};
 })();
 document.addEventListener('click',e=>{if(e.target.closest?.('#talkStore'))fpStats.event('talk_store')});
+// Botão "Avaliar no Google": conta no relatório de avaliações da central (origem: página do pedido).
+document.addEventListener('click',e=>{if(!e.target.closest?.('a.card.review')||!fpStats.visitor)return;let staff=false;try{staff=localStorage.getItem('fp_staff')==='1'}catch{}
+ try{fetch('/api/public/orders/'+encodeURIComponent(token)+'/review-click',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor:fpStats.visitor,staff}),keepalive:true}).catch(()=>{})}catch{}});
 let updating=false,lastHtml='',lastStepKey='';const openSteps=new Set();
 const NICHE={electronics:{label:'Assistência técnica',noun:'Seu aparelho',live:'Seu aparelho na bancada'},automotive:{label:'Oficina automotiva',noun:'Seu veículo',live:'Seu veículo ao vivo'},carwash:{label:'Lava-jato',noun:'Seu veículo',live:'Seu veículo ao vivo'},pet:{label:'Pet shop',noun:'Seu pet',live:'Seu pet ao vivo'},food:{label:'Alimentação',noun:'Seu pedido',live:'Seu pedido ao vivo'},general:{label:'Serviços',noun:'Seu pedido',live:'Ao vivo agora'}};
 const nicheOf=p=>NICHE[p.niche]||NICHE.general;

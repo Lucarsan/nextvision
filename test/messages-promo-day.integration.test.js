@@ -57,7 +57,7 @@ test('mensagens: dia de promoção agradece sem falar do cartão e o cartão usa
       const promoText = await msg(promo.customer.id);
       assert.match(promoText, /^Olá, Alexsandra! Obrigado pela preferência/);
       assert.match(promoText, new RegExp(`Foi um prazer cuidar do seu pet na promoção de ${DAY[today]}\\. Esperamos vocês de volta em breve!`));
-      assert.match(promoText, /avaliar no Google\? Leva 1 minutinho: https:\/\/g\.page\/r\/teste/);
+      assert.match(promoText, /avaliar no Google\? Leva 1 minutinho: https?:\/\/\S+\/a\/[0-9a-f]{10}$/, 'link de avaliação medido (/a/<código>)');
       assert.doesNotMatch(promoText, /cartão|fidelidade|Regras:|de 10/i);
       const semPontoText = await msg(semPonto.customer.id);
       assert.match(semPontoText, /Foi um prazer cuidar do seu pet\. Esperamos vocês de volta em breve!/);

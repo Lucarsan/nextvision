@@ -44,6 +44,30 @@
       + '<p class="ct-note">' + legend('#CBD2DC', 'Pedidos criados') + ' &nbsp; ' + legend('#3B82F6', 'Link enviado') + ' &nbsp; ' + legend('#F25C1F', 'Aberturas de clientes') + '</p>';
   }
 
+  // Avaliações no Google: mensagens com o link (/a/<código>), quem abriu, botão da página do pedido e confirmadas.
+  function reviewKpis(t) {
+    return kpi('Mensagens com link de avaliação', num(t.review_sent), num(t.review_sent_customers) + ' clientes (WhatsApp ou copiada)')
+      + kpi('Abriram o link de avaliação', num(t.review_clicked), t.review_rate == null ? 'clientes' : t.review_rate + '% de quem recebeu no período')
+      + kpi('Pela página do pedido', num(t.review_page_clicks), 'cliques em "Avaliar no Google"')
+      + kpi('Avaliações confirmadas', num(t.review_confirmed), 'marcadas após conferir no Google');
+  }
+  const reviewNote = '<p class="ct-note">O Google não informa de onde veio cada avaliação. Contamos quem <strong>abriu</strong> o link da mensagem (cada cliente tem o seu, então vale também a mensagem copiada e colada no WhatsApp; a prévia do WhatsApp e aberturas da equipe não contam). Para saber quantos avaliaram de fato, confira os nomes no Google e marque "Avaliou".</p>';
+  function reviewTable(rows, day, allStores) {
+    if (!rows.length) return '<p class="ct-empty">Nenhuma mensagem com link de avaliação nem clique neste período.</p>';
+    return '<div style="overflow-x:auto"><table><thead><tr>' + (allStores ? '<th>Loja</th>' : '') + '<th>Cliente</th><th>Mensagem enviada</th><th>Abriu o link</th><th>Cliques</th><th>Avaliou?</th></tr></thead><tbody>'
+      + rows.map(x => '<tr>' + (allStores ? '<td>' + safe(x.store) + '</td>' : '') + '<td>' + safe(x.customer || '—') + '</td>'
+        + '<td>' + (x.first_sent ? safe(when(x.first_sent, day)) + (x.sent > 1 ? ' <small>(' + x.sent + '×)</small>' : '') : '<small>—</small>') + '</td>'
+        + '<td>' + (x.first_click ? safe(when(x.first_click, day)) + (x.first_sent ? '<br><small>' + safe(gap(x.first_sent, x.first_click)) + '</small>' : '') : (x.first_sent ? '<span class="ct-chip muted">Não abriu</span>' : '—')) + '</td>'
+        + '<td>' + (x.clicks ? num(x.clicks) : '—') + (x.page_clicks ? '<br><small>+' + x.page_clicks + ' pela página do pedido</small>' : '') + '</td>'
+        + '<td><label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" data-review-confirm="' + safe(x.customer_id) + '"' + (x.review_confirmed_at ? ' checked' : '') + '> Avaliou</label></td></tr>').join('')
+      + '</tbody></table></div>';
+  }
+  function wireReviewConfirm(reload) {
+    document.querySelectorAll('[data-review-confirm]').forEach(b => b.onchange = async () => {
+      try { await api('/master/customers/' + b.dataset.reviewConfirm + '/review-confirmed', 'PATCH', { confirmed: b.checked }); msg(b.checked ? 'Avaliação marcada.' : 'Marcação removida.'); await reload(); } catch (e) { b.checked = !b.checked; msg(e.message); }
+    });
+  }
+
   async function downloadCsv(group, range, tenant = '') {
     const r = await fetch('/api/master/analytics.csv?group=' + group + '&from=' + range.from + '&to=' + range.last + (tenant ? '&tenant=' + tenant : ''), { headers: { Authorization: 'Bearer ' + token } });
     if (!r.ok) throw Error('Não foi possível gerar o arquivo');
@@ -77,6 +101,7 @@
       + kpi('Pelo celular', t.opens ? Math.round(t.mobile * 100 / t.opens) + '%' : '—', 'das aberturas')
       + kpi('Aberturas da equipe', num(t.staff_opens), 'fora da conta (loja e central)')
       + '</section>'
+      + '<section class="ct-card"><div class="ct-card-head"><h2>Avaliações no Google</h2><button type="button" class="secondary" data-csv="review">Por cliente (CSV)</button></div><div class="ct-kpis">' + reviewKpis(t) + '</div>' + reviewNote + '</section>'
       + '<section class="ct-card"><h2>Por dia</h2>' + chart(d.days) + '</section>'
       + '<section class="ct-card"><div class="ct-card-head"><h2>Por loja</h2><div><button type="button" class="secondary" data-csv="store">Baixar por loja (CSV)</button><button type="button" class="secondary" data-csv="day">Por dia</button><button type="button" class="secondary" data-csv="order">Por pedido</button></div></div>'
       + '<div style="overflow-x:auto"><table><thead><tr><th>Loja</th><th>Pedidos</th><th>Link enviado</th><th>Abertos</th><th>Aberturas</th><th>Pessoas</th><th>Tempo até abrir</th><th>Retornos</th><th>Tempo médio</th><th>Vídeo assistido</th><th>Downloads</th></tr></thead><tbody>'
@@ -87,7 +112,7 @@
       + '<button type="button" id="pubToggle" class="' + (d.public_stats_enabled ? 'secondary' : '') + '">' + (d.public_stats_enabled ? 'Desligar números públicos' : 'Ligar números públicos') + '</button></section>');
     document.querySelectorAll('[data-days]').forEach(b => b.onclick = () => { state.days = Number(b.dataset.days); state.from = state.to = null; numbersPage().catch(e => msg(e.message)); });
     el('anApply').onclick = () => { const f = el('anFrom').value, to = el('anTo').value; if (f && to && f <= to) { state.from = f; state.to = to; } state.tenant = el('anTenant').value; numbersPage().catch(e => msg(e.message)); };
-    document.querySelectorAll('[data-csv]').forEach(b => b.onclick = () => downloadCsv(b.dataset.csv, { from, last }).catch(e => msg(e.message)));
+    document.querySelectorAll('[data-csv]').forEach(b => b.onclick = () => downloadCsv(b.dataset.csv, { from, last }, state.tenant).catch(e => msg(e.message)));
     el('pubToggle').onclick = async () => { try { await api('/master/analytics/settings', 'PATCH', { public_stats_enabled: !d.public_stats_enabled }); msg(d.public_stats_enabled ? 'Números públicos desligados.' : 'Números públicos ligados.'); await numbersPage(); } catch (e) { msg(e.message); } };
   };
 
@@ -97,7 +122,7 @@
     const s = r.stats || {};
     return '<article class="ct-card" style="border:1px solid #EEF0F3" data-report="' + safe(r.tenant_id) + '"><div class="ct-card-head"><div class="ct-store"><strong>' + safe(r.name) + '</strong><span>' + (r.schedule === 'daily' ? 'Diário' : 'Semanal') + ' · ' + safe(r.period.title) + (r.whatsapp ? ' · WhatsApp ' + safe(r.whatsapp) : '') + '</span></div>'
       + (markable ? (r.sent ? '<span class="ct-chip ok">Enviado ' + safe(new Date(r.sent.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) + (r.sent.sent_by ? ' por ' + safe(r.sent.sent_by) : '') + '</span>' : '<span class="ct-chip warn">A enviar</span>') : '') + '</div>'
-      + '<p style="margin:0 0 8px">' + num(s.links) + ' pedidos com link · ' + num(s.opens) + ' aberturas · ' + num(s.people) + ' pessoas · ' + dur(s.live_seconds) + ' de vídeo</p>'
+      + '<p style="margin:0 0 8px">' + num(s.links) + ' pedidos com link · ' + num(s.opens) + ' aberturas · ' + num(s.people) + ' pessoas · ' + dur(s.live_seconds) + ' de vídeo' + (s.review_sent || s.review_clicked ? ' · ' + num(s.review_clicked) + ' abriram o link de avaliação' : '') + '</p>'
       + '<textarea rows="8" style="max-width:none" data-text>' + safe(r.message) + '</textarea>'
       + '<div style="margin-top:8px">' + (r.whatsapp ? '<button type="button" data-send>Enviar no WhatsApp</button>' : '<span class="ct-chip bad">Loja sem WhatsApp cadastrado</span> ')
       + '<button type="button" class="secondary" data-copy>Copiar mensagem</button>'
@@ -166,6 +191,8 @@
       + '<button type="button" class="secondary" id="rpPrev" aria-label="Dia anterior" title="Dia anterior">‹</button><input type="date" id="rpDate" value="' + day + '" max="' + today() + '" style="margin:0;max-width:170px"><button type="button" class="secondary" id="rpNext" aria-label="Próximo dia" title="Próximo dia"' + (day >= today() ? ' disabled' : '') + '>›</button>'
       + '<button type="button" class="secondary" id="rpCsv">Baixar (CSV)</button></div></div>'
       + dayReport(r, day, !reportTenant) + '</section>'
+      + '<section class="ct-card"><div class="ct-card-head"><h2>Avaliações no Google · ' + safe(dmy(day)) + '</h2><button type="button" class="secondary" id="rpReviewCsv">Baixar (CSV)</button></div><div class="ct-kpis">' + reviewKpis(r.totals) + '</div>'
+      + '<div style="margin-top:14px">' + reviewTable(r.reviews || [], day, !reportTenant) + '</div>' + reviewNote + '</section>'
       + '<section class="ct-card"><div class="ct-card-head"><h2>Mensagens de resultados ' + (day === today() ? 'para enviar hoje' : 'de ' + safe(dmy(day))) + ' · ' + (d.due.length ? (pending ? pending + ' pendente(s)' : 'tudo enviado') : 'nenhuma programada') + '</h2></div>'
       + '<p>Mensagens prontas com os resultados de cada loja (aparecem só no dia programado de cada uma; veja a programação abaixo). Revise, toque em <strong>Enviar no WhatsApp</strong> e a mensagem abre na conversa com o lojista. Diário = resultados de ontem; semanal = últimos 7 dias.</p>'
       + (d.due.length ? d.due.map(r => reportCard(r, { markable: true })).join('') : '<p class="ct-empty">Nenhum relatório programado para este dia.</p>') + '</section>'
@@ -179,6 +206,8 @@
     el('rpDate').onchange = () => { if (el('rpDate').value) { reportDate = el('rpDate').value; resultsReportsPage().catch(e => msg(e.message)); } };
     el('rpStore').onchange = () => { reportTenant = el('rpStore').value; resultsReportsPage().catch(e => msg(e.message)); };
     el('rpCsv').onclick = () => downloadCsv('order', { from: day, last: day }, reportTenant).catch(e => msg(e.message));
+    el('rpReviewCsv').onclick = () => downloadCsv('review', { from: day, last: day }, reportTenant).catch(e => msg(e.message));
+    wireReviewConfirm(resultsReportsPage);
     wireCards(d.due, { markable: true, reload: resultsReportsPage });
     el('rpGen').onclick = async () => {
       try {

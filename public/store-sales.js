@@ -151,8 +151,17 @@
     return lines.join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
   }
   const statusTemplate = () => { const t = config.status_message || DEFAULT_STATUS; return t.includes('{cashback}') ? t : t.includes('{fidelidade}') ? t.replace('{fidelidade}', '{fidelidade}\n\n{cashback}') : t + '\n\n{cashback}'; };
+  // Link de avaliação com medição: /a/<código do cliente> registra o clique e leva ao Google (vale também copiando a mensagem).
+  const reviewLink = c => {
+    if (!config.google_review_url) return '';
+    if (!c?.review_code) return config.google_review_url;
+    const base = /^https?:\/\//.test(config.review_link_base || '') ? config.review_link_base : location.origin + '/a/';
+    return base + c.review_code;
+  };
+  const hasReview = () => !!config.google_review_url && statusTemplate().includes('{avaliacao}');
+  const statusRecord = id => ({ customer_id: id, kind: 'status', review: hasReview() });
   const statusMessage = c => render(statusTemplate(), {
-    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty, c.loyalty_promo_dow, c.loyalty_not_counted), avaliacao: config.google_review_url || '', cashback: cashbackText(c.cashback),
+    cliente: greetName(c.name) || 'tudo bem', loja: config.name || 'loja', fidelidade: loyaltyText(c.loyalty, c.loyalty_promo_dow, c.loyalty_not_counted), avaliacao: reviewLink(c), cashback: cashbackText(c.cashback),
     compras: c.loyalty?.checkins ?? '', meta: c.loyalty?.target ?? '', faltam: c.loyalty?.remaining ?? '', premio: c.loyalty?.reward ?? '', regras: config.loyalty_rules || ''
   });
   const offerMessage = (c, text) => `Olá, ${greetName(c.name) || 'tudo bem'}! ${text}\n\n— ${config.name || ''}\nSe não quiser mais receber ofertas, é só responder SAIR.`;
@@ -610,7 +619,7 @@
     box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${custLink(c.id, esc(c.name))}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">${FPIcon('wallet')} ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
       <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
     wireReceipt();
-    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), { customer_id: c.id, kind: 'status' }); b.innerHTML = FPIcon('check') + 'Enviado'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
+    if ($('fsSendNow')) $('fsSendNow').onclick = async () => { const b = $('fsSendNow'); try { await sendWhats(c.phone, statusMessage({ ...c, loyalty: s.loyalty, cashback: s.cashback }), statusRecord(c.id)); b.innerHTML = FPIcon('check') + 'Enviado'; b.disabled = true; } catch (err) { feedback(err.message, true); } };
     if ($('fsRedeemNow')) $('fsRedeemNow').onclick = async () => { try { const r = await redeem(c.id, c.name); if (r) { lastSale = { ...s, loyalty: r.loyalty }; drawLast(); } } catch (err) { feedback(err.message, true); } };
     if (s.live_order) box.insertAdjacentHTML('beforeend', liveBlock(s));
   }
@@ -2311,12 +2320,12 @@
     $('fsYesterday').onclick = () => { statusDay = yesterday; statusTab(tab, alive); };
     const send = async id => {
       const r = rows.find(x => x.id === id) || pend.find(x => x.id === id); if (!r) return;
-      try { await sendWhats(r.phone, statusMessage(r), { customer_id: r.id, kind: 'status' }); r.sent = true; statusTab(tab, alive); } catch (err) { feedback(err.message, true); }
+      try { await sendWhats(r.phone, statusMessage(r), statusRecord(r.id)); r.sent = true; statusTab(tab, alive); } catch (err) { feedback(err.message, true); }
     };
     tab.querySelectorAll('[data-fs-send]').forEach(b => b.onclick = () => send(b.dataset.fsSend));
     const find = id => rows.find(x => x.id === id) || pend.find(x => x.id === id);
     tab.querySelectorAll('[data-fs-copy]').forEach(b => b.onclick = () => { const r = find(b.dataset.fsCopy); if (r) copyMsg(statusMessage(r), b); });
-    tab.querySelectorAll('[data-fs-done]').forEach(b => b.onclick = async () => { const r = find(b.dataset.fsDone); if (!r) return; b.disabled = true; try { await markSent({ customer_id: r.id, kind: 'status' }); r.sent = true; statusTab(tab, alive); } catch (err) { b.disabled = false; feedback(err.message, true); } });
+    tab.querySelectorAll('[data-fs-done]').forEach(b => b.onclick = async () => { const r = find(b.dataset.fsDone); if (!r) return; b.disabled = true; try { await markSent(statusRecord(r.id)); r.sent = true; statusTab(tab, alive); } catch (err) { b.disabled = false; feedback(err.message, true); } });
     tab.querySelectorAll('[data-fs-skip]').forEach(b => b.onclick = async () => { const r = pend.find(x => x.id === b.dataset.fsSkip); if (!r || !confirm(`Tirar ${r.name} da lista sem enviar a mensagem?`)) return; try { await api('/store/messages/sent', 'POST', { customer_id: r.id, kind: 'status', campaign: 'dispensada' }); statusTab(tab, alive); } catch (err) { feedback(err.message, true); } });
     tab.querySelectorAll('[data-fs-redeem]').forEach(b => b.onclick = async () => { const r = rows.find(x => x.id === b.dataset.fsRedeem) || pend.find(x => x.id === b.dataset.fsRedeem); try { if (await redeem(r.id, r.name)) statusTab(tab, alive); } catch (err) { feedback(err.message, true); } });
     if ($('fsNext')) $('fsNext').onclick = () => { const next = pend.find(r => !r.sent && waPhone(r.phone)) || rows.find(r => !r.sent && waPhone(r.phone)); if (next) send(next.id); else feedback('Os clientes restantes não têm WhatsApp cadastrado.', true); };

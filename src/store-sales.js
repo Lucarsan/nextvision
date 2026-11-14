@@ -6,6 +6,7 @@
 //   quem já recebeu, para a lista do dia mostrar o que falta enviar.
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { reviewLinkBase } from './review-links.js';
 import { registerStockValue } from './stock-value.js';
 import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
@@ -147,7 +148,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
     const loyalty_unit = await loyaltyUnit({ query: q }, tid(req));
-    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent) });
+    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent), review_link_base: reviewLinkBase() });
   }));
   // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
   app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {
@@ -1214,7 +1215,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       if (pendingId) { await c.query('UPDATE pending_sales SET paid_sale_id=$1,paid_at=now() WHERE id=$2', [sale.id, pendingId]); sale.pending_id = pendingId; }
       await c.query('COMMIT');
       const progress = customerId ? (await progressFor(tid(req), [customerId])).get(customerId) : null;
-      const customer = customerId ? (await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1', [customerId])).rows[0] : null;
+      const customer = customerId ? (await q('SELECT id,name,phone,offers_opt_out,review_code FROM customers WHERE id=$1', [customerId])).rows[0] : null;
       const cashback = customerId ? (await cashbackFor(tid(req), [customerId])).get(customerId) : null;
       if (liveOrder) await savePetFromOrder?.(q, tid(req), customerId, v.live_order.details).catch(e => console.error('Ficha do pet não salva:', e.code || e.message));
       res.status(201).json({ sale, customer, customer_created: created, loyalty_counted: counted, loyalty: progress, live_order: liveOrder,
@@ -1299,7 +1300,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
           AND (o.completed_at AT TIME ZONE $3)::date=COALESCE($2::date,(now() AT TIME ZONE $3)::date)
       )
-      SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
+      SELECT c.id,c.name,c.phone,c.offers_opt_out,c.review_code,max(b.at) last_buy,
         json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents,'counted',b.counted,'dow',b.dow) ORDER BY b.at) purchases,
         sum(b.cashback_earned_cents)::int cashback_earned_cents,
         (SELECT max(m.created_at) FROM customer_messages m WHERE m.tenant_id=c.tenant_id AND m.customer_id=c.id AND m.kind='status') last_status_at
@@ -1322,7 +1323,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
             FROM orders o WHERE o.tenant_id=$1 AND o.customer_id IS NOT NULL AND o.status='completed' AND o.deleted_at IS NULL
             AND (o.completed_at AT TIME ZONE $2)::date BETWEEN (now() AT TIME ZONE $2)::date-30 AND (now() AT TIME ZONE $2)::date-1
         )
-        SELECT c.id,c.name,c.phone,c.offers_opt_out,max(b.at) last_buy,
+        SELECT c.id,c.name,c.phone,c.offers_opt_out,c.review_code,max(b.at) last_buy,
           json_agg(json_build_object('kind',b.kind,'ref',b.ref,'total_cents',b.total_cents,'description',b.description,'at',b.at,'cashback_earned_cents',b.cashback_earned_cents,'cashback_used_cents',b.cashback_used_cents,'counted',b.counted,'dow',b.dow) ORDER BY b.at) purchases,
           sum(b.cashback_earned_cents)::int cashback_earned_cents, max(ls.at) last_status_at
         FROM buys b JOIN customers c ON c.id=b.customer_id AND c.tenant_id=$1 AND c.deleted_at IS NULL LEFT JOIN ls ON ls.customer_id=c.id
@@ -1388,10 +1389,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   app.post('/api/store/messages/sent', ...guard, route(async (req, res) => {
-    const v = valid(z.object({ customer_id: uuid, kind: z.enum(['status', 'offer', 'cashback']), campaign: z.string().trim().max(64).optional() }).strict(), req, res); if (!v) return;
+    // review: a mensagem levava o link de avaliação do Google (conta no relatório de avaliações).
+    const v = valid(z.object({ customer_id: uuid, kind: z.enum(['status', 'offer', 'cashback']), campaign: z.string().trim().max(64).optional(), review: z.boolean().optional() }).strict(), req, res); if (!v) return;
     if (v.kind !== 'status' && !v.campaign) return bad(res, 400, 'Mensagem sem identificação');
-    const r = await q(`INSERT INTO customer_messages(tenant_id,customer_id,kind,campaign,created_by)
-      SELECT $1,c.id,$3,$4,$5 FROM customers c WHERE c.id=$2 AND c.tenant_id=$1 RETURNING id,created_at`, [tid(req), v.customer_id, v.kind, v.campaign || null, req.user.id]);
+    const r = await q(`INSERT INTO customer_messages(tenant_id,customer_id,kind,campaign,created_by,review_link)
+      SELECT $1,c.id,$3,$4,$5,$6 FROM customers c WHERE c.id=$2 AND c.tenant_id=$1 RETURNING id,created_at`, [tid(req), v.customer_id, v.kind, v.campaign || null, req.user.id, v.kind === 'status' && !!v.review]);
     if (!r.rowCount) return bad(res, 404, 'Cliente não encontrado');
     res.status(201).json(r.rows[0]);
   }));

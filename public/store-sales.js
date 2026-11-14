@@ -72,6 +72,7 @@
     }
     throw Error('Senha do admin não aceita.');
   }
+  window.FPAdmin.api = adminApi; // histórico do cliente: excluir saldo de cashback
   // 558532130953 -> (85) 3213-0953; 5585999998888 -> (85) 99999-8888
   const phoneBR = p => { let d = String(p || '').replace(/\D/g, ''); if (d.length >= 12 && d.startsWith('55')) d = d.slice(2); return d.length === 10 ? `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}` : d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : String(p || ''); };
   const centsText = c => (Number(c || 0) / 100).toFixed(2).replace('.', ',');
@@ -605,7 +606,7 @@
     const wireReceipt = () => { if ($('fsReceiptNow')) $('fsReceiptNow').onclick = () => printReceipt(s.sale.id); };
     if (!c) { box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)} · sem cliente${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''}</div><div class="fs-actions">${receiptBtn}</div></div>`; wireReceipt(); return; }
     const note = s.loyalty?.enabled ? (s.loyalty_counted ? 'Somou 1 compra no cartão.' : s.sale.loyalty_skip === 'weekday' ? `Não somou no cartão (${WEEKDAYS[todayDow()]} é dia sem fidelidade).` : s.sale.loyalty_skip === 'service' ? 'Não somou no cartão (nenhum serviço desta venda conta para a fidelidade).' : s.sale.order_id ? 'Pagamento de pedido: conta no cartão quando o pedido é finalizado.' : 'Abaixo do valor mínimo: não somou no cartão.') : '';
-    const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : s.sale.cashback_off_today ? `Não gerou cashback (${WEEKDAYS[todayDow()]} é dia sem cashback).` : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
+    const cb = s.cashback, cbNote = cbOn() && cb ? [cb.used_cents ? `Usou ${brl(cb.used_cents)} de cashback.` : '', cb.earned_cents ? `Ganhou ${brl(cb.earned_cents)} de cashback.` : s.sale.cashback_off_today ? `Não gerou cashback (${WEEKDAYS[todayDow()]} é dia sem cashback).` : s.sale.cashback_no_products ? 'Não gerou cashback (produto sem cashback, ex.: troca de espécie).' : 'Não gerou cashback (abaixo do valor mínimo).', `Saldo: <b>${brl(cb.balance_cents)}</b>.`].filter(Boolean).join(' ') : '';
     box.innerHTML = `<div class="fs-last"><div><b>Venda #${s.sale.sale_number}</b> · ${brl(s.sale.total_cents)}${s.change_cents != null ? ` · <b>troco ${brl(s.change_cents)}</b>` : ''} · ${custLink(c.id, esc(c.name))}${s.customer_created ? ' <small>(cadastrado agora)</small>' : ''}<br><small>${note}</small>${cbNote ? `<br><small class="fs-cb-note">${FPIcon('wallet')} ${cbNote}</small>` : ''}${progressBar(s.loyalty)}</div>
       <div class="fs-actions">${receiptBtn}${waPhone(c.phone) ? '<button type="button" class="nv-button fp-whats" id="fsSendNow">Enviar status no WhatsApp</button>' : '<small>Cliente sem WhatsApp cadastrado.</small>'}${s.loyalty?.complete ? '<button type="button" class="nv-button secondary" id="fsRedeemNow">Entregar prêmio</button>' : ''}</div></div>`;
     wireReceipt();
@@ -1365,6 +1366,8 @@
         <label><input type="radio" name="variant_stock" value="model"${initial.ask_variant && initial.variant_stock === 'model' ? ' checked' : ''}> Por modelo (${FP.ex('byVariant')})</label></fieldset>
       <label class="nv-field" id="fsStockField">Estoque (quantidade na loja)<input name="stock" inputmode="numeric" value="${initial.stock_qty != null ? initial.stock_qty : ''}" placeholder="Deixe vazio para não controlar"></label>
       <small class="nv-help" id="fsVarHelp">O estoque fica por modelo: use "Modelos" → "Lançar vários modelos" na lista de produtos.</small>
+      <label class="fs-check"><input type="checkbox" name="cashback"${initial.cashback === false ? '' : ' checked'}> Gera cashback ao vender <small class="nv-help">desmarque em troca de espécie por Pix, crédito de celular…</small></label>
+      <label class="fs-check"><input type="checkbox" name="restock"${initial.restock === false ? '' : ' checked'}> Entra na reposição <small class="nv-help">desmarque no que não se compra para repor (crédito de celular, troca de espécie…)</small></label>
       <button class="nv-button">${editing ? 'Salvar' : forSale ? 'Cadastrar e pôr na venda' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsProd'), st = f.querySelector('[role=status]');
     const totalMode = () => f.elements.variant_stock.value === 'total';
@@ -1387,7 +1390,7 @@
       if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
       try {
         const askVariant = f.elements.ask_variant.checked, mode = askVariant ? f.elements.variant_stock.value : 'model';
-        const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant && mode === 'model' ? null : stock, ask_variant: askVariant, variant_stock: mode }; if (!initial.generated_barcode) body.barcode = barcode;
+        const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant && mode === 'model' ? null : stock, ask_variant: askVariant, variant_stock: mode, cashback: f.elements.cashback.checked, restock: f.elements.restock.checked }; if (!initial.generated_barcode) body.barcode = barcode;
         // Mudou de "por modelo" para "no total": o estoque do produto é o que foi digitado agora.
         const p = editing ? await adminApi('/store/products/' + initial.id, 'PATCH', body, `Editar "${initial.name}" pede a senha do admin.`) : await api('/store/products', 'POST', body);
         $('editorDialog').close(); feedback(`Produto ${editing ? 'atualizado' : 'cadastrado'}: ${p.name} · ${brl(p.price_cents)}.`);
@@ -2048,7 +2051,7 @@
       if (!list.isConnected) return;
       list.innerHTML = rows.map(p => { const m = margin(p.price_cents, p.cost_cents);
         return `<div class="fs-sale fs-prod"><div><b>${esc(p.name)}</b><br><small>${p.barcode ? esc(p.barcode) + (p.generated_barcode ? ' (gerado)' : '') : 'sem código de barras'}</small><br>
-          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant && p.variant_stock !== 'total' ? 'Estoque por modelo' : `${p.ask_variant ? 'Pergunta o modelo · ' : ''}Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
+          <small>Custo: ${p.cost_cents != null ? brl(p.cost_cents) + (m != null ? ` · lucro ${m}%` : '') : '—'} · ${p.ask_variant && p.variant_stock !== 'total' ? 'Estoque por modelo' : `${p.ask_variant ? 'Pergunta o modelo · ' : ''}Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? 'não controla'}</b>`}${p.restock_pending && p.restock !== false ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}${p.cashback === false ? ' · <span class="fs-tag-off">sem cashback</span>' : ''}${p.restock === false ? ' · <span class="fs-tag-off">não repõe</span>' : ''}</small></div>
           <div class="fs-sale-end"><b>${brl(p.price_cents)}</b>${p.seasonal_base_cents != null ? `<small class="fs-season" title="Preço de época ativo">época · normal ${brl(p.seasonal_base_cents)}</small>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-edit="${p.id}">Editar</button>${p.ask_variant ? `<button type="button" class="nv-button secondary fs-small" data-fs-vars="${p.id}">Modelos</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-stock="${p.id}">+ Estoque</button>${p.barcode ? `<button type="button" class="nv-button secondary fs-small" data-fs-lab="${p.id}">${FPIcon('tag')}Etiquetas</button>` : ''}<button type="button" class="nv-button secondary fs-small" data-fs-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-fs-pdel="${p.id}">Excluir</button></div></div>`; }).join('')
         || (t ? `<p class="nv-help">Nenhum produto encontrado.${looksLikeCode(t) ? ` <button type="button" class="nv-button secondary fs-small" id="fsProdNewCode">Cadastrar com o código ${esc(t)}</button>` : ''}</p>` : '<p class="nv-help">Nenhum produto cadastrado ainda.</p>');
       const byId = id => rows.find(p => p.id === id);

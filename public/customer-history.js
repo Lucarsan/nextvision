@@ -53,10 +53,18 @@
       ${Object.keys(t.by_method).length ? `<p class="ch-pills">${Object.entries(t.by_method).map(([k, v]) => `<span class="fs-pill">${METHODS[k] || k} <b>${brl(v.total_cents)}</b> <small>(${v.count})</small></span>`).join('')}</p>` : ''}
       ${(h.pets || []).length ? `<div class="ch-pets"><b>Pets</b><ul>${h.pets.map(p => `<li><b>${esc(p.name)}</b>${[p.species, p.breed, p.size ? 'porte ' + p.size : '', p.sex === 'F' ? 'fêmea' : p.sex === 'M' ? 'macho' : '', p.birth_date ? 'nasc. ' + dmy(String(p.birth_date).slice(0, 10)) : '', p.weight_kg ? String(p.weight_kg).replace('.', ',') + ' kg' : '', p.color, p.neutered ? 'castrado' : ''].filter(Boolean).map(x => ' · ' + esc(x)).join('')}${p.notes ? `<br><small>${esc(p.notes)}</small>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${h.loyalty?.enabled ? `<p class="nv-help">${icon('gift')} Fidelidade: ${h.loyalty.checkins} de ${h.loyalty.target}${h.loyalty.complete ? ' · <b>prêmio liberado</b>' : ''}</p>` : ''}
-      ${h.cashback?.balance_cents ? `<p class="nv-help">Cashback: <b>${brl(h.cashback.balance_cents)}</b>${h.cashback.next_expires_on ? ` (vence ${dmy(h.cashback.next_expires_on)})` : ''}</p>` : ''}
+      ${h.cashback?.balance_cents ? `<p class="nv-help">Cashback: <b>${brl(h.cashback.balance_cents)}</b>${h.cashback.next_expires_on ? ` (vence ${dmy(h.cashback.next_expires_on)})` : ''}${window.FPAdmin?.api ? ` <button type="button" class="nv-button secondary fs-small" id="chCbClear" title="Pede a senha do admin">${icon('lock')}Excluir saldo</button>` : ''}</p>` : ''}
+      ${(h.cashback_clears || []).length ? `<p class="nv-help ch-muted">${h.cashback_clears.map(k => `Saldo de cashback excluído: ${brl(k.amount_cents)} em ${dt(k.created_at)}${k.created_by_name ? ' por ' + esc(k.created_by_name) : ''} · ${esc(k.reason)}`).join('<br>')}</p>` : ''}
       ${h.warranties.length ? `<div class="ch-warr"><b>Garantias valendo</b><ul>${h.warranties.map(w => `<li>${esc(w.name)}${w.device_model ? ' · ' + esc(w.device_model) : ''} — até <b>${dmy(w.until)}</b> (venda #${w.sale_number})</li>`).join('')}</ul></div>` : ''}
       <input type="search" id="chSearch" class="ch-search" placeholder="Procurar no histórico: ${FP.ex('hist')}…" aria-label="Procurar no histórico">
       <div id="chList">${timeline.map(x => x.html).join('') || '<p class="nv-help">Nada registrado ainda para este cliente.</p>'}</div>`;
+    if ($('chCbClear')) $('chCbClear').onclick = async () => {
+      const reason = prompt(`Excluir o saldo de cashback de ${c.name} (${brl(h.cashback.balance_cents)})?\nO saldo some e não volta. Escreva o motivo (ex.: troca de espécie por Pix):`);
+      if (reason === null) return;
+      if (reason.trim().length < 3) { alert('Escreva o motivo.'); return; }
+      try { const r = await window.FPAdmin.api(`/store/sales/customers/${id}/cashback/clear`, 'POST', { reason: reason.trim() }, `Excluir o saldo de cashback de ${c.name} pede a senha do admin.`); alert(`Saldo de cashback excluído: ${brl(r.cleared_cents)}.`); open(id); }
+      catch (err) { if (!err.canceled) alert(err.message); }
+    };
     $('chSearch').oninput = e => { const t = e.target.value.trim().toLowerCase(); $('chList').querySelectorAll('.ch-card').forEach(el => { el.hidden = !!t && !el.dataset.text.includes(t); }); };
   }
 

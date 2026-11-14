@@ -61,7 +61,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // ---------- Cashback ----------
   // Saldo = lotes não estornados, com sobra e ainda dentro da validade (último dia válido = expires_on, no fuso da loja).
   // Datas saem como texto 'AAAA-MM-DD' para não mudarem de dia ao virar JSON.
-  const CB_ACTIVE = `reversed_at IS NULL AND remaining_cents>0 AND expires_on>=(now() AT TIME ZONE '${TZ.replace(/'/g, '')}')::date`;
+  const CB_ACTIVE = `reversed_at IS NULL AND cleared_at IS NULL AND remaining_cents>0 AND expires_on>=(now() AT TIME ZONE '${TZ.replace(/'/g, '')}')::date`;
   const CB_CONFIG = 'cashback_enabled,cashback_percent,cashback_max_use_percent,cashback_valid_days,cashback_min_sale_cents,cashback_rules,cashback_reminder_message,cashback_off_weekdays';
   const cbShape = r => ({ balance_cents: r?.balance_cents || 0, next_expires_on: r?.next_on || null, next_expiring_cents: r?.next_cents || 0 });
   async function cashbackFor(tenant, ids, client = { query: q }) {
@@ -295,7 +295,30 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const recent = await q(`SELECT sale_number,total_cents,payment_method,description,created_at FROM sales WHERE tenant_id=$1 AND customer_id=$2 AND canceled_at IS NULL ORDER BY created_at DESC LIMIT 5`, [tid(req), req.params.id]);
     const progress = await progressFor(tid(req), [req.params.id]);
     const cashback = (await cashbackFor(tid(req), [req.params.id])).get(req.params.id);
-    res.json({ ...c.rows[0], loyalty: progress.get(req.params.id), cashback, orders: orders.rows, recent_sales: recent.rows });
+    const clears = (await q(`SELECT k.amount_cents,k.reason,k.created_at,u.name created_by_name FROM cashback_clears k LEFT JOIN users u ON u.id=k.created_by
+      WHERE k.tenant_id=$1 AND k.customer_id=$2 ORDER BY k.created_at DESC LIMIT 5`, [tid(req), req.params.id])).rows;
+    res.json({ ...c.rows[0], loyalty: progress.get(req.params.id), cashback, cashback_clears: clears, orders: orders.rows, recent_sales: recent.rows });
+  }));
+  // Excluir o saldo de cashback do cliente (ex.: gerado numa troca de espécie por Pix). Pede a senha do admin e o motivo.
+  // Zera todo o saldo válido; fica registrado (quem, quando, quanto e por quê). O saldo excluído não volta,
+  // nem se uma venda que usou parte dele for cancelada depois.
+  app.post('/api/store/sales/customers/:id/cashback/clear', ...guard, adminOnly, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Cliente inválido');
+    const v = valid(z.object({ reason: z.string().trim().min(3, 'Escreva o motivo').max(200) }).strict(), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]); // mesma fila das vendas (saldo de cashback)
+      if (!(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [req.params.id, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 404, 'Cliente não encontrado'); }
+      const lots = (await c.query(`SELECT id,remaining_cents FROM cashback_lots WHERE tenant_id=$1 AND customer_id=$2 AND ${CB_ACTIVE} FOR UPDATE`, [tid(req), req.params.id])).rows;
+      const amount = lots.reduce((a, l) => a + l.remaining_cents, 0);
+      if (!amount) { await c.query('ROLLBACK'); return bad(res, 409, 'Este cliente não tem saldo de cashback para excluir.'); }
+      const k = (await c.query('INSERT INTO cashback_clears(tenant_id,customer_id,amount_cents,reason,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id,amount_cents,reason,created_at', [tid(req), req.params.id, amount, v.reason, req.user.id])).rows[0];
+      await c.query('UPDATE cashback_lots SET cleared_at=now(),clear_id=$1 WHERE id=ANY($2::uuid[])', [k.id, lots.map(l => l.id)]);
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'cashback_clear', 'customer', req.params.id]);
+      await c.query('COMMIT');
+      res.json({ cleared_cents: amount, clear: k, cashback: (await cashbackFor(tid(req), [req.params.id])).get(req.params.id) });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 
   // Histórico completo do cliente com a loja: compras, serviços (aparelho, peça, garantia), pagamentos e pedidos.
@@ -334,7 +357,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         last_at: [...sales.rows.map(x => x.created_at), ...orders.rows.map(o => o.created_at)].sort().pop() || null, by_method: byMethod },
       warranties, sales: sales.rows, orders: orders.rows,
       loyalty: salesOn ? (await progressFor(tid(req), [req.params.id])).get(req.params.id) : null,
-      cashback: salesOn ? (await cashbackFor(tid(req), [req.params.id])).get(req.params.id) || null : null
+      cashback: salesOn ? (await cashbackFor(tid(req), [req.params.id])).get(req.params.id) || null : null,
+      cashback_clears: salesOn ? (await q(`SELECT k.amount_cents,k.reason,k.created_at,u.name created_by_name FROM cashback_clears k LEFT JOIN users u ON u.id=k.created_by
+        WHERE k.tenant_id=$1 AND k.customer_id=$2 ORDER BY k.created_at DESC LIMIT 10`, [tid(req), req.params.id])).rows : []
     });
   }));
 
@@ -372,7 +397,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   // ---------- Produtos (código de barras) ----------
   // O leitor USB funciona como teclado: digita o código e Enter. O painel procura aqui.
-  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,variant_stock,restock_pending,labels_pending,active,updated_at,kind,supplier_id,device_model,(SELECT s.name FROM suppliers s WHERE s.id=products.supplier_id) supplier_name,(SELECT a.base_cents FROM price_rule_applied a WHERE a.product_id=products.id) seasonal_base_cents';
+  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,variant_stock,restock_pending,labels_pending,active,updated_at,kind,cashback,restock,supplier_id,device_model,(SELECT s.name FROM suppliers s WHERE s.id=products.supplier_id) supplier_name,(SELECT a.base_cents FROM price_rule_applied a WHERE a.product_id=products.id) seasonal_base_cents';
   // Fornecedor e modelo de aparelho: acha pelo nome (sem diferenciar maiúsculas) ou cria; cada uso sobe na lista de sugestões.
   const cleanName = v => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 80);
   const touchName = async (cq, table, tenant, name, use = true) => {
@@ -391,10 +416,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     [tenant, productId, variantId, kind, quantity, unitCost ?? null, saleId ?? null, userId ?? null, 'before' in opts, opts.before ?? null, opts.note ?? null]);
   // Peça: o "modelo" é o aparelho e o fornecedor vai junto, para a lista de compras.
   const restockRows = async tenant => (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents,p.barcode,p.kind,s.name supplier_name
-      FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
+      FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.tenant_id=$1 AND p.active AND p.restock AND NOT p.ask_variant AND p.restock_pending>0
     UNION ALL
     SELECT p.id,v.id,p.name,v.name,v.restock_pending,CASE WHEN p.variant_stock='total' THEN p.stock_qty ELSE v.stock_qty END,p.cost_cents,p.barcode,p.kind,NULL
-      FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.tenant_id=$1 AND p.active AND v.active AND v.restock_pending>0
+      FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.tenant_id=$1 AND p.active AND p.restock AND v.active AND v.restock_pending>0
     ORDER BY 9,10 NULLS LAST,3,4`, [tenant])).rows;
   // Modelo de um produto com modelos: acha pelo nome (sem diferenciar maiúsculas) ou cria.
   const upsertVariant = async (cq, tenant, productId, name) => (await cq(`INSERT INTO product_variants(tenant_id,product_id,name) VALUES($1,$2,$3)
@@ -414,7 +439,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     // Peça de serviço (tela, bateria…): fornecedor e modelo do aparelho; preço de venda é opcional (sugestão).
     kind: z.enum(['product', 'part']).optional(),
     supplier: z.string().trim().max(80).optional(),
-    device_model: z.string().trim().max(80).optional()
+    device_model: z.string().trim().max(80).optional(),
+    // Gera cashback ao vender (troca de espécie por Pix, crédito de celular: não) e entra na lista de reposição.
+    cashback: z.boolean().optional(),
+    restock: z.boolean().optional()
   }).strict();
   const dupBarcode = (e, res) => { if (e.code === '23505') { bad(res, 409, 'Já existe um produto com este código de barras'); return true; } return false; };
 
@@ -459,8 +487,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const sup = part ? await touchName(q, 'suppliers', tid(req), v.supplier, false) : null;
       if (part && v.device_model) await touchName(q, 'device_models', tid(req), v.device_model, false);
       const perModel = v.ask_variant && v.variant_stock !== 'total';
-      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by,kind,supplier_id,device_model,variant_stock) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12) RETURNING ${productFields}`,
-        [tid(req), v.name, v.barcode || '', v.price_cents ?? 0, v.cost_cents ?? null, perModel ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id, part ? 'part' : 'product', sup?.id || null, part ? cleanName(v.device_model) : '', v.variant_stock || 'model']);
+      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by,kind,supplier_id,device_model,variant_stock,cashback,restock) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12,$13,$14) RETURNING ${productFields}`,
+        [tid(req), v.name, v.barcode || '', v.price_cents ?? 0, v.cost_cents ?? null, perModel ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id, part ? 'part' : 'product', sup?.id || null, part ? cleanName(v.device_model) : '', v.variant_stock || 'model', v.cashback ?? true, v.restock ?? true]);
       if (!perModel && v.stock_qty > 0) await ledger(q, tid(req), r.rows[0].id, null, 'entry', v.stock_qty, v.cost_cents, null, req.user.id, { before: null, note: part ? 'Peça cadastrada' : 'Produto cadastrado' });
       await audit(req, 'create', 'product', r.rows[0].id); res.status(201).json(r.rows[0]);
     } catch (e) { if (!dupBarcode(e, res)) throw e; }
@@ -492,10 +520,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           price_cents=COALESCE($3,price_cents),
           cost_cents=CASE WHEN $6 THEN $7::int ELSE cost_cents END,
           stock_qty=CASE WHEN $8 THEN $9::int ELSE stock_qty END,
-          ask_variant=COALESCE($10,ask_variant),variant_stock=COALESCE($14,variant_stock),updated_at=now()
+          ask_variant=COALESCE($10,ask_variant),variant_stock=COALESCE($14,variant_stock),
+          cashback=COALESCE($15,cashback),restock=COALESCE($16,restock),
+          restock_pending=CASE WHEN $16 IS FALSE THEN 0 ELSE restock_pending END,updated_at=now()
         WHERE id=$4 AND tenant_id=$5 AND active RETURNING ${productFields}`, [v.name ?? null, v.barcode ?? null, v.price_cents ?? null, req.params.id, tid(req),
         'cost_cents' in v, v.cost_cents ?? null, 'stock_qty' in v, v.stock_qty ?? null, v.ask_variant ?? null,
-        'supplier' in v, sup?.id || null, 'device_model' in v ? cleanName(v.device_model) : null, v.variant_stock ?? null]);
+        'supplier' in v, sup?.id || null, 'device_model' in v ? cleanName(v.device_model) : null, v.variant_stock ?? null, v.cashback ?? null, v.restock ?? null]);
       if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
       // Quantidade trocada direto no cadastro também entra no log.
       const before = old?.stock_qty ?? null, after = r.rows[0].stock_qty;
@@ -1049,7 +1079,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       let items = [], total = v.total_cents, description = v.description;
       if (v.items) {
         const ids = [...new Set(v.items.filter(it => it.product_id).map(it => it.product_id))];
-        const p = ids.length ? await c.query('SELECT id,name,barcode,price_cents,cost_cents,ask_variant,variant_stock FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
+        const p = ids.length ? await c.query('SELECT id,name,barcode,price_cents,cost_cents,ask_variant,variant_stock,cashback FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
         if (p.rowCount !== ids.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Produto não encontrado ou excluído. Atualize a venda.'); }
         const byId = new Map(p.rows.map(x => [x.id, x])), merged = new Map();
         const partIds = [...new Set(v.items.filter(it => it.part_id).map(it => it.part_id))];
@@ -1082,7 +1112,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           const key = prod ? prod.id + ':' + (variant || '').toLowerCase() + ':' + unit + (it.gift ? ':g' : '') : 'l:' + it.name.toLowerCase() + ':' + unit;
           const cur = merged.get(key);
           if (cur) cur.quantity += it.quantity;
-          else merged.set(key, prod ? { id: prod.id, name: prod.name, variant, barcode: prod.barcode, cost_cents: prod.cost_cents, list_price_cents: prod.price_cents, unit_price_cents: unit, quantity: it.quantity, gift: !!it.gift, total_stock: prod.ask_variant && prod.variant_stock === 'total' }
+          else merged.set(key, prod ? { id: prod.id, name: prod.name, variant, barcode: prod.barcode, cost_cents: prod.cost_cents, list_price_cents: prod.price_cents, unit_price_cents: unit, quantity: it.quantity, gift: !!it.gift, total_stock: prod.ask_variant && prod.variant_stock === 'total', no_cb: !prod.cashback }
             : { id: null, name: it.name, barcode: null, cost_cents: null, list_price_cents: null, unit_price_cents: unit, quantity: it.quantity });
         }
         items = [...merged.values()].map((x, position) => ({ ...x, total_cents: x.unit_price_cents * x.quantity, position }));
@@ -1133,8 +1163,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       }
       // Cashback ganho: sobre o valor pago (já sem desconto e sem o cashback usado). Só vale a partir da próxima compra.
       // Dia da semana bloqueado (ex.: quarta da promoção): a venda não gera cashback (usar o saldo continua valendo).
+      // Produto marcado "não gera cashback" no cadastro (troca de espécie por Pix, crédito de celular): fica fora da conta.
+      const cbBase = v.items ? items.reduce((a, x) => a + (x.no_cb ? 0 : x.total_cents), 0) : total;
       if (customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents && !(cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) {
-        const earned = cbEarn(total, cbCfg.cashback_percent);
+        const earned = cbEarn(cbBase, cbCfg.cashback_percent);
         if (earned >= 1) {
           await c.query(`INSERT INTO cashback_lots(tenant_id,customer_id,sale_id,amount_cents,remaining_cents,percent_snapshot,expires_on)
             VALUES($1,$2,$3,$4,$4,$5,(now() AT TIME ZONE $6)::date+$7::int)`, [tid(req), customerId, sale.id, earned, cbCfg.cashback_percent, TZ, cbCfg.cashback_valid_days]);
@@ -1159,6 +1191,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents, service, supplier, device_model, warranty_days, cost_cents, gift }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents, ...(gift ? { gift: true } : {}),
         ...(service ? { service: true, supplier_name: supplier, device_model, warranty_days, unit_cost_cents: cost_cents } : {}) }));
       if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && (cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) sale.cashback_off_today = true;
+      else if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && v.items && items.some(x => x.no_cb) && !cbBase) sale.cashback_no_products = true;
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.
       let counted = false;
       // Pedido já concluído antes do pagamento, sem ponto (o serviço só ficou conhecido agora): avalia pelo dia em que foi feito.

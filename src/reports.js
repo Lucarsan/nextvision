@@ -76,9 +76,9 @@ export async function reportData(q, tenantId, kind, day) {
     q(`SELECT count(*)::int n,count(*) FILTER (WHERE source='qrcode')::int qr FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND ${inRange('created_at')}`, range),
     q(`SELECT s.closed_at,s.expected_cash_cents,s.counted_cash_cents,u.name who FROM cash_sessions s LEFT JOIN users u ON u.id=s.closed_by
        WHERE s.tenant_id=$1 AND s.status='closed' AND ${inRange('s.closed_at')} ORDER BY s.closed_at`, range),
-    q(`SELECT p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.restock_pending>0
+    q(`SELECT p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents FROM products p WHERE p.tenant_id=$1 AND p.active AND p.restock AND NOT p.ask_variant AND p.restock_pending>0
        UNION ALL SELECT p.name,v.name,v.restock_pending,CASE WHEN p.variant_stock='total' THEN p.stock_qty ELSE v.stock_qty END,p.cost_cents FROM product_variants v JOIN products p ON p.id=v.product_id
-       WHERE p.tenant_id=$1 AND p.active AND v.active AND v.restock_pending>0 ORDER BY 1,2`, [tenantId]),
+       WHERE p.tenant_id=$1 AND p.active AND p.restock AND v.active AND v.restock_pending>0 ORDER BY 1,2`, [tenantId]),
     q(`SELECT COALESCE(sl.name,u.name) name,count(*)::int n,sum(x.total_cents)::int total FROM sales x JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 3 DESC`, range),
     q(`SELECT to_char(x.created_at AT TIME ZONE $4,'YYYY-MM-DD') d,count(*)::int n,sum(x.total_cents)::int total FROM sales x

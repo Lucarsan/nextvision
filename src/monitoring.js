@@ -69,12 +69,15 @@ export async function checkNeon(now = new Date()) {
   if (!id) return { items: [alert('neon.config', 'warn', 'banco', 'Projeto do Neon não identificado', 'Defina NEON_PROJECT_ID no Render (a chave não mostrou exatamente um projeto).')], metrics: { configured: false, error: 'projeto não identificado (defina NEON_PROJECT_ID)' } };
   const p = (await getJson(base + '/projects/' + id, H))?.project || {};
   const cu = Number(p.default_endpoint_settings?.autoscaling_limit_max_cu) || 0.25;
-  const usedH = Math.round((Number(p.active_time) || 0) * cu / 36) / 100; // CU-hora
+  // compute_time_seconds já vem em CU-segundos (é o que conta na cota); senão tempo ativo × tamanho.
+  const cuSeconds = Number(p.compute_time_seconds) || (Number(p.active_time_seconds) || Number(p.active_time) || 0) * cu;
+  if (!cuSeconds && p.compute_time_seconds === undefined && p.active_time_seconds === undefined && p.active_time === undefined) throw Error('o Neon não informou o consumo');
+  const usedH = Math.round(cuSeconds / 36) / 100; // CU-hora
   const start = new Date(p.consumption_period_start || Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const end = new Date(p.quota_reset_at || p.consumption_period_end || Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   // Ritmo: pela leitura diária mais antiga com 24 h+ dentro do período (reflete mudanças recentes);
   // sem leituras ainda, média do período.
-  const samples = (state.neonSamples || []).filter(x => x.at >= start.getTime() && now - x.at >= DAY && x.h <= usedH);
+  const samples = (state.neonSamples || []).filter(x => x.at >= start.getTime() && now - x.at >= DAY && x.h > 0 && x.h <= usedH);
   const ref = samples.sort((a, b) => a.at - b.at)[0];
   const ratePerMs = ref ? (usedH - ref.h) / (now - ref.at) : usedH / Math.max(HOUR, now - start);
   const projected = Math.round((usedH + ratePerMs * Math.max(0, end - now)) * 10) / 10;
@@ -96,6 +99,10 @@ export async function checkNeon(now = new Date()) {
     metrics.cost_usd = Math.round(usedH * price * 100) / 100; metrics.projected_cost_usd = Math.round(projected * price * 100) / 100; metrics.budget_usd = budget;
     if (metrics.projected_cost_usd > budget) items.push(alert('neon.cost', metrics.projected_cost_usd > budget * 1.5 ? 'critical' : 'warn', 'banco', 'Banco: custo previsto US$ ' + metrics.projected_cost_usd + ' no mês', 'Orçamento: US$ ' + budget + '. Já gasto: US$ ' + metrics.cost_usd + '. Veja o que mantém o banco acordado.'));
   }
+  const egress = Number(p.data_transfer_bytes) || 0, egressLimit = (Number(e.NEON_TRANSFER_LIMIT_GB) || 5) * 1e9;
+  metrics.transfer_bytes = egress; metrics.transfer_limit_bytes = egressLimit;
+  const tp = limit > 0 ? pct(egress, egressLimit) : 0;
+  if (tp >= 70) items.push(alert('neon.transfer', tp >= 90 ? 'critical' : 'warn', 'banco', 'Banco: ' + tp + '% da transferência de dados do mês', Math.round(egress / 1e6) + ' MB de ' + Math.round(egressLimit / 1e6) + ' MB. Ao acabar, o banco PARA até ' + fmtDay(end) + '.'));
   const sp = pct(storage, storageLimit);
   if (sp >= 70) items.push(alert('neon.storage', sp >= 90 ? 'critical' : 'warn', 'banco', 'Banco: ' + sp + '% do espaço usado', Math.round(storage / 1048576) + ' MB de ' + Math.round(storageLimit / 1048576) + ' MB. Cheio, o banco para de aceitar dados.'));
   return { items, metrics };

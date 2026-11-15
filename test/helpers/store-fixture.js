@@ -11,7 +11,7 @@ import bcrypt from 'bcryptjs';
 export const FIXTURE_ADMIN = { login: process.env.STOCK_VALUE_LOGIN || 'admin', password: 'fixture-admin-pass' };
 if (!process.env.STOCK_VALUE_PASSWORD_HASH) { process.env.STOCK_VALUE_LOGIN = FIXTURE_ADMIN.login; process.env.STOCK_VALUE_PASSWORD_HASH = bcrypt.hashSync(FIXTURE_ADMIN.password, 4); }
 
-export async function createStoreFixture() {
+export async function createStoreFixture({ env: extraEnv = {} } = {}) {
   const url = new URL(process.env.TEST_DATABASE_URL);
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname), 'Use a local test database');
   const schema = 'nv_panel_' + crypto.randomBytes(8).toString('hex');
@@ -25,7 +25,7 @@ export async function createStoreFixture() {
   try {
     await db.query(`CREATE SCHEMA ${schema}`); await db.query(`SET search_path TO ${schema},public`);
     url.searchParams.set('options', '-c search_path=' + schema + ',public');
-    const env = { ...process.env, DATABASE_URL: url.toString(), DB_SSL: 'disable' };
+    const env = { ...process.env, QUIET_HOURS: 'off', ...extraEnv, DATABASE_URL: url.toString(), DB_SSL: 'disable' };
     const migrate = () => { const run = spawnSync(process.execPath, ['src/migrate.js'], { env, encoding: 'utf8' }); assert.equal(run.status, 0, run.stderr); };
     migrate();
     const [tenant, foreignTenant, masterId] = Array.from({ length: 3 }, () => crypto.randomUUID());

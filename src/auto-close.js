@@ -1,3 +1,4 @@
+import { backgroundAllowed } from './quiet-hours.js';
 // Encerramento automático diário (tenants.auto_close_time, hora de Brasília).
 // Para quando a equipe esquece de finalizar: no horário, pedidos que já começaram (em andamento
 // ou pausados) viram "concluídos", a gravação da etapa é fechada e a câmera é liberada.
@@ -35,7 +36,7 @@ export async function autoCloseTick() {
 let running = false;
 export function startAutoCloseLoop(intervalMs = 60000) {
   const timer = setInterval(async () => {
-    if (running) return; running = true;
+    if (running || !backgroundAllowed()) return; running = true;
     try { const n = await autoCloseTick(); if (n) console.log('Encerramento automático:', n, 'pedido(s) finalizado(s)'); }
     catch (e) { console.error('Encerramento automático falhou:', e.code || e.message); } finally { running = false; }
   }, intervalMs);

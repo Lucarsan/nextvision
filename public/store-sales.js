@@ -2641,5 +2641,5 @@
     }
   };
   // Operador novato: some o que ele não pode usar (o servidor também recusa).
-  if (token) api('/store/sales/config').then(c => { config = c; document.body.classList.toggle('fs-basic', c.access_level === 'basic'); if (c.enabled) { injectNav(); refreshDue(); setInterval(refreshDue, 60000); document.addEventListener('visibilitychange', refreshDue); } }).catch(() => {});
+  if (token) api('/store/sales/config').then(c => { config = c; document.body.classList.toggle('fs-basic', c.access_level === 'basic'); if (c.enabled) { injectNav(); refreshDue(); setInterval(() => { if (!window.fpPollPaused?.()) refreshDue(); }, 60000); document.addEventListener('visibilitychange', refreshDue); } }).catch(() => {});
 })();

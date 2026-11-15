@@ -98,7 +98,7 @@ const heartbeatSchema = z.object({
   update: heartbeatUpdateSchema
 });
 
-export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route, bad, valid, audit, rateLimit, uuid }) {
+export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, deviceAuthQuiet = deviceAuth, route, bad, valid, audit, rateLimit, uuid }) {
   const sendError = (res, error) => {
     if (error instanceof MediaError) return bad(res, error.status, error.message);
     if (error instanceof cf.CloudflareError) { console.error('Cloudflare failure', { step: error.step, status: error.status, codes: error.codes }); return bad(res, 502, 'Falha na Cloudflare ao ' + error.step.replace(/^.*?\s/, '')); }
@@ -178,8 +178,10 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, route,
     } catch (error) { sendError(res, error); }
   }));
 
-  app.post('/api/connect/heartbeat', rateLimit({ windowMs: 60000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false }), deviceAuth, route(async (req, res) => {
+  app.post('/api/connect/heartbeat', rateLimit({ windowMs: 60000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false }), deviceAuthQuiet, route(async (req, res) => {
     const v = valid(heartbeatSchema, req, res); if (!v) return;
+    // Horário de silêncio: confirma sem gravar (o banco dorme). No próximo uso humano volta a registrar.
+    if (req.quiet) return res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30, quiet: true });
     const known = await q('SELECT id FROM cameras WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])', [req.device.tenant_id, v.cameras.map(c => c.id)]);
     const allowed = new Set(known.rows.map(r => r.id));
     const health = { components: v.components, cameras: v.cameras.filter(c => allowed.has(c.id)) };

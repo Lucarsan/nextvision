@@ -1,3 +1,4 @@
+import { backgroundAllowed } from './quiet-hours.js';
 // Relatórios da loja por e-mail (Resend): diário às 18h, semanal no sábado às 15h e mensal no último
 // dia do mês às 18h, no fuso da loja. Cada envio é registrado em report_runs para não duplicar.
 // O agendador roda dentro do servidor (a cada 5 min) e também por um ping externo
@@ -291,7 +292,7 @@ export function registerReports(app, { q, auth, roles, route, bad, valid, audit 
   }));
 
   // Agendador interno: a cada 5 min (quando o servidor está acordado).
-  const tick = () => runDueReports(q).catch(e => console.error('Agendador de relatórios', e.code || e.message));
+  const tick = () => !backgroundAllowed() ? null : runDueReports(q).catch(e => console.error('Agendador de relatórios', e.code || e.message));
   setTimeout(tick, 30000).unref(); setInterval(tick, 5 * 60000).unref();
   console.log('Relatórios por e-mail:', emailConfigured() ? 'envio configurado' : 'envio NÃO configurado (faltam RESEND_API_KEY/EMAIL_FROM)', '· ping externo:', process.env.REPORTS_CRON_KEY ? 'configurado' : 'sem chave');
 }

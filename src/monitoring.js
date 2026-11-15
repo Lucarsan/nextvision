@@ -196,7 +196,8 @@ function configItems() {
   const e = env(), items = [];
   if (!e.TELEGRAM_BOT_TOKEN) items.push(alert('alerts.telegram', 'warn', 'avisos', 'Avisos pelo Telegram não configurados', 'Crie o bot e coloque TELEGRAM_BOT_TOKEN no Render; depois conecte em Monitoramento.'));
   if (!emailConfigured()) items.push(alert('alerts.email', 'info', 'avisos', 'Envio de e-mail não configurado', 'Faltam RESEND_API_KEY e EMAIL_FROM no Render (também usados nos relatórios das lojas).'));
-  if (!e.STORE_BACKUP_KEY) items.push(alert('config.backup_key', 'warn', 'configuração', 'Backup das lojas sem chave', 'STORE_BACKUP_KEY não definida: os backups no PC das lojas não são gerados.'));
+  // Sem STORE_BACKUP_KEY os backups usam chave derivada do JWT_SECRET (funcionam). O risco é trocar o JWT_SECRET.
+  if (!e.STORE_BACKUP_KEY) items.push(alert('config.backup_key', 'info', 'configuração', 'Backups das lojas presos ao JWT_SECRET', 'Os backups funcionam, mas a chave deles vem do JWT_SECRET: NÃO troque o JWT_SECRET, ou os backups já guardados ficam impossíveis de abrir. Não crie STORE_BACKUP_KEY nova sem migrar os backups.'));
   return items;
 }
 

@@ -1,3 +1,4 @@
+import { backgroundAllowed } from './quiet-hours.js';
 // Modo demonstração (loja marcada pela central com tenants.demo_mode).
 // - O link do cliente mostra um vídeo de exemplo em cada etapa (no lugar da câmera).
 // - Os pedidos andam sozinhos: começam alguns segundos depois de criados, ficam
@@ -84,7 +85,7 @@ export async function demoTick(nowMs = Date.now()) {
 let running = false;
 export function startDemoLoop(intervalMs = 4000) {
   const timer = setInterval(async () => {
-    if (running) return; running = true;
+    if (running || !backgroundAllowed()) return; running = true;
     try { await demoTick(); } catch (e) { console.error('Modo demonstração falhou:', e.code || e.message); } finally { running = false; }
   }, intervalMs);
   timer.unref();

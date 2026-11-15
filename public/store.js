@@ -602,12 +602,13 @@ $('createQuick').onclick = async () => {
 };
 $('copyLink').onclick = async () => { try { await navigator.clipboard.writeText($('trackingLink').value); measureShare($('trackingLink').value, 'copy'); feedback('Link copiado.'); } catch { $('trackingLink').select(); } };
 async function refreshVisible() {
-  if (document.hidden) return;
+  if (document.hidden || window.fpPollPaused?.()) return;
   try { await reload(); } catch(error) { $('syncStatus').textContent = error.status===403?'Acesso bloqueado pela central.':'Conexão interrompida. Tentando atualizar novamente…';if(error.status===403)feedback(error.message,true); }
 }
 document.addEventListener('visibilitychange', refreshVisible);
 window.addEventListener('focus', refreshVisible);
 setInterval(refreshVisible, 5000);
+window.addEventListener('fp-wake', refreshVisible);
 (async () => {
   if (!token) { location.replace('/entrar'); return; }
   try {

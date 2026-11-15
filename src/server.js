@@ -9,7 +9,10 @@ import {loyaltyBlock} from './loyalty-rules.js';
 import {registerCustomerPets,savePetFromOrder} from './customer-pets.js';
 import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VIDEO,demoWaitSeconds} from './demo-mode.js';
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
+import {markHumanActivity,isQuiet,backgroundAllowed} from './quiet-hours.js';
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
+// Uso humano (loja, central, técnico, cliente) acorda as rotinas fora do expediente. Agentes e agendador não contam.
+app.use('/api',(req,_res,next)=>{if(!/^\/(connect|internal)\//.test(req.path))markHumanActivity();next();});
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
 const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const bad=(res,status,message)=>res.status(status).json({error:message});
@@ -44,14 +47,24 @@ app.post('/api/auth/login',rateLimit({windowMs:900000,limit:12,standardHeaders:'
 app.get('/api/me',auth,(req,res)=>res.json(req.user));
 
 const digestToken=value=>crypto.createHash('sha256').update(value).digest('hex');
-const deviceAuth=route(async(req,res,next)=>{
+// Computadores autorizados vistos recentemente (só para o horário de silêncio: sinal de vida e
+// lista de gravações respondem sem acordar o banco). Bloqueio feito à noite vale no próximo uso humano.
+const deviceCache=new Map(),recordingJobsCache=new Map();
+const DEVICE_CACHE_MS=24*3600000;
+const deviceAuthWith=quietOk=>route(async(req,res,next)=>{
  const raw=/^Bearer (nvdev_[a-f0-9]{64})$/i.exec(req.get('authorization')||'')?.[1];
  if(!raw)return bad(res,401,'Dispositivo não autenticado');
- const result=await q("SELECT d.id,d.tenant_id,d.name,d.enabled,d.revoked_at,t.status tenant_status FROM shop_devices d JOIN tenants t ON t.id=d.tenant_id WHERE d.credential_hash=$1",[digestToken(raw)]);
- if(!result.rowCount||!result.rows[0].enabled||result.rows[0].revoked_at||!['trial','active'].includes(result.rows[0].tenant_status))return bad(res,403,'Dispositivo bloqueado');
- req.device=result.rows[0];next();
+ const hash=digestToken(raw),cached=deviceCache.get(hash);
+ if(quietOk&&cached&&Date.now()-cached.at<DEVICE_CACHE_MS&&isQuiet()){req.device=cached.device;req.quiet=true;return next();}
+ const result=await q("SELECT d.id,d.tenant_id,d.name,d.enabled,d.revoked_at,t.status tenant_status FROM shop_devices d JOIN tenants t ON t.id=d.tenant_id WHERE d.credential_hash=$1",[hash]);
+ if(!result.rowCount||!result.rows[0].enabled||result.rows[0].revoked_at||!['trial','active'].includes(result.rows[0].tenant_status)){deviceCache.delete(hash);return bad(res,403,'Dispositivo bloqueado');}
+ req.device=result.rows[0];deviceCache.set(hash,{device:req.device,at:Date.now()});
+ // Qualquer ação do computador (ex.: fim de gravação) invalida a lista guardada dele.
+ if(req.method!=='GET')recordingJobsCache.delete(req.device.id);
+ next();
 });
-registerStoreMedia(app,{q,db,auth,roles,deviceAuth,route,bad,valid,audit,rateLimit,uuid});
+const deviceAuth=deviceAuthWith(false),deviceAuthQuiet=deviceAuthWith(true);
+registerStoreMedia(app,{q,db,auth,roles,deviceAuth,deviceAuthQuiet,route,bad,valid,audit,rateLimit,uuid});
 // Pedido ao vivo aberto pelo caixa (mesma gravação do /api/orders, dentro da transação da venda).
 const createLiveOrder=async(client,tenant,customerId,processId,details)=>{const token=crypto.randomBytes(12).toString('base64url');const r=await client.query("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,details) SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tenant,customerId,processId,digestToken(token),JSON.stringify(details)]);return r.rowCount?{...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token}:null};
 registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid,orderDetails,createLiveOrder,savePetFromOrder});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerPartners(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerReviewLinks(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});registerPetRecords(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});
@@ -92,7 +105,9 @@ app.get('/api/connect/cameras',deviceAuth,route(async(req,res)=>{
  const legacy=process.env.LIVE_CAMERA_ID;
  res.set('Cache-Control','no-store');res.json({mode:legacy?'legacy_single_camera':process.env.MEDIA_MULTI_CAMERA_ENABLED==='true'?'central_media':'unconfigured',cameras:result.rows.map(camera=>({...camera,stream_path:legacy===camera.id?'camera':camera.stream_path}))});
 }));
-app.get('/api/connect/recording-jobs',deviceAuth,route(async(req,res)=>{
+app.get('/api/connect/recording-jobs',deviceAuthQuiet,route(async(req,res)=>{
+ const kept=req.quiet&&recordingJobsCache.get(req.device.id);
+ if(kept){res.set('Cache-Control','no-store');return res.json(kept);}
  await q("UPDATE shop_devices SET last_seen_at=now() WHERE id=$1",[req.device.id]);
  const jobs=await q(`SELECT r.id recording_id,r.order_id,r.step_index,r.visit_index,r.camera_id,r.status,r.started_at,r.ended_at,
  o.status order_status,o.step_index current_step
@@ -100,7 +115,8 @@ app.get('/api/connect/recording-jobs',deviceAuth,route(async(req,res)=>{
  JOIN cameras ca ON ca.id=r.camera_id AND ca.tenant_id=r.tenant_id
  WHERE r.tenant_id=$1 AND ((r.status='finalizing' AND COALESCE(r.device_id,ca.device_id)=$2) OR (r.status IN ('pending','recording','paused') AND ca.device_id=$2 AND ca.enabled AND ca.deleted_at IS NULL))
  ORDER BY r.id LIMIT 100`,[req.device.tenant_id,req.device.id]);
- res.set('Cache-Control','no-store');res.json({device_id:req.device.id,tenant_id:req.device.tenant_id,poll_seconds:5,jobs:jobs.rows});
+ const body={device_id:req.device.id,tenant_id:req.device.tenant_id,poll_seconds:5,jobs:jobs.rows};recordingJobsCache.set(req.device.id,body);
+ res.set('Cache-Control','no-store');res.json(body);
 }));
 app.post('/api/connect/recording-jobs/:id/event',deviceAuth,route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'Gravação inválida');
@@ -576,7 +592,7 @@ app.get('/api/public/orders/:token/photos/:photoId',rateLimit({windowMs:60000,li
 }));
 // Apaga fotos vencidas pelo prazo de guarda de cada loja.
 const purgeOldPhotos=()=>q("DELETE FROM order_photos ph USING tenants t WHERE t.id=ph.tenant_id AND ph.created_at < now() - make_interval(days => t.retention_days)").catch(e=>console.error('Limpeza de fotos falhou:',e.code||e.name));
-setTimeout(purgeOldPhotos,60000).unref();setInterval(purgeOldPhotos,6*3600000).unref();
+setTimeout(purgeOldPhotos,60000).unref();setInterval(()=>{if(backgroundAllowed())purgeOldPhotos();},6*3600000).unref();
 
 const allowedMediaAsset=name=>/^(index|stream|segment|part|init)[A-Za-z0-9_.-]{0,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name)||/^[A-Za-z0-9_-]{1,100}\.(?:m3u8|ts|m4s|mp4)$/.test(name);
 // Several customers of the same store share one public IP (store/home Wi-Fi), and

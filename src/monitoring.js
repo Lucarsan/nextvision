@@ -66,7 +66,7 @@ export async function checkNeon(now = new Date()) {
     id = projects.length === 1 ? projects[0].id : null;
     if (id) state.neonProject = id;
   }
-  if (!id) return { items: [alert('neon.config', 'warn', 'banco', 'Projeto do Neon não identificado', 'Defina NEON_PROJECT_ID no Render (a conta tem mais de um projeto).')], metrics: { configured: false } };
+  if (!id) return { items: [alert('neon.config', 'warn', 'banco', 'Projeto do Neon não identificado', 'Defina NEON_PROJECT_ID no Render (a chave não mostrou exatamente um projeto).')], metrics: { configured: false, error: 'projeto não identificado (defina NEON_PROJECT_ID)' } };
   const p = (await getJson(base + '/projects/' + id, H))?.project || {};
   const cu = Number(p.default_endpoint_settings?.autoscaling_limit_max_cu) || 0.25;
   const usedH = Math.round((Number(p.active_time) || 0) * cu / 36) / 100; // CU-hora

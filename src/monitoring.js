@@ -20,10 +20,12 @@ import { emailConfigured, sendEmail } from './reports.js';
 import { listReleases, compareVersions } from './agent-releases.js';
 
 const RANK = { info: 0, warn: 1, critical: 2 };
+const UA = 'FicouPronto-Monitor/1.0 (+https://ficoupronto.com)';
 const DAY = 86400000, HOUR = 3600000;
 const TZ = 'America/Fortaleza';
 const env = () => process.env;
 const fmtDate = d => new Date(d).toLocaleDateString('pt-BR', { timeZone: TZ });
+const fmtDay = d => new Date(d).toLocaleDateString('pt-BR', { timeZone: 'UTC' }); // datas de cobrança/cota (meia-noite UTC)
 const fmtDT = d => new Date(d).toLocaleString('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const pct = (a, b) => b ? Math.round(a * 1000 / b) / 10 : 0;
 const alert = (key, severity, category, title, detail = '', tenant_id = null) => ({ key, severity, category, title, detail, tenant_id });
@@ -31,7 +33,7 @@ const alert = (key, severity, category, title, detail = '', tenant_id = null) =>
 async function getJson(url, headers = {}, timeout = 15000) {
   const r = await fetch(url, { headers: { Accept: 'application/json', ...headers }, signal: AbortSignal.timeout(timeout) });
   const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch { json = null; }
-  if (!r.ok) { const e = Error('HTTP ' + r.status); e.status = r.status; throw e; }
+  if (!r.ok) { const e = Error('HTTP ' + r.status + (json?.message ? ' — ' + String(json.message).slice(0, 160) : '')); e.status = r.status; throw e; }
   return json;
 }
 
@@ -51,18 +53,34 @@ export async function checkNeon(now = new Date()) {
   const H = { Authorization: 'Bearer ' + e.NEON_API_KEY };
   const base = 'https://console.neon.tech/api/v2';
   let id = e.NEON_PROJECT_ID;
-  if (!id) { const list = await getJson(base + '/projects?limit=10', H); id = list?.projects?.length === 1 ? list.projects[0].id : null; }
+  if (!id) id = state.neonProject || null;
+  if (!id) {
+    // Chave pessoal em conta com organização: o Neon exige org_id para listar projetos.
+    let projects = [];
+    try { projects = (await getJson(base + '/projects?limit=10', H))?.projects || []; }
+    catch (err) {
+      if (err.status !== 400) throw err;
+      const orgs = (await getJson(base + '/users/me/organizations', H))?.organizations || [];
+      for (const o of orgs) projects.push(...((await getJson(base + '/projects?limit=10&org_id=' + encodeURIComponent(o.id), H))?.projects || []));
+    }
+    id = projects.length === 1 ? projects[0].id : null;
+    if (id) state.neonProject = id;
+  }
   if (!id) return { items: [alert('neon.config', 'warn', 'banco', 'Projeto do Neon não identificado', 'Defina NEON_PROJECT_ID no Render (a conta tem mais de um projeto).')], metrics: { configured: false } };
   const p = (await getJson(base + '/projects/' + id, H))?.project || {};
   const cu = Number(p.default_endpoint_settings?.autoscaling_limit_max_cu) || 0.25;
   const usedH = Math.round((Number(p.active_time) || 0) * cu / 36) / 100; // CU-hora
   const start = new Date(p.consumption_period_start || Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const end = new Date(p.quota_reset_at || p.consumption_period_end || Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  const elapsed = Math.max(HOUR, now - start), ratePerMs = usedH / elapsed;
+  // Ritmo: pela leitura diária mais antiga com 24 h+ dentro do período (reflete mudanças recentes);
+  // sem leituras ainda, média do período.
+  const samples = (state.neonSamples || []).filter(x => x.at >= start.getTime() && now - x.at >= DAY && x.h <= usedH);
+  const ref = samples.sort((a, b) => a.at - b.at)[0];
+  const ratePerMs = ref ? (usedH - ref.h) / (now - ref.at) : usedH / Math.max(HOUR, now - start);
   const projected = Math.round((usedH + ratePerMs * Math.max(0, end - now)) * 10) / 10;
   const limit = e.NEON_CU_HOURS_LIMIT === undefined || e.NEON_CU_HOURS_LIMIT === '' ? 100 : Number(e.NEON_CU_HOURS_LIMIT);
   const storage = Number(p.synthetic_storage_size) || 0, storageLimit = Number(p.branch_logical_size_limit_bytes) || 1073741824;
-  const metrics = { configured: true, project: id, cu_hours: usedH, limit, percent: limit ? pct(usedH, limit) : null, projected, period_end: end.toISOString(), storage_bytes: storage, storage_limit_bytes: storageLimit, compute_last_active_at: p.compute_last_active_at || null };
+  const metrics = { configured: true, project: id, rate_basis: ref ? 'recent' : 'period', cu_hours_per_day: Math.round(ratePerMs * DAY * 100) / 100, cu_hours: usedH, limit, percent: limit ? pct(usedH, limit) : null, projected, period_end: end.toISOString(), storage_bytes: storage, storage_limit_bytes: storageLimit, compute_last_active_at: p.compute_last_active_at || null };
   if (limit > 0) {
     const p100 = metrics.percent, left = limit - usedH;
     const runOut = ratePerMs > 0 ? new Date(now.getTime() + left / ratePerMs) : null;
@@ -70,7 +88,7 @@ export async function checkNeon(now = new Date()) {
     if (p100 >= 70 || (runOut && runOut < end)) {
       const daysLeft = runOut ? (runOut - now) / DAY : 99;
       const sev = p100 >= 85 || daysLeft <= 3 ? 'critical' : 'warn';
-      const when = runOut && runOut < end ? ' No ritmo atual acaba por volta de ' + fmtDate(runOut) + '; a cota renova em ' + fmtDate(end) + '. Ao acabar, o banco PARA e o sistema sai do ar.' : '';
+      const when = runOut && runOut < end ? ' No ritmo atual (' + metrics.cu_hours_per_day + ' CU-h/dia) acaba por volta de ' + fmtDate(runOut) + '; a cota renova em ' + fmtDay(end) + '. Ao acabar, o banco PARA e o sistema sai do ar.' : '';
       items.push(alert('neon.compute', sev, 'banco', 'Banco: ' + p100 + '% da cota mensal usada', usedH + ' de ' + limit + ' CU-hora.' + when + ' Solução: plano Launch do Neon (paga por uso).'));
     }
   } else {
@@ -107,8 +125,20 @@ export async function checkRender() {
   return { items, metrics };
 }
 
+// Servidor RDAP oficial de cada terminação (.com → Verisign, .br → Registro.br), pela lista da IANA.
+let rdapBootstrap = { at: 0, services: [] };
+async function rdapServer(domain) {
+  const tld = domain.split('.').pop().toLowerCase();
+  if (Date.now() - rdapBootstrap.at > DAY) {
+    const j = await getJson('https://data.iana.org/rdap/dns.json', { 'User-Agent': UA });
+    rdapBootstrap = { at: Date.now(), services: j?.services || [] };
+  }
+  const svc = rdapBootstrap.services.find(([tlds]) => tlds.includes(tld));
+  if (!svc) throw Error('sem servidor RDAP para .' + tld);
+  return svc[1][0].replace(/\/?$/, '/');
+}
 export async function checkDomain(domain, now = new Date()) {
-  const j = await getJson('https://rdap.org/domain/' + encodeURIComponent(domain));
+  const j = await getJson((await rdapServer(domain)) + 'domain/' + encodeURIComponent(domain), { 'User-Agent': UA, Accept: 'application/rdap+json' });
   const exp = (j?.events || []).find(x => x.eventAction === 'expiration')?.eventDate;
   const status = (j?.status || []).join(', ');
   const registrar = ((j?.entities || []).find(x => (x.roles || []).includes('registrar'))?.vcardArray?.[1] || []).find(v => v[0] === 'fn')?.[3] || '';
@@ -247,8 +277,8 @@ const line = a => ICON[a.severity] + ' ' + a.title + (a.detail ? '\n' + a.detail
 const panelUrl = () => (env().PUBLIC_BASE_URL || '').replace(/\/$/, '') + '/central.html#monitoramento';
 
 async function settings(q) {
-  const s = (await q('SELECT alert_email,telegram_chat_id,alert_digest_date FROM platform_settings WHERE id=true')).rows[0] || {};
-  state.chatId = s.telegram_chat_id || null;
+  const s = (await q('SELECT alert_email,telegram_chat_id,alert_digest_date,neon_usage_samples FROM platform_settings WHERE id=true')).rows[0] || {};
+  state.chatId = s.telegram_chat_id || null; state.neonSamples = Array.isArray(s.neon_usage_samples) ? s.neon_usage_samples : [];
   let to = s.alert_email || env().ALERT_EMAIL || '';
   if (!to) to = (await q("SELECT email FROM users WHERE role='master' AND active ORDER BY created_at LIMIT 1")).rows[0]?.email || '';
   state.alertEmail = to; return { ...s, to };
@@ -257,6 +287,7 @@ async function settings(q) {
 export async function runMonitoring(q, { now = new Date(), withDb = true, forceExternal = false, notify = true } = {}) {
   if (state.running) return state.running;
   state.running = (async () => {
+    if (withDb && !state.neonSamples) await settings(q);
     if (forceExternal || !state.ext || now - state.extAt > (withDb ? 25 : 55) * 60000) { state.ext = await externalChecks(now); state.extAt = now.getTime(); }
     let items = [...state.ext.items], metrics = { ...state.ext.metrics }, scopes = new Set(CATEGORIES_EXTERNAL.filter(c => !state.ext.failed?.has(c)));
     if (!withDb) {
@@ -269,6 +300,7 @@ export async function runMonitoring(q, { now = new Date(), withDb = true, forceE
       return state.snapshot;
     }
     const s = await settings(q);
+    await saveNeonSample(q, metrics.neon, now);
     const awakeMinutes = state.awakeSince ? (now - state.awakeSince) / 60000 : 0;
     const db = await dbChecks(q, now, { awakeMinutes });
     items = [...items, ...db.items]; metrics = { ...metrics, ...db.metrics };
@@ -281,6 +313,14 @@ export async function runMonitoring(q, { now = new Date(), withDb = true, forceE
     return state.snapshot;
   })().finally(() => { state.running = null; });
   return state.running;
+}
+
+async function saveNeonSample(q, neon, now) {
+  if (!neon?.configured || typeof neon.cu_hours !== 'number') return;
+  const list = state.neonSamples || [], last = list[list.length - 1];
+  if (last && now - last.at < 20 * HOUR) return;
+  const next = [...list, { at: now.getTime(), h: neon.cu_hours }].filter(x => now - x.at < 40 * DAY).slice(-40);
+  await q('UPDATE platform_settings SET neon_usage_samples=$1 WHERE id=true', [JSON.stringify(next)]); state.neonSamples = next;
 }
 
 async function persist(q, items, scopes, now, notify) {

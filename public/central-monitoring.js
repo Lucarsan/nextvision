@@ -32,14 +32,14 @@
     const neonKind = n.percent >= 85 ? 'bad' : n.percent >= 70 || n.runs_out_at ? 'warn' : '';
     const cards = [];
     cards.push('<div class="ct-card"><h2>Banco de dados (Neon)</h2>' + (n.configured
-      ? (n.limit ? kpi('Uso do mês', n.cu_hours + ' / ' + n.limit + ' CU-h', n.percent + '% · previsão ' + n.projected + (n.runs_out_at ? ' · acaba ~' + day(n.runs_out_at) : ''), neonKind) + bar(n.percent, neonKind)
+      ? (n.limit ? kpi('Uso do mês', n.cu_hours + ' / ' + n.limit + ' CU-h', n.percent + '% · ' + n.cu_hours_per_day + '/dia' + (n.rate_basis === 'period' ? ' (média do mês)' : '') + ' · previsão ' + n.projected + (n.runs_out_at ? ' · acaba ~' + day(n.runs_out_at) : ''), neonKind) + bar(n.percent, neonKind)
         : kpi('Uso do mês', n.cu_hours + ' CU-h', 'US$ ' + n.cost_usd + ' · previsão US$ ' + n.projected_cost_usd + ' (orçamento ' + n.budget_usd + ')'))
-        + '<p class="ct-muted" style="margin:10px 0 0">Espaço: ' + Math.round((n.storage_bytes || 0) / 1048576) + ' de ' + Math.round((n.storage_limit_bytes || 0) / 1048576) + ' MB · cota renova em ' + day(n.period_end) + ' · último uso ' + dt(n.compute_last_active_at) + '</p>'
-      : '<p class="ct-muted">Sem NEON_API_KEY: consumo não monitorado.' + (m.db_size_mb != null ? ' Tamanho do banco: ' + m.db_size_mb + ' MB.' : '') + '</p>') + '</div>');
+        + '<p class="ct-muted" style="margin:10px 0 0">Espaço: ' + Math.round((n.storage_bytes || 0) / 1048576) + ' de ' + Math.round((n.storage_limit_bytes || 0) / 1048576) + ' MB · cota renova em ' + new Date(n.period_end).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) + ' · último uso ' + dt(n.compute_last_active_at) + '</p>'
+      : '<p class="ct-muted">' + (n.error ? 'Não consegui consultar o Neon: ' + safe(n.error) + '.' : 'Sem NEON_API_KEY: consumo não monitorado.') + (m.db_size_mb != null ? ' Tamanho do banco: ' + m.db_size_mb + ' MB.' : '') + '</p>') + '</div>');
     cards.push('<div class="ct-card"><h2>Servidor (Render)</h2>' + (r.configured
       ? kpi('Última publicação', r.last_deploy?.status === 'live' ? 'No ar' : (r.last_deploy?.status || '—'), (r.last_deploy?.commit || '') + ' · ' + dt(r.last_deploy?.at), /failed/.test(r.last_deploy?.status || '') ? 'bad' : '')
         + '<p class="ct-muted" style="margin:10px 0 0">Plano: ' + safe(r.plan || '—') + (r.free_services ? ' · ' + r.free_services + ' serviço(s) grátis na conta' : '') + '</p>'
-      : '<p class="ct-muted">Sem RENDER_API_KEY: publicações e suspensão não monitoradas.</p>')
+      : '<p class="ct-muted">' + (r.error ? 'Não consegui consultar o Render: ' + safe(r.error) + '.' : 'Sem RENDER_API_KEY: publicações e suspensão não monitoradas.') + '</p>')
       + '<p class="ct-muted" style="margin:6px 0 0">Memória ' + (sv.memory_mb ?? '—') + ' / ' + (sv.memory_limit_mb ?? '—') + ' MB · ligado há ' + Math.round((sv.uptime_s || 0) / 3600) + ' h · erros na última hora: ' + (sv.errors_1h ?? 0) + '</p></div>');
     const doms = (m.domains || []).map(x => '<li>' + safe(x.domain) + ': ' + (x.days != null ? 'vence em <strong>' + x.days + ' dias</strong> (' + day(x.expires_at) + ')' : safe(x.error || 'sem dados')) + (x.registrar ? ' · ' + safe(x.registrar) : '') + '</li>').join('');
     const certs = (m.certificates || []).map(x => '<li>' + safe(x.host) + ': ' + (x.days != null ? 'certificado válido por ' + x.days + ' dias' : safe(x.error || '—')) + '</li>').join('');

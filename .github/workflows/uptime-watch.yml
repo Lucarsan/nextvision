@@ -1,0 +1,40 @@
+# Vigia externo: confere de fora se o portal está no ar (o servidor não consegue avisar da própria queda).
+# A cada 15 min. Se falhar 3 vezes seguidas (~2 min), avisa no Telegram e o job falha
+# (o GitHub também manda e-mail ao dono do repositório quando um job agendado falha).
+# Segredos (Settings → Secrets → Actions): TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID (o mesmo bot da central).
+# Variável opcional: UPTIME_URLS (separadas por espaço).
+name: uptime-watch
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Conferir portal
+        env:
+          URLS: ${{ vars.UPTIME_URLS || 'https://nextvision-mgx6.onrender.com/health' }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          down=""
+          for url in $URLS; do
+            ok=0
+            for i in 1 2 3; do
+              if curl -fsS --max-time 60 -o /dev/null "$url"; then ok=1; break; fi
+              sleep 30
+            done
+            [ "$ok" = 1 ] || down="$down $url"
+          done
+          if [ -n "$down" ]; then
+            echo "Fora do ar:$down"
+            if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
+              curl -sS --max-time 20 "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+                --data-urlencode "chat_id=$TG_CHAT" \
+                --data-urlencode "text=🔴 Ficou Pronto FORA DO AR (vigia externo): $down — 3 tentativas falharam. Veja o Render." > /dev/null || true
+            fi
+            exit 1
+          fi
+          echo "No ar."

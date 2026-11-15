@@ -208,7 +208,7 @@ ${d.sessions.length ? h2('Fechamentos de caixa') + table(['Fechado', 'Por', R('E
 export function subjectFor(d) { return `Relatório ${KIND_LABEL[d.kind]} · ${d.store.name || ''} · ${d.period.title} · vendas ${brl(d.sales_total)}`; }
 
 export const emailConfigured = () => !!(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
-async function sendEmail(to, subject, html) {
+export async function sendEmail(to, subject, html) {
   if (!emailConfigured()) throw Error('Envio de e-mail não configurado no servidor (RESEND_API_KEY e EMAIL_FROM)');
   const r = await fetch(process.env.RESEND_API_URL || 'https://api.resend.com/emails', {
     method: 'POST', headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },

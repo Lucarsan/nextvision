@@ -47,17 +47,17 @@
   // Avaliações no Google: mensagens com o link (/a/<código>), quem abriu, botão da página do pedido e confirmadas.
   function reviewKpis(t) {
     return kpi('Mensagens com link de avaliação', num(t.review_sent), num(t.review_sent_customers) + ' clientes (WhatsApp ou copiada)')
-      + kpi('Abriram o link de avaliação', num(t.review_clicked), t.review_rate == null ? 'clientes' : t.review_rate + '% de quem recebeu no período')
+      + (t.review_clicked ? kpi('Abriram o link medido', num(t.review_clicked), 'mensagens antigas com o link /a/') : '')
       + kpi('Pela página do pedido', num(t.review_page_clicks), 'cliques em "Avaliar no Google"')
       + kpi('Avaliações confirmadas', num(t.review_confirmed), 'marcadas após conferir no Google');
   }
-  const reviewNote = '<p class="ct-note">O Google não informa de onde veio cada avaliação. Contamos quem <strong>abriu</strong> o link da mensagem (cada cliente tem o seu, então vale também a mensagem copiada e colada no WhatsApp; a prévia do WhatsApp e aberturas da equipe não contam). Para saber quantos avaliaram de fato, confira os nomes no Google e marque "Avaliou".</p>';
+  const reviewNote = '<p class="ct-note">A mensagem leva o link do Google direto, então não dá para saber quem clicou nele; contamos as mensagens enviadas com o link (WhatsApp ou copiada + "Já enviei") e os cliques em "Avaliar no Google" na página do pedido. O Google não informa de onde veio cada avaliação: confira os nomes no Google e marque "Avaliou" para ter o número de avaliações.</p>';
   function reviewTable(rows, day, allStores) {
     if (!rows.length) return '<p class="ct-empty">Nenhuma mensagem com link de avaliação nem clique neste período.</p>';
-    return '<div style="overflow-x:auto"><table><thead><tr>' + (allStores ? '<th>Loja</th>' : '') + '<th>Cliente</th><th>Mensagem enviada</th><th>Abriu o link</th><th>Cliques</th><th>Avaliou?</th></tr></thead><tbody>'
+    return '<div style="overflow-x:auto"><table><thead><tr>' + (allStores ? '<th>Loja</th>' : '') + '<th>Cliente</th><th>Mensagem enviada</th><th>Clicou</th><th>Cliques</th><th>Avaliou?</th></tr></thead><tbody>'
       + rows.map(x => '<tr>' + (allStores ? '<td>' + safe(x.store) + '</td>' : '') + '<td>' + safe(x.customer || '—') + '</td>'
         + '<td>' + (x.first_sent ? safe(when(x.first_sent, day)) + (x.sent > 1 ? ' <small>(' + x.sent + '×)</small>' : '') : '<small>—</small>') + '</td>'
-        + '<td>' + (x.first_click ? safe(when(x.first_click, day)) + (x.first_sent ? '<br><small>' + safe(gap(x.first_sent, x.first_click)) + '</small>' : '') : (x.first_sent ? '<span class="ct-chip muted">Não abriu</span>' : '—')) + '</td>'
+        + '<td>' + (x.first_click ? safe(when(x.first_click, day)) + (x.first_sent ? '<br><small>' + safe(gap(x.first_sent, x.first_click)) + '</small>' : '') : '—') + '</td>'
         + '<td>' + (x.clicks ? num(x.clicks) : '—') + (x.page_clicks ? '<br><small>+' + x.page_clicks + ' pela página do pedido</small>' : '') + '</td>'
         + '<td><label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" data-review-confirm="' + safe(x.customer_id) + '"' + (x.review_confirmed_at ? ' checked' : '') + '> Avaliou</label></td></tr>').join('')
       + '</tbody></table></div>';
@@ -122,7 +122,7 @@
     const s = r.stats || {};
     return '<article class="ct-card" style="border:1px solid #EEF0F3" data-report="' + safe(r.tenant_id) + '"><div class="ct-card-head"><div class="ct-store"><strong>' + safe(r.name) + '</strong><span>' + (r.schedule === 'daily' ? 'Diário' : 'Semanal') + ' · ' + safe(r.period.title) + (r.whatsapp ? ' · WhatsApp ' + safe(r.whatsapp) : '') + '</span></div>'
       + (markable ? (r.sent ? '<span class="ct-chip ok">Enviado ' + safe(new Date(r.sent.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })) + (r.sent.sent_by ? ' por ' + safe(r.sent.sent_by) : '') + '</span>' : '<span class="ct-chip warn">A enviar</span>') : '') + '</div>'
-      + '<p style="margin:0 0 8px">' + num(s.links) + ' pedidos com link · ' + num(s.opens) + ' aberturas · ' + num(s.people) + ' pessoas · ' + dur(s.live_seconds) + ' de vídeo' + (s.review_sent || s.review_clicked ? ' · ' + num(s.review_clicked) + ' abriram o link de avaliação' : '') + '</p>'
+      + '<p style="margin:0 0 8px">' + num(s.links) + ' pedidos com link · ' + num(s.opens) + ' aberturas · ' + num(s.people) + ' pessoas · ' + dur(s.live_seconds) + ' de vídeo' + (s.review_sent ? ' · ' + num(s.review_sent) + ' mensagens com link de avaliação' : '') + '</p>'
       + '<textarea rows="8" style="max-width:none" data-text>' + safe(r.message) + '</textarea>'
       + '<div style="margin-top:8px">' + (r.whatsapp ? '<button type="button" data-send>Enviar no WhatsApp</button>' : '<span class="ct-chip bad">Loja sem WhatsApp cadastrado</span> ')
       + '<button type="button" class="secondary" data-copy>Copiar mensagem</button>'

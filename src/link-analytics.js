@@ -24,7 +24,6 @@ export const DEFAULT_TEMPLATE = 'Olá, {loja}! 📊 Seus resultados no Ficou Pro
   + '• {retornos} clientes voltaram para acompanhar de novo\n'
   + '• {horas_video} de vídeo ao vivo assistido\n'
   + '• Tempo médio na página: {tempo_medio}\n'
-  + '• {avaliacao_cliques} clientes abriram o link para avaliar no Google\n'
   + 'Seus clientes estão acompanhando. Qualquer dúvida, é só chamar!';
 export const PLACEHOLDERS = ['loja', 'periodo', 'links', 'enviados', 'aberturas', 'pessoas', 'taxa', 'retornos', 'tempo_medio', 'horas_video', 'downloads', 'conversas', 'concluidos', 'avaliacao_enviadas', 'avaliacao_cliques', 'avaliacoes_confirmadas'];
 

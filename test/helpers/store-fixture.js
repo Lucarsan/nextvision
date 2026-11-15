@@ -25,7 +25,7 @@ export async function createStoreFixture({ env: extraEnv = {} } = {}) {
   try {
     await db.query(`CREATE SCHEMA ${schema}`); await db.query(`SET search_path TO ${schema},public`);
     url.searchParams.set('options', '-c search_path=' + schema + ',public');
-    const env = { ...process.env, QUIET_HOURS: 'off', ...extraEnv, DATABASE_URL: url.toString(), DB_SSL: 'disable' };
+    const env = { ...process.env, QUIET_HOURS: 'off', MONITORING: 'off', ...extraEnv, DATABASE_URL: url.toString(), DB_SSL: 'disable' };
     const migrate = () => { const run = spawnSync(process.execPath, ['src/migrate.js'], { env, encoding: 'utf8' }); assert.equal(run.status, 0, run.stderr); };
     migrate();
     const [tenant, foreignTenant, masterId] = Array.from({ length: 3 }, () => crypto.randomUUID());

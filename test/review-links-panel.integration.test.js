@@ -35,9 +35,9 @@ test('avaliações: link medido na mensagem copiada, redirecionamento e relatór
     await page.locator(`[data-fs-copy="${ana.id}"]`).click();
     await page.waitForFunction(() => window.__copied.length === 1);
     const text = await page.evaluate(() => window.__copied[0]);
-    const link = f.base + '/a/' + ana.review_code;
-    assert.ok(text.includes(link), 'mensagem leva o link medido: ' + text);
-    assert.ok(!text.includes('g.page'), 'o link do Google não vai direto');
+    const link = f.base + '/a/' + ana.review_code; // links medidos já enviados continuam funcionando
+    assert.ok(text.includes('https://g.page/r/teste/review'), 'mensagem leva o link do Google direto: ' + text);
+    assert.ok(!text.includes('/a/'), 'sem o link medido');
     await page.locator(`[data-fs-done="${ana.id}"]`).click();
     await page.waitForFunction(id => !document.querySelector(`[data-fs-done="${id}"]`), ana.id);
     assert.equal((await db.query('SELECT review_link FROM customer_messages WHERE customer_id=$1', [ana.id])).rows[0].review_link, true);
@@ -63,7 +63,7 @@ test('avaliações: link medido na mensagem copiada, redirecionamento e relatór
     await c.locator('.ct-nav-btn[data-page="Relatórios"]').click();
     await c.waitForFunction(() => /Avaliações no Google/.test(document.body.innerText));
     const body = await c.locator('body').innerText();
-    assert.match(body, /Mensagens com link de avaliação\s*1/); assert.match(body, /Abriram o link de avaliação\s*1/); assert.match(body, /Ana Avalia/);
+    assert.match(body, /Mensagens com link de avaliação\s*1/); assert.match(body, /Abriram o link medido\s*1/); assert.match(body, /Ana Avalia/);
     await c.locator(`[data-review-confirm="${ana.id}"]`).check();
     await c.waitForFunction(() => /Avaliações confirmadas\s*1/.test(document.body.innerText));
     assert.ok((await db.query('SELECT review_confirmed_at FROM customers WHERE id=$1', [ana.id])).rows[0].review_confirmed_at);

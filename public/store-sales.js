@@ -151,13 +151,9 @@
     return lines.join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
   }
   const statusTemplate = () => { const t = config.status_message || DEFAULT_STATUS; return t.includes('{cashback}') ? t : t.includes('{fidelidade}') ? t.replace('{fidelidade}', '{fidelidade}\n\n{cashback}') : t + '\n\n{cashback}'; };
-  // Link de avaliação com medição: /a/<código do cliente> registra o clique e leva ao Google (vale também copiando a mensagem).
-  const reviewLink = c => {
-    if (!config.google_review_url) return '';
-    if (!c?.review_code) return config.google_review_url;
-    const base = /^https?:\/\//.test(config.review_link_base || '') ? config.review_link_base : location.origin + '/a/';
-    return base + c.review_code;
-  };
+  // Link de avaliação direto do Google (o cliente reconhece o endereço e clica mais). O link medido /a/<código>
+  // foi testado em 14/11 e retirado a pedido do dono em 15/11; o envio da mensagem com link continua registrado.
+  const reviewLink = () => config.google_review_url || '';
   const hasReview = () => !!config.google_review_url && statusTemplate().includes('{avaliacao}');
   const statusRecord = id => ({ customer_id: id, kind: 'status', review: hasReview() });
   const statusMessage = c => render(statusTemplate(), {

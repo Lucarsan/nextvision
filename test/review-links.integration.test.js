@@ -93,7 +93,8 @@ test('link de avaliação medido: mensagem, cópia, página do pedido e relatór
     const prev = await api('/master/results-reports/preview?tenant=' + f.tenant + '&kind=daily', { token: f.masterToken });
     assert.ok(!/avaliar no Google/.test(prev.message), 'ontem sem envio: a linha de avaliação sai da mensagem');
     const { fillTemplate, DEFAULT_TEMPLATE } = await import('../src/link-analytics.js');
-    assert.match(fillTemplate(DEFAULT_TEMPLATE, { ...n.stores.find(s => s.tenant_id === f.tenant), name: 'Loja' }, { title: 'hoje' }), /• 2 clientes abriram o link para avaliar no Google/);
+    assert.ok(!DEFAULT_TEMPLATE.includes('{avaliacao'), 'modelo padrão sem linha de avaliação (link direto do Google não é medido)');
+    assert.match(fillTemplate(DEFAULT_TEMPLATE + '\n• {avaliacao_enviadas} mensagens com link de avaliação', { ...n.stores.find(s => s.tenant_id === f.tenant), name: 'Loja' }, { title: 'hoje' }), /• 2 mensagens com link de avaliação/);
 
     // Desmarcar.
     await api('/master/customers/' + ana.id + '/review-confirmed', { method: 'PATCH', token: f.masterToken, body: { confirmed: false } });

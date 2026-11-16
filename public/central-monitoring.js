@@ -38,6 +38,11 @@
       : '<p class="ct-muted">' + (n.error ? 'Não consegui consultar o Neon: ' + safe(n.error) + '.' : 'Sem NEON_API_KEY: consumo não monitorado.') + (m.db_size_mb != null ? ' Tamanho do banco: ' + m.db_size_mb + ' MB.' : '') + '</p>') + '</div>');
     cards.push('<div class="ct-card"><h2>Servidor (Render)</h2>' + (r.configured
       ? kpi('Última publicação', r.last_deploy?.status === 'live' ? 'No ar' : (r.last_deploy?.status || '—'), (r.last_deploy?.commit || '') + ' · ' + dt(r.last_deploy?.at), /failed/.test(r.last_deploy?.status || '') ? 'bad' : '')
+        + (r.free_hours ? (() => { const fh = r.free_hours, p = Math.round(fh.used * 100 / fh.limit), k = fh.runs_out_at ? (p >= 95 ? 'bad' : 'warn') : '';
+            return '<div style="margin-top:14px">' + kpi('Horas grátis do mês (conta toda)', fh.used + ' / ' + fh.limit + ' h', 'previsão ' + fh.projected + ' h' + (fh.runs_out_at ? ' · acaba ~' + day(fh.runs_out_at) : ' · dentro do limite'), k) + bar(p, k)
+              + '<p class="ct-muted" style="margin:8px 0 0">' + safe(fh.basis) + (fh.official ? ' (leitura de ' + dt(fh.official.at) + ': ' + fh.official.hours + ' h)' : '') + (fh.others?.length ? ' · outros serviços: ' + fh.others.map(o => safe(o.name) + (o.error ? ' (sem métricas: ' + safe(o.error) + ')' : ' ~' + o.hours + ' h')).join(', ') : '') + '</p>'
+              + '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><input id="rdHours" type="number" step="0.01" min="0" max="800" placeholder="Horas do painel" style="width:150px;padding:9px;border:1px solid #E5E7EB;border-radius:10px;font:inherit"><button type="button" class="ct-btn ghost" id="rdSave" style="height:38px">Atualizar com o painel</button></div>'
+              + '<p class="ct-muted" style="margin:4px 0 0;font-size:12px">Render → Billing → Free Instance Hours. Deixa a previsão exata.</p></div>'; })() : '')
         + '<p class="ct-muted" style="margin:10px 0 0">Plano: ' + safe(r.plan || '—') + (r.free_services ? ' · ' + r.free_services + ' serviço(s) grátis na conta' : '') + '</p>'
       : '<p class="ct-muted">' + (r.error ? 'Não consegui consultar o Render: ' + safe(r.error) + '.' : 'Sem RENDER_API_KEY: publicações e suspensão não monitoradas.') + '</p>')
       + '<p class="ct-muted" style="margin:6px 0 0">Memória ' + (sv.memory_mb ?? '—') + ' / ' + (sv.memory_limit_mb ?? '—') + ' MB · ligado há ' + Math.round((sv.uptime_s || 0) / 3600) + ' h · erros na última hora: ' + (sv.errors_1h ?? 0) + '</p></div>');
@@ -80,6 +85,7 @@
     document.querySelectorAll('[data-ack]').forEach(b => b.onclick = async () => { try { await api('/master/monitoring/ack', 'POST', { key: b.dataset.ack }); await monitoringPage(); banner(); } catch (e) { msg(e.message); } });
     if (el('monTg')) el('monTg').onclick = async () => { try { const r = await api('/master/monitoring/telegram/link', 'POST'); msg('Telegram conectado: ' + r.chat + '. Mandei uma mensagem de confirmação.'); } catch (e) { msg(e.message); } };
     el('monEmailSave').onclick = async () => { try { await api('/master/monitoring/settings', 'PATCH', { alert_email: el('monEmail').value.trim() }); msg('E-mail dos avisos salvo.'); } catch (e) { msg(e.message); } };
+    if (el('rdSave')) el('rdSave').onclick = async () => { const h = Number(String(el('rdHours').value).replace(',', '.')); if (!(h >= 0)) { msg('Informe as horas, ex.: 343.25'); return; } try { const d = await api('/master/monitoring/render-usage', 'PATCH', { hours: h }); msg('Leitura do Render salva.'); await monitoringPage(d); } catch (e) { msg(e.message); } };
     el('monTest').onclick = async () => { try { const r = await api('/master/monitoring/test', 'POST'); msg('Teste — Telegram: ' + r.telegram + ' · E-mail: ' + r.email); } catch (e) { msg(e.message); } };
     banner();
   };

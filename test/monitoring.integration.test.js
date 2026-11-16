@@ -26,6 +26,17 @@ test('monitoramento: lojas, alertas, resolução e rotas da central', { skip, ti
     assert.equal(by['device.disk.' + dev].severity, 'critical');
     assert.equal(by['device.publisher.' + dev].severity, 'critical');
     assert.equal(by['camera.c1'].severity, 'warn');
+    // PC que não ligou hoje (último sinal ontem): atenção, só 3 h depois da abertura; parado há dias: só informação.
+    const dev2 = crypto.randomUUID(), dev3 = crypto.randomUUID();
+    await q(`INSERT INTO shop_devices(id,tenant_id,name,credential_hash,enabled,last_seen_at) VALUES($1,$2,'PC ontem',$3,true,'2026-11-14T21:00:00Z'),($4,$2,'PC teste',$5,true,'2026-10-28T23:44:00Z')`,
+      [dev2, f.tenant, crypto.randomBytes(32).toString('hex'), dev3, crypto.randomBytes(32).toString('hex')]);
+    const r2 = Object.fromEntries((await dbChecks(q, MONDAY_10H, { awakeMinutes: 60 })).items.map(x => [x.key, x]));
+    assert.equal(r2['device.notstarted.' + dev2 + '.2026-11-16'].severity, 'warn');
+    assert.equal(r2['device.inactive.' + dev3].severity, 'info');
+    assert.equal(r2['device.offline.' + dev2], undefined);
+    const early = (await dbChecks(q, new Date('2026-11-16T11:00:00Z'), { awakeMinutes: 60 })).items.map(x => x.key); // 8h: cedo para "não ligou"
+    assert.equal(early.some(k => k.startsWith('device.notstarted.' + dev2)), false);
+    await q('DELETE FROM shop_devices WHERE id = ANY($1)', [[dev2, dev3]]);
     // De manhã cedo (acordado há 5 min) o "visto por último" é da véspera: não alarma.
     assert.equal((await dbChecks(q, MONDAY_10H, { awakeMinutes: 5 })).items.some(x => x.key.startsWith('device.offline')), false);
     // Domingo: loja fechada, sem alarme de PC desligado.
@@ -40,6 +51,13 @@ test('monitoramento: lojas, alertas, resolução e rotas da central', { skip, ti
     await runMonitoring(q, { notify: false });
     assert.equal((await q("SELECT status FROM platform_alerts WHERE key=$1", ['device.disk.' + dev])).rows[0].status, 'resolved');
 
+    // Aviso é anotado: a rodada seguinte não repete (antes repetia a cada 10 min).
+    await q("UPDATE shop_devices SET health=jsonb_set(health,'{components,disk}','{\"state\":\"degraded\",\"detail\":\"1 GB livres\"}'),health_at=now() WHERE id=$1", [dev]);
+    await runMonitoring(q, { notify: true });
+    const first = (await q('SELECT notified_at,notified_severity FROM platform_alerts WHERE key=$1', ['device.disk.' + dev])).rows[0];
+    assert.ok(first.notified_at, 'anotou o aviso'); assert.equal(first.notified_severity, 'critical');
+    await runMonitoring(q, { notify: true });
+    assert.equal((await q('SELECT notified_at FROM platform_alerts WHERE key=$1', ['device.disk.' + dev])).rows[0].notified_at.getTime(), first.notified_at.getTime());
     // Rotas da central (o servidor de teste roda sem rede e sem chaves).
     const view = await f.api('/master/monitoring', { token: f.masterToken });
     assert.equal(view.channels.telegram.token, false);

@@ -108,7 +108,7 @@ export async function checkNeon(now = new Date()) {
   return { items, metrics };
 }
 
-export async function checkRender() {
+export async function checkRender(now = new Date()) {
   const e = env();
   if (!e.RENDER_API_KEY) return { items: [alert('render.config', 'info', 'servidor', 'Servidor (Render) não monitorado', 'Falta a chave RENDER_API_KEY no Render: sem ela não dá para avisar de publicação com falha ou serviço suspenso.')], metrics: { configured: false } };
   const H = { Authorization: 'Bearer ' + e.RENDER_API_KEY }, base = 'https://api.render.com/v1', items = [];
@@ -122,12 +122,10 @@ export async function checkRender() {
   const metrics = { configured: true, name: svc?.name, plan, suspended: svc?.suspended, last_deploy: { status: last.status, at: last.finishedAt || last.createdAt, commit: (last.commit?.id || '').slice(0, 7), message: (last.commit?.message || '').split('\n')[0].slice(0, 120) }, live_commit: (live?.commit?.id || '').slice(0, 7) };
   if (svc?.suspended && svc.suspended !== 'not_suspended') items.push(alert('render.suspended', 'critical', 'servidor', 'Servidor suspenso no Render', 'O site está fora do ar. Motivo: ' + (svc.suspenders || []).join(', ')));
   if (/failed/.test(last.status || '')) items.push(alert('render.deploy', 'critical', 'servidor', 'Publicação falhou no Render', 'A última versão (' + metrics.last_deploy.commit + ' — ' + metrics.last_deploy.message + ') não entrou no ar; o site segue na anterior (' + metrics.live_commit + ').'));
-  if (plan === 'free') {
-    let freeServices = 1;
-    try { const all = await getJson(base + '/services?limit=50', H); freeServices = (all || []).map(s => s.service || s).filter(s => s.serviceDetails?.plan === 'free' && s.suspended === 'not_suspended' && s.type === 'web_service').length || 1; } catch { /* sem lista: assume só este */ }
-    metrics.free_services = freeServices;
-    items.push(alert('render.free', freeServices > 1 ? 'warn' : 'info', 'servidor', 'Servidor no plano grátis do Render',
-      'O plano grátis tem 750 h/mês somando todos os serviços grátis da conta (hoje: ' + freeServices + '). O FicouPronto fica ligado o mês todo (~730 h), porque os computadores das lojas mandam sinal de vida. ' + (freeServices > 1 ? 'Com outros serviços grátis ativos, as horas podem acabar e o Render suspende tudo até o mês seguinte. ' : '') + 'Para lojas pagantes, o plano Starter (US$ 7/mês) não tem esse limite nem demora para acordar.'));
+  // Sem as configurações carregadas (à noite, logo após reiniciar) não há leitura oficial: pula para não superestimar.
+  if (plan === 'free' && state.settingsLoaded) {
+    const r = await renderFreeHours(base, H, id, now);
+    Object.assign(metrics, r.metrics); items.push(...r.items);
   }
   return { items, metrics };
 }
@@ -144,6 +142,54 @@ async function rdapServer(domain) {
   if (!svc) throw Error('sem servidor RDAP para .' + tld);
   return svc[1][0].replace(/\/?$/, '/');
 }
+// Horas grátis do Render: 750 h/mês somando TODOS os serviços grátis da conta; acabou, o Render
+// suspende todos até o dia 1º. A API não informa o uso oficial, então:
+//  - ponto de partida = última leitura oficial do painel (Billing → Free Instance Hours), se for deste mês;
+//  - este serviço conta como ligado o tempo todo desde então (os PCs das lojas o mantêm acordado; erra para o lado seguro);
+//  - os outros serviços grátis contam pelas horas em que as métricas mostram atividade.
+export function freeHoursForecast({ now, baseHours, baseAt, otherHours, monthEnd, limit = 750 }) {
+  const span = Math.max(HOUR, now - baseAt);
+  const used = baseHours + span / HOUR + otherHours;
+  const otherPerHour = otherHours / (span / HOUR); // horas dos outros por hora de relógio
+  const ratePerHour = 1 + otherPerHour;
+  const left = Math.max(0, monthEnd - now) / HOUR;
+  const projected = used + left * ratePerHour;
+  const runOut = projected > limit ? new Date(now.getTime() + Math.max(0, limit - used) / ratePerHour * HOUR) : null;
+  return { used: Math.round(used * 10) / 10, projected: Math.round(projected), runs_out_at: runOut && runOut < monthEnd ? runOut.toISOString() : null, other_per_day: Math.round(otherPerHour * 24 * 10) / 10 };
+}
+async function activeHours(base, H, resource, from, to) {
+  const url = base + '/metrics/cpu?resource=' + resource + '&startTime=' + from.toISOString() + '&endTime=' + to.toISOString() + '&resolutionSeconds=3600';
+  const series = await getJson(url, H, 20000);
+  const hours = new Set();
+  for (const sr of series || []) for (const v of sr.values || []) hours.add(v.timestamp);
+  return hours.size;
+}
+async function renderFreeHours(base, H, selfId, now) {
+  const items = [], limit = 750;
+  const monthKey = now.toISOString().slice(0, 7);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)), monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const all = ((await getJson(base + '/services?limit=50', H)) || []).map(s => s.service || s);
+  const free = all.filter(s => s.type === 'web_service' && s.serviceDetails?.plan === 'free' && s.suspended === 'not_suspended');
+  const official = state.renderUsage?.month === monthKey ? state.renderUsage : null;
+  const baseAt = official ? new Date(official.at) : monthStart, baseHours = official ? Number(official.hours) || 0 : 0;
+  const others = [];
+  for (const sv of free.filter(s => s.id !== selfId)) {
+    try { others.push({ name: sv.name, hours: await activeHours(base, H, sv.id, baseAt, now) }); }
+    catch (err) { others.push({ name: sv.name, hours: 0, error: err.message }); }
+  }
+  const otherHours = others.reduce((a, o) => a + o.hours, 0);
+  const f = freeHoursForecast({ now, baseHours, baseAt, otherHours, monthEnd, limit });
+  const metrics = { free_services: free.length, free_hours: { ...f, limit, others, official: official ? { hours: baseHours, at: official.at } : null, basis: official ? 'oficial + estimativa' : 'estimativa desde o dia 1º' } };
+  const who = 'Todos os serviços grátis da conta (' + free.map(s => s.name).join(', ') + ')';
+  if (f.runs_out_at) {
+    const days = (new Date(f.runs_out_at) - now) / DAY;
+    items.push(alert('render.hours', days <= 3 || f.used >= limit * 0.95 ? 'critical' : 'warn', 'servidor', 'Render: horas grátis acabam por volta de ' + fmtDate(f.runs_out_at),
+      'Usadas ~' + f.used + ' de ' + limit + ' h (' + metrics.free_hours.basis + '); previsão do mês: ' + f.projected + ' h. ' + who + ' saem do ar até ' + fmtDay(monthEnd) + '. Solução: FicouPronto no plano Starter (US$ 7/mês) — sai da conta de horas grátis.'));
+  } else items.push(alert('render.free', 'info', 'servidor', 'Servidor no plano grátis do Render (' + f.used + ' de ' + limit + ' h usadas)', 'Previsão do mês: ' + f.projected + ' h. Os ' + free.length + ' serviços grátis da conta somam as mesmas 750 h; o FicouPronto sozinho usa ~720–744 h por mês.'));
+  if (!official) items.push(alert('render.calibrate', 'info', 'servidor', 'Horas do Render sem leitura oficial deste mês', 'Em Monitoramento, informe o número de Billing → Free Instance Hours do painel do Render para a previsão ficar exata.'));
+  return { items, metrics };
+}
+
 export async function checkDomain(domain, now = new Date()) {
   const j = await getJson((await rdapServer(domain)) + 'domain/' + encodeURIComponent(domain), { 'User-Agent': UA, Accept: 'application/rdap+json' });
   const exp = (j?.events || []).find(x => x.eventAction === 'expiration')?.eventDate;
@@ -211,7 +257,7 @@ async function externalChecks(now) {
   // Falha passageira de uma API não pode "resolver" os alertas dela: a categoria fica de fora da rodada.
   const safe = (category, fn) => fn().catch(err => { failed.add(category); return { items: [alert('check.' + category, 'info', 'verificação', 'Não foi possível conferir: ' + category, err.message)], metrics: { error: err.message } }; });
   const domainCached = d => { const c = domainCache.get(d); if (c && now - c.at < 12 * HOUR) return Promise.resolve(c.r); return checkDomain(d, now).then(r => { domainCache.set(d, { at: now.getTime(), r }); return r; }); };
-  const [neon, render, site, ...rest] = await Promise.all([safe('banco', () => checkNeon(now)), safe('servidor', () => checkRender()), safe('site', () => checkPublicSite()),
+  const [neon, render, site, ...rest] = await Promise.all([safe('banco', () => checkNeon(now)), safe('servidor', () => checkRender(now)), safe('site', () => checkPublicSite()),
     ...domains.map(d => safe('domínio', () => domainCached(d))), ...hosts.map(h => checkCertificate(h, now))]);
   const proc = checkProcess();
   const doms = rest.slice(0, domains.length), certs = rest.slice(domains.length);
@@ -298,8 +344,8 @@ const line = a => ICON[a.severity] + ' ' + a.title + (a.detail ? '\n' + a.detail
 const panelUrl = () => (env().PUBLIC_BASE_URL || '').replace(/\/$/, '') + '/central.html#monitoramento';
 
 async function settings(q) {
-  const s = (await q('SELECT alert_email,telegram_chat_id,alert_digest_date,neon_usage_samples FROM platform_settings WHERE id=true')).rows[0] || {};
-  state.chatId = s.telegram_chat_id || null; state.neonSamples = Array.isArray(s.neon_usage_samples) ? s.neon_usage_samples : [];
+  const s = (await q('SELECT alert_email,telegram_chat_id,alert_digest_date,neon_usage_samples,render_free_usage FROM platform_settings WHERE id=true')).rows[0] || {};
+  state.chatId = s.telegram_chat_id || null; state.neonSamples = Array.isArray(s.neon_usage_samples) ? s.neon_usage_samples : []; state.renderUsage = s.render_free_usage || null; state.settingsLoaded = true;
   let to = s.alert_email || env().ALERT_EMAIL || '';
   if (!to) to = (await q("SELECT email FROM users WHERE role='master' AND active ORDER BY created_at LIMIT 1")).rows[0]?.email || '';
   state.alertEmail = to; return { ...s, to };
@@ -465,6 +511,12 @@ export function registerMonitoring(app, { q, auth, roles, route, bad, valid, z }
   app.patch('/api/master/monitoring/settings', ...master, route(async (req, res) => {
     const v = valid(z.object({ alert_email: z.union([z.literal(''), z.string().email().max(200)]) }), req, res); if (!v) return;
     await q('UPDATE platform_settings SET alert_email=$1 WHERE id=true', [v.alert_email || null]); res.json({ ok: true });
+  }));
+  app.patch('/api/master/monitoring/render-usage', ...master, route(async (req, res) => {
+    const v = valid(z.object({ hours: z.number().min(0).max(800) }), req, res); if (!v) return;
+    const now = new Date(), val = { month: now.toISOString().slice(0, 7), hours: v.hours, at: now.toISOString() };
+    await q('UPDATE platform_settings SET render_free_usage=$1 WHERE id=true', [JSON.stringify(val)]); state.renderUsage = val;
+    await runMonitoring(q, { forceExternal: true, notify: false }); res.json(await view());
   }));
   // Vincula o Telegram: a pessoa manda qualquer mensagem ao bot e clica em "Conectar".
   app.post('/api/master/monitoring/telegram/link', ...master, route(async (_req, res) => {

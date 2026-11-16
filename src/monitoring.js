@@ -15,7 +15,7 @@
 // (100 no grátis; 0 = plano pago, passa a vigiar custo), NEON_MONTHLY_BUDGET_USD, RENDER_API_KEY
 // (RENDER_SERVICE_ID o Render já define), TELEGRAM_BOT_TOKEN, MONITOR_DOMAINS, MONITOR_HOSTS.
 import tls from 'node:tls';
-import { backgroundAllowed, isOpen, localClock } from './quiet-hours.js';
+import { backgroundAllowed, isOpen, localClock, quietConfig } from './quiet-hours.js';
 import { emailConfigured, sendEmail } from './reports.js';
 import { listReleases, compareVersions } from './agent-releases.js';
 
@@ -232,14 +232,27 @@ export async function dbChecks(q, now = new Date(), { awakeMinutes = 999 } = {})
     FROM shop_devices d JOIN tenants t ON t.id=d.tenant_id
     WHERE d.enabled AND d.revoked_at IS NULL AND t.status IN ('trial','active')`)).rows;
   const open = isOpen(now);
+  // Abertura da plataforma hoje (6h45 em Fortaleza, UTC-3) e o dia local, para as regras de PC.
+  const localDay = now.toLocaleDateString('sv-SE', { timeZone: TZ });
+  const { minutes } = localClock(now);
+  const opening = now.getTime() - (minutes - quietConfig().hours.start) * 60000 - now.getUTCSeconds() * 1000 - now.getUTCMilliseconds();
   const latest = (listReleases() || []).map(r => r.version).sort(compareVersions).pop() || null;
   let online = 0;
   for (const d of devs) {
     const who = d.store + ' · ' + d.name;
     const age = d.last_seen_at ? (now - new Date(d.last_seen_at)) / 60000 : null;
     if (age != null && age <= 15) online++;
-    // Só depois de 15 min acordado: de manhã o "visto por último" ainda é o da véspera.
-    if (open && awakeMinutes >= 15 && age != null && age > 15) items.push(alert('device.offline.' + d.id, 'critical', 'lojas', 'Computador da loja sem sinal: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. Sem ele não há vídeo nem gravação nessa loja. Ver: PC desligado, sem internet ou serviço parado.', d.tenant_id));
+    // PC sem sinal, em três situações (a loja abre no horário dela, não às 6h45):
+    // - estava ligado hoje e parou há 15+ min → crítico (caiu durante o atendimento);
+    // - não ligou hoje até 3 h depois da abertura da plataforma → atenção (uma vez por dia);
+    // - parado há mais de 3 dias → só informação, sem aviso (PC de teste, loja parada).
+    // Só avalia depois de 15 min acordado: de manhã o "visto por último" ainda é o da véspera.
+    if (open && awakeMinutes >= 15 && age != null && age > 15) {
+      const seenToday = new Date(d.last_seen_at).getTime() >= opening;
+      if (seenToday) items.push(alert('device.offline.' + d.id, 'critical', 'lojas', 'Computador da loja parou de responder: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. Estava ligado hoje e caiu: sem vídeo nem gravação. Ver: PC desligado, sem internet ou serviço parado.', d.tenant_id));
+      else if (age > 3 * 24 * 60) items.push(alert('device.inactive.' + d.id, 'info', 'lojas', 'Computador parado há ' + Math.floor(age / 1440) + ' dias: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. Se for PC de teste ou loja desativada, desative o computador em Dispositivos.', d.tenant_id));
+      else if (now - opening >= 3 * HOUR) items.push(alert('device.notstarted.' + d.id + '.' + localDay, 'warn', 'lojas', 'Computador da loja não ligou hoje: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. A loja pode não ter aberto, ou o PC está desligado/sem internet.', d.tenant_id));
+    }
     const fresh = d.health_at && now - new Date(d.health_at) < 15 * 60000;
     if (!fresh || !d.health) continue;
     const c = d.health.components || {};
@@ -351,7 +364,11 @@ async function persist(q, items, scopes, now, notify) {
     const escalated = !prev?.notified_severity ? !night : RANK[a.severity] > RANK[prev.notified_severity];
     const repeat = a.severity === 'critical' && !prev?.acknowledged_at && lastAt && now - lastAt > 4 * HOUR;
     if (night && !prev?.notified_at) { await q('UPDATE platform_alerts SET notified_at=$2,notified_severity=$3 WHERE key=$1', [a.key, new Date(night), a.severity]); state.sentAtNight.delete(a.key); }
-    if ((escalated || repeat) && (a.severity === 'critical' || day)) notes.push({ type: escalated ? 'new' : 'repeat', alert: a });
+    if ((escalated || repeat) && (a.severity === 'critical' || day)) {
+      notes.push({ type: escalated ? 'new' : 'repeat', alert: a });
+      // Anota o aviso: sem isso cada rodada (10 min) avisava de novo.
+      await q('UPDATE platform_alerts SET notified_at=now(),notified_severity=$2 WHERE key=$1', [a.key, a.severity]);
+    }
   }
   for (const r of open) {
     if (seen.has(r.key) || !scopes.has(r.category)) continue;

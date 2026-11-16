@@ -93,6 +93,8 @@ export async function checkNeon(now = new Date()) {
       const sev = p100 >= 85 || daysLeft <= 3 ? 'critical' : 'warn';
       const when = runOut && runOut < end ? ' No ritmo atual (' + metrics.cu_hours_per_day + ' CU-h/dia) acaba por volta de ' + fmtDate(runOut) + '; a cota renova em ' + fmtDay(end) + '. Ao acabar, o banco PARA e o sistema sai do ar.' : '';
       items.push(alert('neon.compute', sev, 'banco', 'Banco: ' + p100 + '% da cota mensal usada', usedH + ' de ' + limit + ' CU-hora.' + when + ' Solução: plano Launch do Neon (paga por uso).'));
+      // Aviso próprio aos 90% (pedido do Lucas): hora de fazer o upgrade do Neon.
+      if (p100 >= 90) items.push(alert('neon.compute.90', 'critical', 'banco', 'Banco chegou a ' + p100 + '% da cota: faça o upgrade do Neon hoje', usedH + ' de ' + limit + ' CU-hora.' + when + ' Neon → Billing → Change plan → Launch (cobra no dia 1º, por uso).'));
     }
   } else {
     const price = Number(e.NEON_CU_HOUR_PRICE) || 0.106, budget = Number(e.NEON_MONTHLY_BUDGET_USD) || 15;

@@ -38,6 +38,26 @@ test('busca pelo nome do pet mostra o tutor; serviços do dia lista pagos, a rec
     const old = await api('/store/sales/day-services?day=2020-01-01');
     assert.deepEqual([old.paid.length, old.pending.length, old.orders_without_sale.length], [0, 0, 0]);
     assert.equal((await request('/store/sales/day-services?day=ontem')).status, 400);
+
+    // Período (de/até): inclui hoje; data final antes da inicial, data impossível ou mais de 1 ano dão 400.
+    const monthAgo = new Date(Date.parse(today()) - 30 * 86400000).toISOString().slice(0, 10);
+    const range = await api(`/store/sales/day-services?from=${monthAgo}&to=${today()}`);
+    assert.equal(range.from, monthAgo); assert.equal(range.to, today());
+    assert.equal(range.paid.length + range.pending.length, 3);
+    const week = await api(`/store/sales/day-services?from=2020-01-01&to=2020-01-07`);
+    assert.equal(week.paid.length + week.pending.length, 0);
+    assert.equal((await request('/store/sales/day-services?from=2026-11-10&to=2026-11-01')).status, 400);
+    assert.equal((await request('/store/sales/day-services?from=2026-02-30&to=2026-03-01')).status, 400);
+    assert.equal((await request('/store/sales/day-services?from=2020-01-01&to=2022-01-01')).status, 400);
+    // Comissão cadastrada de cada pessoa vem junto (o dono vê todos).
+    assert.ok(Array.isArray(range.commissions) && range.commissions.length >= 1);
+    assert.ok(range.commissions.every(c => typeof c.percent === 'number' && ['addons', 'services', 'all'].includes(c.base)));
+
+    // "A receber" com serviço cadastrado como adicional sai marcado como adicional.
+    const hig = await api('/store/sales/service-items', { method: 'POST', body: { name: 'Tosa Higiênica', price_cents: 2500, addon: true } }, 201);
+    await api('/store/sales/pending', { method: 'POST', body: { customer_id: maria.id, items: [{ service: 'Tosa Higiênica', unit_price_cents: 2500, catalog_id: hig.id, device_model: 'Mel' }] } }, 201);
+    const withAddon = await api('/store/sales/day-services');
+    assert.deepEqual(withAddon.pending.map(x => [x.service, x.addon]), [['Hidratação', false], ['Corte de unhas', false], ['Tosa Higiênica', true]]);
   } finally { await f.cleanup(); }
 });
 
@@ -78,12 +98,39 @@ test('painel: achar pelo pet no caixa e conferir os serviços do dia', {
     await page.locator('.nv-sidebar [data-view="dayservices"]').click();
     await page.waitForSelector('.fs-day-table');
     assert.match(await page.locator('.fs-day').innerText(), /1\s*serviços[\s\S]*1\s*banhos[\s\S]*R\$\s*50,00/);
+    assert.ok(await page.locator('#fsDayFrom').isVisible() && await page.locator('#fsDayTo').isVisible(), 'período de/até');
     assert.match(await page.locator('.fs-day-table').innerText(), /Afonso Filho\s*Dom\s*Banho de cheiro\s*R\$\s*50,00\s*Pago · Pix/);
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#fsDayCsv').click()]);
     const csv = await (await download.createReadStream()).toArray().then(b => Buffer.concat(b).toString('utf8'));
     assert.match(download.suggestedFilename(), /^servicos-\d{4}-\d{2}-\d{2}\.csv$/);
     assert.match(csv, /"Afonso Filho";"Dom";"Banho de cheiro";"50,00";"Pago";"Pix R\$\s50,00"|"Afonso Filho";"Dom";"Banho de cheiro";"50,00";"Pago";"Pix"/);
+    assert.match(csv, /"Total";"";"";"";"";"50,00"/);
     await page.screenshot(shot('servicos-do-dia'));
+
+    // Período e filtros para a comissão: adicional lançado como "a receber" e comissão de 10%.
+    const hig = await f.api('/store/sales/service-items', { method: 'POST', body: { name: 'Tosa Higiênica', price_cents: 2500, addon: true } }, 201);
+    await f.api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, items: [{ service: 'Tosa Higiênica', unit_price_cents: 2500, catalog_id: hig.id, device_model: 'Dom' }] } }, 201);
+    await page.locator('[data-ds-quick="month"]').click();
+    await page.waitForSelector('.fs-day h2:has-text("Serviços do período"), .fs-day h2:has-text("Serviços do dia")');
+    await page.waitForSelector('.fs-day-table:has-text("Tosa Higiênica")');
+    assert.match(await page.locator('.fs-goal-stats').innerText(), /2\s*serviços[\s\S]*1\s*adicionais[\s\S]*R\$\s*75,00\s*total/);
+    await page.locator('#fsDsKind').selectOption('addon');
+    await page.waitForFunction(() => document.querySelectorAll('.fs-day-table .fs-day-row:not(.fs-day-h)').length === 1);
+    assert.match(await page.locator('.fs-day-table').innerText(), /Tosa Higiênica/);
+    assert.doesNotMatch(await page.locator('.fs-day-table').innerText(), /Banho de cheiro/);
+    await page.locator('#fsDsPct').fill('10');
+    assert.match(await page.locator('#fsDsCommVal').innerText(), /R\$\s*2,50/);
+    const [dl2] = await Promise.all([page.waitForEvent('download'), page.locator('#fsDayCsv').click()]);
+    const csv2 = await (await dl2.createReadStream()).toArray().then(b => Buffer.concat(b).toString('utf8'));
+    assert.match(csv2, /"Comissão 10%";"";"";"";"";"2,50"/); assert.match(csv2, /Filtros: Apenas adicionais/);
+    await page.screenshot(shot('servicos-periodo-comissao'));
+    // Situação "só pagos" com adicionais: nada; limpar filtros volta a mostrar tudo.
+    await page.locator('#fsDsStatus').selectOption('paid');
+    await page.waitForSelector('.fs-day:has-text("Nenhum serviço com estes filtros")');
+    await page.locator('#fsDsClear').click();
+    await page.waitForFunction(() => document.querySelectorAll('.fs-day-table .fs-day-row:not(.fs-day-h)').length === 2);
+    await page.locator('[data-ds-quick="today"]').click();
+    await page.waitForSelector('.fs-day h2:has-text("Serviços do dia")');
     await page.locator('#fsDayPrev').click();
     await page.waitForSelector('.fs-day:has-text("Nenhum serviço lançado")');
     await page.setViewportSize({ width: 390, height: 844 });

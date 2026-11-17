@@ -12,6 +12,7 @@
   const DEFAULT_READY = 'Olá, {cliente}! Seu {aparelho} (OS {os}) está pronto aqui na {loja}. {valor}Pode vir buscar quando quiser!';
   const DEFAULT_RETURN = 'Olá, {cliente}! Seu {aparelho} (OS {os}) já pode ser retirado aqui na {loja}.';
   const DEFAULT_QUOTE = 'Olá, {cliente}! O orçamento do seu {aparelho} (OS {os}) aqui na {loja}:\n{servico}\nValor: {valor}\n\nPodemos fazer? É só responder esta mensagem.';
+  const ACCESSORIES = ['Gaveta de chip', 'Chip', 'Cartão de memória', 'Capa', 'Carregador', 'Cabo'];
   let tab = 'day', search = '', settings = null, counts = { quote: 0, queue: 0, done: 0 };
 
   const ymd = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : '';
@@ -21,19 +22,28 @@
   const device = o => [o.brand, o.model].filter(x => x && x.trim()).join(' ') || o.device_type || 'aparelho';
   const fill = (tpl, o, extra = {}) => tpl.replace(/\{(\w+)\}/g, (m, k) => ({ cliente: H().greetName(o.customer_name) || 'cliente', loja: settings?.name || '', os: o.number, aparelho: device(o), servico: o.service || o.problem || '', ...extra })[k] ?? m).replace(/[ \t]+\n/g, '\n').trim();
   const waOpen = (phone, text) => { const w = window.open(H().waLink(phone, text), '_blank'); if (w) w.opener = null; };
+  // Mostra a mensagem antes de abrir o WhatsApp (dá para ajustar o texto). As quebras de linha vão como estão.
+  function previewSend(title, phone, text, onSent) {
+    const { openDialog, header, esc, phoneBR } = H();
+    openDialog(`${header(title)}<p class="nv-help">Para ${phone ? esc(phoneBR(phone)) : 'escolher o contato no WhatsApp'}. Confira e ajuste antes de enviar.</p>
+      <textarea id="soMsg" class="so-msg" rows="${Math.min(16, text.split('\n').length + 2)}">${esc(text)}</textarea>
+      <div class="fs-row"><button type="button" class="nv-button" id="soMsgGo">${FPIcon('message')} Abrir no WhatsApp</button><button type="button" class="nv-button secondary" data-close-dialog>Fechar</button></div>`);
+    $('soMsgGo').onclick = () => { waOpen(phone, $('soMsg').value); onSent?.(); $('editorDialog').close(); };
+  }
   const warrantyText = days => !days ? 'sem garantia' : days % 30 === 0 && days >= 60 ? (days === 365 ? '1 ano' : days / 30 + ' meses') + ` (${days} dias)` : days + ' dias';
 
   async function loadSettings() { settings = await H().api('/store/service-orders/settings'); return settings; }
 
   // ---------- Impressão na térmica 80 mm (mesma forma do comprovante de venda) ----------
-  function printThermal(title, body) {
-    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${H().esc(title)}</title><style>
+  const thermalHtml = (title, body) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${H().esc(title)}</title><style>
       @page{size:80mm 200mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#000}
       body{width:72mm;margin:0 auto;padding:2mm 0 6mm;font:12px/1.35 Arial,Helvetica,sans-serif}
       .c{text-align:center}.store{font-size:16px;font-weight:700}.hr{border-top:1px dashed #000;margin:6px 0}.title{font-weight:700;letter-spacing:.04em;font-size:14px}
       .row{display:flex;justify-content:space-between;gap:8px}.row span:last-child{text-align:right}.small{font-size:11px}.b{font-weight:700}.big{font-size:15px;font-weight:700}
       .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.04em;margin-top:4px}.sign{margin-top:26px;border-top:1px solid #000;text-align:center;font-size:11px;padding-top:2px}p{margin:2px 0}
     </style></head><body>${body}</body></html>`;
+  function printThermal(title, body) { printHtml(thermalHtml(title, body)); }
+  function printHtml(html) {
     const frame = document.createElement('iframe'); frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:80mm;height:400px;border:0'; document.body.append(frame);
     const doc = frame.contentDocument; doc.open(); doc.write(html); doc.close();
@@ -56,11 +66,11 @@
   // w: { number?, customer_name, customer_phone, device, serial?, service, price_cents, days, from }
   function warrantyOf(o) {
     return { number: o.number, customer_name: o.customer_name, customer_phone: o.customer_phone, device: [o.device_type, device(o)].filter((x, i, a) => x && a.indexOf(x) === i).join(' · '),
-      serial: o.serial, service: o.service || o.problem, price_cents: o.price_cents, days: o.warranty_days, from: o.warranty_from || today() };
+      serial: o.serial, service: o.service || o.problem, price_cents: o.price_cents, days: o.warranty_days, from: o.warranty_from || today(), source: 'os', source_id: o.id };
   }
-  function printWarranty(w) {
+  function warrantyHtml(w) {
     const { esc, brl, phoneBR } = H(), until = addDays(w.from, w.days || 0);
-    printThermal('Garantia' + (w.number ? ' OS ' + w.number : ''), `${storeHead()}<div class="c title">TERMO DE GARANTIA</div>
+    return thermalHtml('Garantia' + (w.number ? ' OS ' + w.number : ''), `${storeHead()}<div class="c title">TERMO DE GARANTIA</div>
       <div class="row"><span>${w.number ? 'OS nº <b>' + w.number + '</b>' : 'Serviço'}</span><span>${ymd(w.from)}</span></div><div class="hr"></div>
       ${line('Cliente', w.customer_name)}${w.customer_phone ? `<p class="small">${esc(phoneBR(w.customer_phone))}</p>` : ''}
       ${line('Aparelho', w.device)}${line('IMEI / nº de série', w.serial)}${line('Serviço executado', w.service)}
@@ -69,30 +79,44 @@
       <div class="hr"></div><p class="small">${esc(settings?.os_warranty_terms || DEFAULT_TERMS)}</p>
       <div class="sign">Assinatura da loja</div><div class="sign">Assinatura do cliente</div>`);
   }
-  function whatsWarranty(w) {
+  const printWarranty = w => printHtml(warrantyHtml(w));
+  function warrantyMsg(w, url) {
     const { brl } = H(), until = addDays(w.from, w.days || 0);
-    const text = [`Olá, ${H().greetName(w.customer_name) || 'cliente'}! Segue a garantia do seu serviço na ${settings?.name || 'loja'}:`, '',
+    return [`Olá, ${H().greetName(w.customer_name) || 'cliente'}! Segue a garantia do seu serviço na ${settings?.name || 'loja'}:`, '',
       w.number ? `OS nº ${w.number}` : '', `Aparelho: ${w.device}`, w.serial ? `IMEI/série: ${w.serial}` : '', `Serviço: ${w.service || ''}`, w.price_cents ? `Valor: ${brl(w.price_cents)}` : '',
-      w.days ? `Garantia de ${warrantyText(w.days)}: de ${ymd(w.from)} até ${ymd(until)}.` : 'Serviço sem garantia.', '', settings?.os_warranty_terms || DEFAULT_TERMS].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n').replace(/\n{3,}/g, '\n\n');
-    waOpen(w.customer_phone, text);
+      w.days ? `Garantia de ${warrantyText(w.days)}: de ${ymd(w.from)} até ${ymd(until)}.` : 'Serviço sem garantia.', '',
+      url ? `Termo da garantia (abrir, imprimir ou salvar em PDF):\n${url}` : '', '', settings?.os_warranty_terms || DEFAULT_TERMS].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n').replace(/\n{3,}/g, '\n\n');
   }
-  // Janela com os dois botões (imprimir / WhatsApp) e os dias de garantia ajustáveis.
+  // Janela da garantia: prévia do papel (80 mm), dias ajustáveis, imprimir e mensagem do WhatsApp com o link do termo.
   async function warrantyDialog(w) {
     if (!settings) await loadSettings();
-    const { esc, openDialog, header } = H();
+    const { esc, openDialog, header, api } = H();
     const opts = WARRANTY.some(([d]) => d === w.days) ? WARRANTY : [...WARRANTY, [w.days, w.days + ' dias']];
     openDialog(`${header('Garantia' + (w.number ? ' · OS ' + w.number : ''))}
-      <p><b>${esc(w.customer_name || 'Cliente')}</b> · ${esc(w.device || '')}<br><span class="nv-help">${esc(w.service || '')}</span></p>
-      <div class="fs-row"><label class="nv-field">Garantia<select id="soWDays">${opts.map(([d, t]) => `<option value="${d}" ${d === (w.days || 0) ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <div class="so-wgrid"><div><p><b>${esc(w.customer_name || 'Cliente')}</b> · ${esc(w.device || '')}<br><span class="nv-help">${esc(w.service || '')}</span></p>
+        <div class="fs-row"><label class="nv-field">Garantia<select id="soWDays">${opts.map(([d, t]) => `<option value="${d}" ${d === (w.days || 0) ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="nv-field">A partir de<input type="date" id="soWFrom" value="${w.from}"></label></div>
-      <p class="nv-help" id="soWUntil"></p>
-      <div class="fs-row"><button type="button" class="nv-button" id="soWPrint">${FPIcon('printer')} Imprimir garantia</button><button type="button" class="nv-button secondary" id="soWWa">${FPIcon('message')} Enviar no WhatsApp</button></div>
-      ${w.customer_phone ? '' : '<p class="nv-help">Cliente sem telefone: o WhatsApp abre para você escolher o contato.</p>'}`);
+        <button type="button" class="nv-button" id="soWPrint">${FPIcon('printer')} Imprimir garantia</button>
+        <h3 class="so-h3">Mensagem do WhatsApp</h3><textarea id="soWMsg" class="so-msg" rows="11"></textarea>
+        <p class="nv-help" id="soWLink">Gerando o link do termo…</p>
+        <div class="fs-row"><button type="button" class="nv-button secondary" id="soWWa">${FPIcon('message')} Abrir no WhatsApp</button>${w.customer_phone ? '' : '<span class="nv-help">Cliente sem telefone: escolha o contato no WhatsApp.</span>'}</div></div>
+      <div><div class="nv-help">Prévia da impressão</div><iframe id="soWPrev" class="so-prev" title="Prévia da garantia"></iframe></div></div>`);
+    let url = '', seq = 0;
     const cur = () => ({ ...w, days: Number($('soWDays').value), from: $('soWFrom').value || w.from });
-    const upd = () => { const c = cur(); $('soWUntil').textContent = c.days ? `Vale até ${ymd(addDays(c.from, c.days))}.` : 'Sem garantia.'; };
+    const upd = async () => {
+      const c = cur(), my = ++seq;
+      $('soWPrev').srcdoc = warrantyHtml(c); $('soWMsg').value = warrantyMsg(c, url);
+      if (!w.source_id) { $('soWLink').textContent = ''; return; }
+      try {
+        const r = await api('/store/service-orders/warranty-link', 'POST', { source: w.source, id: w.source_id, days: c.days, from: c.from });
+        if (my !== seq || !$('soWMsg')) return; url = r.url;
+        $('soWMsg').value = warrantyMsg(c, url);
+        $('soWLink').innerHTML = `O cliente abre o termo por este link e pode imprimir ou salvar em PDF: <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>`;
+      } catch (e) { if ($('soWLink')) $('soWLink').textContent = 'Link do termo indisponível: ' + e.message; }
+    };
     $('soWDays').onchange = upd; $('soWFrom').onchange = upd; upd();
     $('soWPrint').onclick = () => printWarranty(cur());
-    $('soWWa').onclick = () => whatsWarranty(cur());
+    $('soWWa').onclick = () => waOpen(w.customer_phone, $('soWMsg').value);
   }
 
   // ---------- Comprovante de entrada da OS ----------
@@ -110,11 +134,16 @@
   }
   function whatsEntry(o) {
     const { brl } = H();
-    waOpen(o.customer_phone, [`Olá, ${H().greetName(o.customer_name) || 'cliente'}! Recebemos seu aparelho na ${settings?.name || 'loja'}.`, '', `OS nº ${o.number}`, `Aparelho: ${device(o)}`,
+    previewSend('Comprovante da OS ' + o.number, o.customer_phone, [`Olá, ${H().greetName(o.customer_name) || 'cliente'}! Recebemos seu aparelho na ${settings?.name || 'loja'}.`, '\u200b', `OS nº ${o.number}`, `Aparelho: ${device(o)}`,
       o.problem ? `Defeito: ${o.problem}` : '', o.service ? `Serviço: ${o.service}` : '', o.status === 'quote' && !o.price_cents ? 'Valor: vamos fazer o orçamento e te avisamos.' : `Valor: ${brl(o.price_cents)}`,
-      o.due_on ? `Prazo: ${ymd(o.due_on)}` : ''].filter(Boolean).join('\n'));
+      o.due_on ? `Prazo: ${ymd(o.due_on)}` : ''].filter(Boolean).join('\n').replace('\n\u200b\n', '\n\n'));
   }
 
+  // Acessórios: guardados como texto "Gaveta de chip, Chip, Outro: fone".
+  const accList = t => String(t || '').split(',').map(x => x.trim()).filter(Boolean);
+  const accHas = (t, a) => accList(t).some(x => x.toLowerCase() === a.toLowerCase());
+  const accOther = t => accList(t).filter(x => !ACCESSORIES.some(a => a.toLowerCase() === x.toLowerCase())).map(x => x.replace(/^Outro:\s*/i, '')).join(', ');
+  let sugg = null;
   // ---------- Nova OS / editar ----------
   function osForm(o) {
     const { esc } = H(), isNew = !o.id, v = k => esc(o[k] ?? '');
@@ -131,12 +160,20 @@
         <label class="nv-field">Modelo<input name="model" maxlength="80" value="${v('model')}" placeholder="A32, iPhone 11…"></label>
         <label class="nv-field">IMEI / nº de série<input name="serial" maxlength="60" value="${v('serial')}"></label>
         <label class="nv-field">Cor<input name="color" maxlength="40" value="${v('color')}"></label>
-        <label class="nv-field">Acessórios deixados<input name="accessories" maxlength="200" value="${v('accessories')}" placeholder="capinha, chip, carregador…"></label></div>
+        </div>
+        <fieldset class="so-acc"><legend>O cliente deixou junto</legend>${ACCESSORIES.map(a => `<label><input type="checkbox" name="acc" value="${a}" ${accHas(o.accessories, a) ? 'checked' : ''}> ${a}</label>`).join('')}
+          <label><input type="checkbox" name="accOther" ${accOther(o.accessories) ? 'checked' : ''}> Outro</label><input name="accOtherText" maxlength="80" placeholder="qual?" value="${esc(accOther(o.accessories))}"></fieldset>
         <label class="nv-field">Estado do aparelho na entrada<input name="condition" maxlength="500" value="${v('condition')}" placeholder="riscos, tela trincada, liga ou não…"></label></section>
       <section class="nv-form-panel"><h3>Serviço</h3>
         <label class="nv-field">Defeito relatado pelo cliente<input name="problem" maxlength="500" value="${v('problem')}"></label>
+        <div class="fs-chips so-chips-q" id="soProbChips"></div>
         <label class="nv-field">Serviço a fazer<input name="service" maxlength="300" value="${v('service')}" placeholder="Troca de tela, bateria…"></label>
-        <div class="so-grid"><label class="nv-field">Valor (R$)<input name="price" inputmode="decimal" value="${price}" placeholder="0,00"></label>
+        <div class="fs-chips so-chips-q" id="soSvcChips"></div>
+        <div class="so-grid"><label class="nv-field">Valor de venda (R$)<input name="price" inputmode="decimal" value="${price}" placeholder="0,00"></label>
+        <label class="nv-field">Custo (R$)<input name="cost" inputmode="decimal" value="${o.cost_cents != null ? (o.cost_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}" placeholder="peça + gastos"></label>
+        <div class="nv-field"><span>Lucro</span><b id="soProfit" class="so-profit">—</b></div></div>
+        <div class="nv-field"><span>Peça do estoque (baixa 1 quando o caixa receber a OS)</span><div id="soPart"></div></div>
+        <div class="so-grid">
         <label class="nv-field">Prazo combinado<input type="date" name="due_on" value="${v('due_on')}"></label>
         <label class="nv-field">Garantia<select name="warranty_days">${opts.map(([d, t]) => `<option value="${d}" ${d === wd ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
         ${isNew ? `<label class="fs-check"><input type="checkbox" name="quote" ${o.quote ? 'checked' : ''}> <span>Ainda vai orçar (vai para <b>Orçamentos pendentes</b>)</span></label>` : ''}
@@ -152,6 +189,40 @@
     const { api, openDialog, header, parseMoney, esc, phoneBR } = H(), isNew = !o.id;
     openDialog(header(isNew ? 'Nova ordem de serviço' : `OS ${o.number}`) + osForm(o));
     const f = $('soForm'), out = f.querySelector('[role=status]'); let customer = null;
+    let part = o.part_id ? { id: o.part_id, name: o.part_name, device_model: o.part_model, stock_qty: o.part_stock, cost_cents: o.part_cost_cents } : null;
+    const money = el => el.value.trim() ? parseMoney(el.value) : null;
+    const profit = () => { const p = money(f.elements.price), c = money(f.elements.cost); $('soProfit').textContent = Number.isFinite(p) && Number.isFinite(c) && p != null && c != null ? H().brl(p - c) : '—'; $('soProfit').className = 'so-profit' + (p != null && c != null && p < c ? ' fs-neg' : ''); };
+    f.elements.accOtherText.oninput = () => { if (f.elements.accOtherText.value.trim()) f.elements.accOther.checked = true; };
+    f.elements.price.oninput = profit; f.elements.cost.oninput = profit; profit();
+    const centsTxt = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    const drawPart = () => {
+      const box = $('soPart'); if (!box) return;
+      if (part) {
+        box.innerHTML = `<div class="fs-picked"><span><b>${esc(part.name)}${part.device_model ? ' ' + esc(part.device_model) : ''}</b> <small>${part.cost_cents != null ? 'custo ' + H().brl(part.cost_cents) : ''}${part.stock_qty != null ? ' · estoque ' + part.stock_qty : ''}</small></span><button type="button" class="fs-link" id="soPartX">Tirar peça</button></div>`;
+        $('soPartX').onclick = () => { part = null; drawPart(); }; return;
+      }
+      box.innerHTML = `<div class="fs-sugg"><input id="soPartQ" type="search" placeholder="Buscar peça: tela a32, bateria iphone…"><div id="soPartList" class="fs-results fs-drop"></div></div>`;
+      const qi = $('soPartQ'), list = $('soPartList'); let tm;
+      const load = async () => {
+        let rows = []; try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(qi.value.trim() || f.elements.model.value.trim())); } catch (e) { list.textContent = e.message; return; }
+        if (document.activeElement !== qi) return;
+        list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(p.name)}${p.device_model ? ' ' + esc(p.device_model) : ''}</b> <small>${p.cost_cents != null ? 'custo ' + H().brl(p.cost_cents) : 'sem custo'} · estoque ${p.stock_qty ?? '—'}</small></button>`).join('') || '<p>Nenhuma peça encontrada (cadastre em Estoque → Peças).</p>';
+        list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); part = rows[b.dataset.n]; if (part.cost_cents != null && !f.elements.cost.value.trim()) f.elements.cost.value = centsTxt(part.cost_cents); profit(); drawPart(); });
+      };
+      qi.onfocus = load; qi.oninput = () => { clearTimeout(tm); tm = setTimeout(load, 200); }; qi.onblur = () => setTimeout(() => { if (list.isConnected) list.innerHTML = ''; }, 150);
+    };
+    drawPart();
+    // Atalhos: defeitos e serviços mais usados (serviço cadastrado também preenche valor e custo, se vazios).
+    (async () => {
+      try { sugg = sugg || await api('/store/service-orders/suggestions'); } catch { return; }
+      if (!$('soProbChips')) return;
+      $('soProbChips').innerHTML = sugg.problems.map((t, i) => `<button type="button" class="fs-chip" data-p="${i}">${esc(t)}</button>`).join('');
+      $('soSvcChips').innerHTML = sugg.services.map((x, i) => `<button type="button" class="fs-chip" data-s="${i}">${esc(x.name)}${x.price_cents ? `<small>${H().brl(x.price_cents)}</small>` : ''}</button>`).join('');
+      f.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const el = f.elements.problem, t = sugg.problems[b.dataset.p]; el.value = el.value.trim() && !el.value.includes(t) ? el.value.trim() + ', ' + t : t; });
+      f.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const x = sugg.services[b.dataset.s]; f.elements.service.value = x.name;
+        if (x.price_cents && !f.elements.price.value.trim()) f.elements.price.value = centsTxt(x.price_cents);
+        if (x.cost_cents != null && !f.elements.cost.value.trim()) f.elements.cost.value = centsTxt(x.cost_cents); profit(); });
+    })();
     if (isNew) {
       const q = $('soCustQ'), drop = $('soCustDrop'); let timer;
       const pick = c => { customer = c; drop.innerHTML = ''; q.value = ''; $('soNewCust').hidden = !!c;
@@ -172,7 +243,12 @@
     };
     f.onsubmit = async e => {
       e.preventDefault(); out.textContent = ''; const el = f.elements, body = {};
-      for (const k of ['device_type', 'brand', 'model', 'serial', 'color', 'accessories', 'condition', 'problem', 'service']) body[k] = el[k].value.trim();
+      for (const k of ['device_type', 'brand', 'model', 'serial', 'color', 'condition', 'problem', 'service']) body[k] = el[k].value.trim();
+      const other = el.accOtherText.value.trim();
+      body.accessories = [...f.querySelectorAll('[name=acc]:checked')].map(x => x.value).concat(el.accOther.checked || other ? ['Outro' + (other ? ': ' + other : '')] : []).join(', ').slice(0, 200);
+      const cost = el.cost.value.trim() ? parseMoney(el.cost.value) : null;
+      if (cost != null && (!Number.isFinite(cost) || cost < 0)) { out.textContent = 'Custo inválido.'; return; }
+      body.cost_cents = cost; body.part_id = part?.id || null;
       const p = el.price.value.trim() ? parseMoney(el.price.value) : 0;
       if (!Number.isFinite(p) || p < 0) { out.textContent = 'Valor inválido.'; return; }
       body.price_cents = p; body.due_on = el.due_on.value || null; body.warranty_days = Number(el.warranty_days.value);
@@ -217,13 +293,15 @@
   function approveDialog(o, box, alive) {
     const { openDialog, header, esc, api, parseMoney } = H();
     openDialog(`${header('Orçamento aprovado · OS ' + o.number)}<form id="soAp"><p>${esc(o.customer_name)} · ${esc(device(o))}</p>
-      <label class="nv-field">Valor aprovado (R$)<input name="price" inputmode="decimal" required value="${o.price_cents ? (o.price_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}"></label>
+      <div class="fs-row"><label class="nv-field">Valor aprovado (R$)<input name="price" inputmode="decimal" required value="${o.price_cents ? (o.price_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}"></label>
+      <label class="nv-field">Custo (R$)<input name="cost" inputmode="decimal" value="${o.cost_cents != null ? (o.cost_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}"></label></div>
+      ${o.part_id ? `<p class="nv-help">Peça do estoque: ${esc(o.part_name || '')} (baixa quando o caixa receber).</p>` : '<p class="nv-help">Peça do estoque: escolha em "Ver / editar".</p>'}
       <div class="fs-row"><button class="nv-button">Mandar para a fila</button><button type="button" class="nv-button secondary" data-close-dialog>Voltar</button></div><p role="status" class="fs-neg"></p></form>`);
     const f = $('soAp'); f.elements.price.focus();
     f.onsubmit = async e => {
-      e.preventDefault(); const p = parseMoney(f.elements.price.value);
-      if (!Number.isFinite(p) || p < 0) { f.querySelector('[role=status]').textContent = 'Valor inválido.'; return; }
-      try { await api(`/store/service-orders/${o.id}/status`, 'POST', { status: 'queue', price_cents: p }); $('editorDialog').close(); H().feedback(`OS ${o.number} na fila de serviços.`); refresh(box, alive); }
+      e.preventDefault(); const p = parseMoney(f.elements.price.value), c = f.elements.cost.value.trim() ? parseMoney(f.elements.cost.value) : null;
+      if (!Number.isFinite(p) || p < 0 || (c != null && !(c >= 0))) { f.querySelector('[role=status]').textContent = 'Valor inválido.'; return; }
+      try { await api(`/store/service-orders/${o.id}/status`, 'POST', { status: 'queue', price_cents: p, cost_cents: c }); $('editorDialog').close(); H().feedback(`OS ${o.number} na fila de serviços.`); refresh(box, alive); }
       catch (err) { f.querySelector('[role=status]').textContent = err.message; }
     };
   }
@@ -263,7 +341,7 @@
     if (kind === 'print') return printEntry(o);
     if (kind === 'approve') return approveDialog(o, box, alive);
     if (kind === 'refuse') { if (confirm(`Orçamento da OS ${o.number} recusado? Ela vai para Concluídos para devolver o aparelho (sem cobrança).`)) move('done', { repaired: false }, `OS ${o.number}: aparelho para devolver.`); return; }
-    if (kind === 'sendquote') return waOpen(o.customer_phone, fill(settings.os_quote_message || DEFAULT_QUOTE, o, { valor: o.price_cents ? brl(o.price_cents) : 'a combinar' }));
+    if (kind === 'sendquote') return previewSend('Orçamento da OS ' + o.number, o.customer_phone, fill(settings.os_quote_message || DEFAULT_QUOTE, o, { valor: o.price_cents ? brl(o.price_cents) : 'a combinar' }));
     if (kind === 'done') return move('done', {}, `OS ${o.number} concluída. Avise o cliente em Concluídos.`);
     if (kind === 'reopen') return move('queue', {}, `OS ${o.number} voltou para a fila.`);
     if (kind === 'undeliver') return move('done', {}, `Entrega da OS ${o.number} desfeita.`);
@@ -273,9 +351,8 @@
     }
     if (kind === 'notify') {
       const valor = o.pay_state === 'open' ? `Valor: ${brl(o.pending_total_cents)}. ` : '';
-      waOpen(o.customer_phone, fill(o.repaired ? (settings.os_ready_message || DEFAULT_READY) : DEFAULT_RETURN, o, { valor }));
-      api(`/store/service-orders/${o.id}/notified`, 'POST').then(() => refresh(box, alive)).catch(() => {});
-      return;
+      return previewSend('Avisar cliente · OS ' + o.number, o.customer_phone, fill(o.repaired ? (settings.os_ready_message || DEFAULT_READY) : DEFAULT_RETURN, o, { valor }),
+        () => api(`/store/service-orders/${o.id}/notified`, 'POST').then(() => refresh(box, alive)).catch(() => {}));
     }
     if (kind === 'warranty') return warrantyDialog(warrantyOf(o));
   }
@@ -313,7 +390,7 @@
     try {
       if (!settings) await loadSettings();
       if (row.os_id) return warrantyDialog(warrantyOf(await H().api('/store/service-orders/' + row.os_id)));
-      return warrantyDialog({ customer_name: row.customer_name, customer_phone: row.customer_phone, device: row.pet || '', service: String(row.service || '').replace(/^OS \d+ · /, ''), price_cents: row.total_cents, days: row.warranty_days ?? settings.os_warranty_days, from: day });
+      return warrantyDialog({ source: 'sale_item', source_id: row.item_id, customer_name: row.customer_name, customer_phone: row.customer_phone, device: row.pet || '', service: String(row.service || '').replace(/^OS \d+ · /, ''), price_cents: row.total_cents, days: row.warranty_days ?? settings.os_warranty_days, from: day });
     } catch (e) { H().feedback(e.message, true); }
   }
 
@@ -323,7 +400,11 @@
   .so-card.so-stuck{border-left:4px solid #f59e0b}.so-card.so-late{border-left:4px solid #b42318}.so-top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.so-num{font-size:15px}.so-price{margin-left:auto;font-weight:700}
   .so-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.so-due{background:#fff1cc!important;color:#7a4b00!important}.so-red{background:#fdecea!important;color:#b42318!important}
   .so-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px}.so-when{margin-left:auto}.so-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 12px}.so-span2{grid-column:span 2}
-  .so-form .nv-form-panel{margin-bottom:12px}.so-form .nv-field input,.so-form .nv-field select{width:100%}.fs-day-row .fs-link{padding:0 4px;font-size:12px}
+  .so-form .nv-form-panel{margin-bottom:12px}.so-acc{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}.so-acc legend{font-size:13px;font-weight:600;padding:0 4px}.so-acc label{display:flex;align-items:center;gap:6px;font-size:14px}.so-acc input[type=checkbox]{width:18px;height:18px}.so-acc input[name=accOtherText]{flex:1 1 140px;min-width:120px;padding:6px 10px;border:1px solid var(--nv-border);border-radius:8px;font:inherit}
+  .so-chips-q{margin:-4px 0 10px}.so-chips-q .fs-chip{min-height:34px;padding:5px 10px;font-size:13px}.so-profit{display:block;padding:12px 0;font-size:16px}
+  .so-msg{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--nv-border);border-radius:10px;font:14px/1.45 inherit;font-family:inherit;margin:6px 0 10px;resize:vertical}
+  .so-wgrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}.so-prev{width:100%;height:560px;border:1px solid var(--nv-border);border-radius:10px;background:#fff;margin-top:4px}.so-h3{font-size:15px;margin:16px 0 0}
+  @media(max-width:760px){.so-wgrid{grid-template-columns:1fr}.so-prev{height:420px}}.so-form .nv-field input,.so-form .nv-field select{width:100%}.fs-day-row .fs-link{padding:0 4px;font-size:12px}
   @media(max-width:700px){.so-grid{grid-template-columns:1fr 1fr}.so-span2{grid-column:1/-1}.so-when{margin-left:0;width:100%}}`;
   const st = document.createElement('style'); st.textContent = css; document.head.append(st);
   window.FPServiceOrders = { mount, warrantyFromDay, printWarranty, warrantyDialog, enabled: () => window.FPSales?.h?.config()?.niche === 'electronics' };

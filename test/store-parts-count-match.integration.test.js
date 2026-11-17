@@ -118,17 +118,24 @@ test('painel: conferir peças, tela pelo aparelho no caixa e na OS, o que saiu',
     await page.screenshot(shot('pecas-conferir'));
     // Reposição: botões Produtos e Serviços; serviço antigo sem peça aparece com a tela sugerida.
     await f.api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ service: 'Troca de tela', unit_price_cents: 18000, device_model: 'Galaxy A14 5G' }] } }, 201);
-    await f.api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ service: 'Troca de tela', unit_price_cents: 18000 }] } }, 201);
+    await f.api('/store/sales', { method: 'POST', body: { new_customer: { name: 'Carla Lima', phone: '85988887777' }, payment_method: 'pix', description: 'tela do iPhone da filha', items: [{ service: 'Troca de tela', unit_price_cents: 18000 }] } }, 201);
     await page.locator('[data-ptab=restock]').click(); await page.waitForSelector('[data-rv]');
     assert.deepEqual(await page.locator('[data-rv]').allInnerTexts(), ['Produtos', 'Serviços']);
     await page.locator('[data-rv=part]').click();
     await page.waitForSelector('.fs-sale:has-text("Tela · Samsung A14 5G")');
     assert.match(await page.locator('#fsRsSvc').innerText(), /Tela · Samsung A14 5G[\s\S]*Saiu em: .*Galaxy A14 5G[\s\S]*saiu 1 · repor/, 'serviço com aparelho já baixou a tela sozinho');
     assert.match(await page.locator('#fsRsSvc').innerText(), /Serviços sem peça identificada \(1\)[\s\S]*não informado/);
+    // Ver a venda sem sair da reposição: cliente, o que foi escrito, itens, total e pagamento.
+    assert.match(await page.locator('.fs-rs-open').innerText(), /Cliente: Carla Lima[\s\S]*Escrito na venda: Troca de tela · tela do iPhone da filha/);
+    await page.locator('.fs-rs-open [data-sale-open]').click();
+    await page.waitForSelector('.fs-rs-open .fs-sale-peek:not([hidden])');
+    assert.match(await page.locator('.fs-rs-open .fs-sale-peek').innerText(), /Venda nº 2[\s\S]*Carla Lima · 85988887777[\s\S]*Troca de tela[\s\S]*Total pago\s*R\$\s?180,00[\s\S]*Pagamento: Pix/);
+    await page.screenshot(shot('reposicao-ver-venda'));
+    await page.locator('.fs-rs-open [data-sale-open]').click();
+    assert.equal(await page.locator('.fs-rs-open .fs-sale-peek').isHidden(), true);
     await page.locator('[data-pick]').click(); await page.locator('[data-pickbox] input').fill('note 8');
     await page.locator('[data-pickbox] button', { hasText: 'Redmi Note 8' }).click();
-    await page.waitForSelector('.fs-sale:has-text("Tela · Redmi Note 8")');
-    assert.equal(await page.locator('.fs-rs-open').count(), 0);
+    await page.waitForFunction(() => !document.querySelector('.fs-rs-open') && /Tela · Redmi Note 8/.test(document.getElementById('fsRsSvc')?.innerText || ''));
     await page.screenshot(shot('reposicao-servicos'));
     await page.locator('[data-close-dialog]').first().click();
 

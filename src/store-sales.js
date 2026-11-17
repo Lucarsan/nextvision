@@ -647,11 +647,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   const SVC_SINCE = "now() - interval '120 days'";
   app.get('/api/store/stock/restock/services', ...guard, route(async (req, res) => {
     const parts = (await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind='part' ORDER BY coalesce(location,'~'),fp_fold(coalesce(device_model,'')),name`, [tid(req)])).rows;
-    const uses = (await q(`SELECT i.id,coalesce(i.product_id,i.restock_part_id) part_id,i.name,i.device_model,s.sale_number,s.created_at,i.restock_part_id IS NOT NULL linked_later
-      FROM sale_items i JOIN sales s ON s.id=i.sale_id
+    const uses = (await q(`SELECT i.id,coalesce(i.product_id,i.restock_part_id) part_id,i.name,i.device_model,s.id sale_id,s.sale_number,s.created_at,i.restock_part_id IS NOT NULL linked_later,c.name customer_name
+      FROM sale_items i JOIN sales s ON s.id=i.sale_id LEFT JOIN customers c ON c.id=s.customer_id
       WHERE s.tenant_id=$1 AND s.canceled_at IS NULL AND i.service AND coalesce(i.product_id,i.restock_part_id) IS NOT NULL AND s.created_at > ${SVC_SINCE}
       ORDER BY s.created_at DESC`, [tid(req)])).rows;
-    const open = (await q(`SELECT i.id,i.name,i.device_model,s.sale_number,s.created_at FROM sale_items i JOIN sales s ON s.id=i.sale_id
+    const open = (await q(`SELECT i.id,i.name,i.device_model,i.unit_price_cents,s.id sale_id,s.sale_number,s.created_at,s.total_cents,s.description,s.customer_id,c.name customer_name
+      FROM sale_items i JOIN sales s ON s.id=i.sale_id LEFT JOIN customers c ON c.id=s.customer_id
       WHERE s.tenant_id=$1 AND s.canceled_at IS NULL AND i.service AND i.product_id IS NULL AND i.restock_part_id IS NULL AND NOT i.part_none AND s.created_at > ${SVC_SINCE}
       ORDER BY s.created_at DESC LIMIT 300`, [tid(req)])).rows;
     // Só tipos de peça que a loja tem cadastrados (com telas cadastradas, "Troca de conector" não aparece).

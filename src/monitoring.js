@@ -18,6 +18,7 @@ import tls from 'node:tls';
 import { backgroundAllowed, isOpen, localClock, quietConfig } from './quiet-hours.js';
 import { emailConfigured, sendEmail } from './reports.js';
 import { listReleases, compareVersions } from './agent-releases.js';
+import { neonMonthBilling } from './neon-billing.js';
 
 const RANK = { info: 0, warn: 1, critical: 2 };
 const UA = 'FicouPronto-Monitor/1.0 (+https://ficoupronto.com)';
@@ -81,7 +82,11 @@ export async function checkNeon(now = new Date()) {
   const ref = samples.sort((a, b) => a.at - b.at)[0];
   const ratePerMs = ref ? (usedH - ref.h) / (now - ref.at) : usedH / Math.max(HOUR, now - start);
   const projected = Math.round((usedH + ratePerMs * Math.max(0, end - now)) * 10) / 10;
-  const limit = e.NEON_CU_HOURS_LIMIT === undefined || e.NEON_CU_HOURS_LIMIT === '' ? 100 : Number(e.NEON_CU_HOURS_LIMIT);
+  // Plano pago: a cobrança real vem da API de consumo v2 (só existe depois do upgrade). Se ela responder
+  // com período pago, o grátis acabou e passamos a vigiar dólares, não a cota de 100 CU-hora.
+  let billing = null;
+  if (p.org_id) { try { billing = await neonMonthBilling({ orgId: p.org_id, projectId: id, now, key: e.NEON_API_KEY }); } catch (err) { billing = err.status === 403 || err.status === 402 ? { plan: 'free', paid: false } : { error: String(err.message || err).slice(0, 160) }; } }
+  const limit = billing?.paid ? 0 : e.NEON_CU_HOURS_LIMIT === undefined || e.NEON_CU_HOURS_LIMIT === '' ? 100 : Number(e.NEON_CU_HOURS_LIMIT);
   const storage = Number(p.synthetic_storage_size) || 0, storageLimit = Number(p.branch_logical_size_limit_bytes) || 1073741824;
   const metrics = { configured: true, project: id, rate_basis: ref ? 'recent' : 'period', cu_hours_per_day: Math.round(ratePerMs * DAY * 100) / 100, cu_hours: usedH, limit, percent: limit ? pct(usedH, limit) : null, projected, period_end: end.toISOString(), storage_bytes: storage, storage_limit_bytes: storageLimit, compute_last_active_at: p.compute_last_active_at || null };
   if (limit > 0) {
@@ -96,7 +101,15 @@ export async function checkNeon(now = new Date()) {
       // Aviso próprio aos 90% (pedido do Lucas): hora de fazer o upgrade do Neon.
       if (p100 >= 90) items.push(alert('neon.compute.90', 'critical', 'banco', 'Banco chegou a ' + p100 + '% da cota: faça o upgrade do Neon hoje', usedH + ' de ' + limit + ' CU-hora.' + when + ' Neon → Billing → Change plan → Launch (cobra no dia 1º, por uso).'));
     }
+  } else if (billing?.paid) {
+    const budget = Number(e.NEON_MONTHLY_BUDGET_USD) || 25;
+    Object.assign(metrics, { plan: billing.plan, billing_since: billing.billing_since, cost_usd: billing.project?.cost_usd ?? 0, projected_cost_usd: billing.project?.projected_usd ?? 0,
+      account_cost_usd: billing.cost_usd, account_projected_usd: billing.projected_usd, projects: billing.projects, budget_usd: budget });
+    // Orçamento vale para a conta inteira (todos os projetos do Neon caem no mesmo cartão).
+    if (billing.projected_usd > budget) items.push(alert('neon.cost', billing.projected_usd > budget * 1.5 ? 'critical' : 'warn', 'banco', 'Neon: cobrança prevista US$ ' + billing.projected_usd + ' no mês',
+      'Orçamento: US$ ' + budget + '. Já cobrado desde ' + fmtDT(billing.billing_since) + ': US$ ' + billing.cost_usd + ' (' + billing.projects.map(x => x.name + ' US$ ' + x.cost_usd).join(', ') + '). Fecha em ' + fmtDay(billing.period_end) + ' no cartão.'));
   } else {
+    if (billing?.error) metrics.billing_error = billing.error;
     const price = Number(e.NEON_CU_HOUR_PRICE) || 0.106, budget = Number(e.NEON_MONTHLY_BUDGET_USD) || 15;
     metrics.cost_usd = Math.round(usedH * price * 100) / 100; metrics.projected_cost_usd = Math.round(projected * price * 100) / 100; metrics.budget_usd = budget;
     if (metrics.projected_cost_usd > budget) items.push(alert('neon.cost', metrics.projected_cost_usd > budget * 1.5 ? 'critical' : 'warn', 'banco', 'Banco: custo previsto US$ ' + metrics.projected_cost_usd + ' no mês', 'Orçamento: US$ ' + budget + '. Já gasto: US$ ' + metrics.cost_usd + '. Veja o que mantém o banco acordado.'));
@@ -375,7 +388,7 @@ export async function runMonitoring(q, { now = new Date(), withDb = true, forceE
     items = [...items, ...db.items]; metrics = { ...metrics, ...db.metrics };
     for (const c of ['lojas', 'cobrança', 'suporte', 'relatórios']) scopes.add(c);
     const notes = await persist(q, items, scopes, now, notify);
-    if (notify) await deliver(notes, now);
+    if (notify) await deliver(notes, now, q);
     if (notify) await digest(q, s, items, metrics, now);
     state.dbAt = now.getTime();
     state.snapshot = { at: now.toISOString(), metrics, items, partial: false };
@@ -427,7 +440,7 @@ async function persist(q, items, scopes, now, notify) {
   return notes;
 }
 
-async function deliver(notes, now) {
+async function deliver(notes, now, q) {
   if (!notes.length) return;
   const fresh = notes.filter(n => n.type !== 'resolved'), solved = notes.filter(n => n.type === 'resolved');
   const parts = [];
@@ -435,7 +448,14 @@ async function deliver(notes, now) {
   if (solved.length) parts.push(solved.map(n => '✅ Resolvido: ' + n.alert.title).join('\n'));
   const text = 'Ficou Pronto — monitoramento\n\n' + parts.join('\n\n') + '\n\n' + panelUrl();
   try { await telegram(text); } catch (e) { console.error('Monitoramento: Telegram', e.message); }
-  const crit = fresh.filter(n => n.alert.severity === 'critical' && n.type === 'new');
+  let crit = fresh.filter(n => n.alert.severity === 'critical' && n.type === 'new');
+  // E-mail: no máximo um por problema por dia. Um PC que cai, volta e cai de novo (oscilando)
+  // reabre o alerta várias vezes; o Telegram avisa cada vez, o e-mail só a primeira do dia.
+  if (crit.length && q) {
+    const today = now.toLocaleDateString('sv-SE', { timeZone: TZ });
+    const r = await q("UPDATE platform_alerts SET emailed_on=$2 WHERE key = ANY($1) AND (emailed_on IS NULL OR emailed_on < $2) RETURNING key", [crit.map(n => n.alert.key), today]).catch(() => null);
+    if (r) { const ok = new Set(r.rows.map(x => x.key)); crit = crit.filter(n => ok.has(n.alert.key)); }
+  }
   if (crit.length && emailConfigured() && state.alertEmail) {
     try { await sendEmail(state.alertEmail, '🔴 Ficou Pronto: ' + crit[0].alert.title + (crit.length > 1 ? ' (+' + (crit.length - 1) + ')' : ''), mailHtml('Problema crítico', crit.map(n => n.alert))); } catch (e) { console.error('Monitoramento: e-mail', e.message); }
   }
@@ -468,6 +488,7 @@ async function digest(q, s, items, metrics, now) {
 }
 
 export const monitoringSnapshot = () => state.snapshot;
+export const neonProjectId = () => env().NEON_PROJECT_ID || state.neonProject || state.snapshot?.metrics?.neon?.project || null;
 
 export function startMonitoring(q) {
   if (env().MONITORING === 'off') return;

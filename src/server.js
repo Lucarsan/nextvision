@@ -11,7 +11,9 @@ import {demoVideoFor,startDemoLoop,restartShowcase,SHOWCASE_REF,DEMO_WAITING_VID
 const slugFromName=name=>String(name).replace(/@/g,'a').replace(/&/g,'e').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,60);
 import {markHumanActivity,isQuiet,backgroundAllowed} from './quiet-hours.js';
 import {registerMonitoring,startMonitoring,recordServerError} from './monitoring.js';
-const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'400kb'}));
+import {meterMiddleware,hookShutdown} from './usage-meter.js';
+import {registerCosts} from './costs.js';
+const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(meterMiddleware);hookShutdown();app.use(express.json({limit:'400kb'}));
 // Uso humano (loja, central, técnico, cliente) acorda as rotinas fora do expediente. Agentes e agendador não contam.
 app.use('/api',(req,_res,next)=>{if(!/^\/(connect|internal)\//.test(req.path))markHumanActivity();next();});
 const secret=process.env.JWT_SECRET;if(!secret||secret.length<32)throw Error('Configure JWT_SECRET com 32+ caracteres');
@@ -822,7 +824,7 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
  if(!r.rowCount)return res.status(404).sendFile('tracking.html',{root:'public'});
  res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
 }));
-registerMonitoring(app,{q,auth,roles,route,bad,valid,z});
+registerMonitoring(app,{q,auth,roles,route,bad,valid,z});registerCosts(app,{q,auth,roles,route,bad,valid,z,uuid});
 app.get('/como-funciona',(_req,res)=>res.redirect(301,'/o-que-e'));// endereço antigo da página
 app.use(express.static('public',{extensions:['html']}));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');recordServerError(err);return bad(res,500,'Erro interno');});

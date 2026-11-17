@@ -18,12 +18,14 @@ export function registerStockValue(app, { q, route, bad, valid, audit, guard, ti
   const attempts = rateLimit({ windowMs: 15 * 60000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Muitas tentativas. Tente de novo em 15 minutos.' } });
 
   app.post('/api/store/stock/value', ...guard, attempts, route(async (req, res) => {
-    const v = valid(z.object({ login: z.string().max(100), password: z.string().max(200) }).strict(), req, res); if (!v) return;
-    const login = process.env.STOCK_VALUE_LOGIN || 'admin', hash = process.env.STOCK_VALUE_PASSWORD_HASH || '';
-    if (!hash) return bad(res, 503, 'A senha desta página ainda não foi configurada.');
-    const okLogin = sameText(v.login.trim().toLowerCase(), login.toLowerCase());
-    const okPass = await bcrypt.compare(v.password, hash);
-    if (!okLogin || !okPass) { await audit(req, 'denied', 'stock_value', tid(req)); return bad(res, 401, 'Login ou senha incorretos.'); }
+    if (!req.user.admin_free) { // dono liberado não precisa do login e senha desta página
+      const v = valid(z.object({ login: z.string().max(100), password: z.string().max(200) }).strict(), req, res); if (!v) return;
+      const login = process.env.STOCK_VALUE_LOGIN || 'admin', hash = process.env.STOCK_VALUE_PASSWORD_HASH || '';
+      if (!hash) return bad(res, 503, 'A senha desta página ainda não foi configurada.');
+      const okLogin = sameText(v.login.trim().toLowerCase(), login.toLowerCase());
+      const okPass = await bcrypt.compare(v.password, hash);
+      if (!okLogin || !okPass) { await audit(req, 'denied', 'stock_value', tid(req)); return bad(res, 401, 'Login ou senha incorretos.'); }
+    }
 
     // Uma linha por item em estoque: produto simples (ou peça) ou cada modelo de um produto com modelos.
     // O modelo usa o preço e o custo do produto.

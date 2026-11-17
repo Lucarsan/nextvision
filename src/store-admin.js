@@ -39,6 +39,7 @@ export function inWindow(day, lastDay, from, to) {
 // Rotas que pedem a senha do admin: cabeçalho X-Admin-Token com a liberação de /api/store/admin/unlock,
 // presa à loja e ao usuário logado.
 export function requireAdmin(req, res, next) {
+  if (req.user?.admin_free) return next(); // dono liberado da senha do admin
   try {
     const p = jwt.verify(String(req.get('x-admin-token') || ''), process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (p.adm === 1 && p.t === req.user.tenant_id && p.u === req.user.id) return next();
@@ -51,6 +52,11 @@ export function registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard
   const attempts = rateLimit({ windowMs: 15 * 60000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Muitas tentativas. Tente de novo em 15 minutos.' } });
 
   app.post('/api/store/admin/unlock', ...guard, attempts, route(async (req, res) => {
+    if (req.user.admin_free) { // dono liberado: libera sem pedir login e senha
+      const token = jwt.sign({ adm: 1, t: tid(req), u: req.user.id }, secret, { algorithm: 'HS256', expiresIn: ADMIN_MINUTES * 60 });
+      res.set('Cache-Control', 'no-store');
+      return res.json({ admin_token: token, expires_at: new Date(Date.now() + ADMIN_MINUTES * 60000).toISOString(), admin_free: true });
+    }
     const v = valid(z.object({ login: z.string().max(100), password: z.string().max(200) }).strict(), req, res); if (!v) return;
     const r = await checkAdminPassword(v.login, v.password);
     if (!r.ok) { await audit(req, 'denied', 'store_admin', tid(req)); return bad(res, r.status, r.error); }

@@ -677,6 +677,7 @@ async function loadReportsCard(card) {
     + (msg ? '<p class="nv-help" style="color:#b42318">' + safe(msg) + '</p>' : '') + '<button type="button" class="nv-button" id="reportUnlock">' + FPIcon('lock') + 'Desbloquear</button>';
     $('reportUnlock').onclick = async () => { if (adm && await adm.ensure('Relatórios por e-mail pedem a senha do admin.')) loadReportsCard(card); }; };
   if (!adm) { card.innerHTML = '<h2>Relatórios por e-mail</h2><p class="nv-help">Disponível com o caixa ligado.</p>'; return; }
+  if (!adm.header()['X-Admin-Token'] && adm.free && adm.free()) await adm.ensure('');
   const h = adm.header(); if (!h['X-Admin-Token']) return locked('');
   const aapi = async (path, method = 'GET', body) => { const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', ...adm.header() }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
     const data = await r.json().catch(() => ({})); if (!r.ok) { if (data.admin_required) adm.forget(); throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), { admin_required: !!data.admin_required }); } return data; };

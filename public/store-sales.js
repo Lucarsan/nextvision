@@ -577,7 +577,8 @@
     else { status.textContent = 'Escolha o cliente (ou marque "Não quis se identificar").'; return; }
     // Pedido ao vivo junto (o servidor abre o pedido na mesma transação da venda).
     if (addTo && later) { delete body.payment_method; delete body.payments; delete body.cashback_use_cents; delete body.order_id; return submitAdd(body, box, alive, btn, status); }
-    if (liveWanted() && !body.order_id) body.live_order = { process_id: $('fsLiveProc').value, details: liveDetails(services) };
+    // Só serviço abre pedido: venda só de produtos (impressão, pilha, capa…) nunca abre, mesmo com a caixinha marcada.
+    if (liveWanted() && !body.order_id && services.length) body.live_order = { process_id: $('fsLiveProc').value, details: liveDetails(services) };
     if (later) {
       delete body.payment_method; delete body.payments;
       btn.disabled = true;
@@ -637,9 +638,11 @@
     if (!processesCache) { try { processesCache = await api('/processes'); } catch { processesCache = []; } }
     if (!box.isConnected) return;
     if (!processesCache.length) { box.innerHTML = ''; return; }
-    let on = false, proc = ''; try { const saved = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}'); on = !!saved.on; proc = saved.proc || ''; } catch { /* sem preferência */ }
+    // Pet shop: a escolha fica lembrada no computador. Outras lojas: começa desmarcada a cada venda
+    // (aparelho que fica na loja vira OS em Serviços do dia; venda no balcão não abre pedido).
+    let on = false, proc = ''; try { const saved = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}'); on = !!saved.on && isPet(); proc = saved.proc || ''; } catch { /* sem preferência */ }
     if (!processesCache.some(p => p.id === proc)) proc = processesCache[0].id;
-    box.innerHTML = `<div class="fs-live"><label class="fs-check"><input type="checkbox" id="fsLiveOn" ${on ? 'checked' : ''}> ${FPIcon('camera') || ''} Abrir pedido ao vivo deste atendimento <small class="nv-help">o cliente acompanha pelo link</small></label>
+    box.innerHTML = `<div class="fs-live"><label class="fs-check"><input type="checkbox" id="fsLiveOn" ${on ? 'checked' : ''}> ${FPIcon('camera') || ''} Abrir pedido ao vivo deste atendimento <small class="nv-help">${isPet() ? 'o cliente acompanha pelo link' : 'só para serviço; o cliente acompanha pelo link'}</small></label>
       <select id="fsLiveProc" aria-label="Processo do pedido"${processesCache.length > 1 ? '' : ' hidden'}>${processesCache.map(p => `<option value="${p.id}" ${p.id === proc ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>`;
     const save = () => { try { localStorage.setItem(LIVE_KEY, JSON.stringify({ on: $('fsLiveOn').checked, proc: $('fsLiveProc').value })); } catch { /* só nesta tela */ } };
     $('fsLiveOn').onchange = save; $('fsLiveProc').onchange = save;

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pg from 'pg';
+import { instrumentPool } from './usage-meter.js';
 if (!process.env.DATABASE_URL) throw new Error('Defina DATABASE_URL');
 export const db = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
@@ -12,5 +13,7 @@ export const db = new pg.Pool({
 // Neon/proxies may close idle connections. Without this listener, pg re-emits
 // the idle client's error on the pool and Node terminates the whole API.
 // The broken client is already discarded; the next query opens a new one.
+// Mede o uso do banco por loja (para o rateio de custos na central).
+instrumentPool(db);
 db.on('error', (error) => console.error('Conexão ociosa do banco descartada:', error.code || error.name));
 export const q = (sql, values = []) => db.query(sql, values);

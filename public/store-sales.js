@@ -2517,6 +2517,7 @@
   async function loadDayServices(box, alive) {
     const d = await api('/store/sales/day-services' + (dsDay ? '?day=' + dsDay : '')); if (!alive()) return;
     dsDay = d.day;
+    const tech = config?.niche === 'electronics' && !!window.FPServiceOrders, petCol = tech ? 'Aparelho' : 'Pet';
     const rows = [...d.paid.map(x => ({ ...x, at: x.created_at, status: 'Pago · ' + payText(x), paidOk: true, ref: 'Venda ' + x.sale_number })),
       ...d.pending.map(x => ({ ...x, at: x.created_at, status: 'A receber', ref: 'A receber #' + x.number }))].sort((a, b) => new Date(a.at) - new Date(b.at));
     const total = rows.reduce((a, x) => a + x.total_cents, 0), open = d.pending.reduce((a, x) => a + x.total_cents, 0);
@@ -2528,9 +2529,10 @@
       <div class="fs-row fs-day-actions"><button type="button" class="nv-button secondary" id="fsDayPrint">${FPIcon('printer')} Imprimir</button><button type="button" class="nv-button secondary" id="fsDayCsv">${FPIcon('copy')} Baixar planilha</button></div>
       ${d.orders_without_sale.length ? `<div class="fs-day-warn"><b>${FPIcon('alert')} ${d.orders_without_sale.length} pedido${d.orders_without_sale.length > 1 ? 's' : ''} do dia sem venda lançada</b><small>Confira se o serviço foi cobrado ou guardado em "A receber".</small>
         <ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${custLink(o.customer_id, esc(o.customer_name || 'sem cliente'))}${o.pet ? ' · ' + esc(o.pet) : ''}${o.service ? ' · ' + esc(o.service) : ''}</li>`).join('')}</ul></div>` : ''}
-      ${rows.length ? `<div class="fs-day-table" role="table"><div class="fs-day-row fs-day-h" role="row"><span>Hora</span><span>Cliente</span><span>Pet</span><span>Serviço</span><span class="n">Valor</span><span>Situação</span><span>Vendedor</span></div>
-        ${rows.map(x => `<div class="fs-day-row${x.paidOk ? '' : ' fs-day-open'}" role="row"><span>${hhmm(x.at)}</span><span>${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}</span><span>${esc(x.pet || '')}</span><span>${esc(x.service || '')}${x.addon ? ' <span class="fs-tag">adicional</span>' : ''}</span><span class="n">${brl(x.total_cents)}</span><span>${esc(x.status)}</span><span>${esc(x.seller_name || '')}</span></div>`).join('')}</div>`
+      ${rows.length ? `<div class="fs-day-table" role="table"><div class="fs-day-row fs-day-h" role="row"><span>Hora</span><span>Cliente</span><span>${petCol}</span><span>Serviço</span><span class="n">Valor</span><span>Situação</span><span>Vendedor</span></div>
+        ${rows.map((x, i) => `<div class="fs-day-row${x.paidOk ? '' : ' fs-day-open'}" role="row"><span>${hhmm(x.at)}</span><span>${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}</span><span>${esc(x.pet || '')}</span><span>${esc(x.service || '')}${x.addon ? ' <span class="fs-tag">adicional</span>' : ''}</span><span class="n">${brl(x.total_cents)}</span><span>${esc(x.status)}${tech && x.paidOk ? ` <button type="button" class="fs-link" data-ds-warranty="${i}">${FPIcon('receipt')} Garantia</button>` : ''}</span><span>${esc(x.seller_name || '')}</span></div>`).join('')}</div>`
         : '<p class="nv-help">Nenhum serviço lançado neste dia.</p>'}</section>`;
+    box.querySelectorAll('[data-ds-warranty]').forEach(b => b.onclick = () => window.FPServiceOrders.warrantyFromDay(rows[b.dataset.dsWarranty], d.day));
     const go = day => { dsDay = day; loadDayServices(box, alive); };
     $('fsDay').onchange = e => { if (e.target.value) go(e.target.value); };
     $('fsDayPrev').onclick = () => go(shiftDay(d.day, -1));
@@ -2538,13 +2540,13 @@
     const cells = x => [d.day.split('-').reverse().join('/'), hhmm(x.at), x.customer_name || '', x.pet || '', x.service || '', centsText(x.total_cents), x.paidOk ? 'Pago' : 'A receber', x.paidOk ? payText(x) : '', x.seller_name || ''];
     $('fsDayCsv').onclick = () => {
       const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-      const csv = '﻿' + [['Data', 'Hora', 'Cliente', 'Pet', 'Serviço', 'Valor', 'Situação', 'Pagamento', 'Vendedor'], ...rows.map(cells)].map(r => r.map(q).join(';')).join('\r\n');
+      const csv = '﻿' + [['Data', 'Hora', 'Cliente', petCol, 'Serviço', 'Valor', 'Situação', 'Pagamento', 'Vendedor'], ...rows.map(cells)].map(r => r.map(q).join(';')).join('\r\n');
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `servicos-${d.day}.csv`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     };
     $('fsDayPrint').onclick = () => {
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>Serviços do dia ${d.day}</title><style>body{font:12px Arial,sans-serif;margin:16px}h1{font-size:16px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}.ok{width:18px}</style></head><body>
         <h1>Serviços do dia · ${esc(config?.name || '')}</h1><div>${esc(dayLabel(d.day))} · ${rows.length} serviços · ${baths} banhos · total ${brl(total)} · a receber ${brl(open)}</div>
-        <table><thead><tr><th class="ok">✓</th><th>Hora</th><th>Cliente</th><th>Pet</th><th>Serviço</th><th class="n">Valor</th><th>Situação</th><th>Vendedor</th></tr></thead><tbody>
+        <table><thead><tr><th class="ok">✓</th><th>Hora</th><th>Cliente</th><th>${petCol}</th><th>Serviço</th><th class="n">Valor</th><th>Situação</th><th>Vendedor</th></tr></thead><tbody>
         ${rows.map(x => `<tr><td class="ok">☐</td><td>${hhmm(x.at)}</td><td>${esc(x.customer_name || '')}</td><td>${esc(x.pet || '')}</td><td>${esc(x.service || '')}</td><td class="n">${brl(x.total_cents)}</td><td>${esc(x.status)}</td><td>${esc(x.seller_name || '')}</td></tr>`).join('')}</tbody></table>
         ${d.orders_without_sale.length ? `<h1 style="margin-top:14px">Pedidos sem venda lançada</h1><ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${esc(o.customer_name || '')}${o.pet ? ' · ' + esc(o.pet) : ''}</li>`).join('')}</ul>` : ''}</body></html>`;
       const frame = document.createElement('iframe'); frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.append(frame);
@@ -2626,6 +2628,8 @@
   }
 
   window.FPSales = {
+    // Para service-orders.js (OS da assistência técnica) usar os mesmos utilitários.
+    h: { api, esc, brl, hhmm, parseMoney, phoneBR, waLink, greetName, custLink, openDialog, header, feedback, config: () => config },
     enabled: () => !!config?.enabled,
     titles: { cash: 'Caixa', dayservices: 'Serviços do dia', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
     moreItems: () => config?.enabled ? [['dayservices', 'Serviços do dia'], ['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
@@ -2636,7 +2640,7 @@
       // Estoque pelo menu: as mesmas abas da janela do Caixa, sem precisar abrir o caixa.
       if (view === 'stock') { box.innerHTML = '<section class="nv-card fs-stockpage" id="fsStockPage"></section>'; stockPage = $('fsStockPage'); return productsDialog('', 'list'); }
       if (view === 'goals') return loadGoals(box, alive);
-      if (view === 'dayservices') return loadDayServices(box, alive);
+      if (view === 'dayservices') return config.niche === 'electronics' && window.FPServiceOrders ? window.FPServiceOrders.mount(box, alive, b => loadDayServices(b, alive)) : loadDayServices(box, alive);
       return loadMessages(box, alive);
     }
   };

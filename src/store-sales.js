@@ -1008,37 +1008,46 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     await audit(req, 'cancel', 'pending_sale', req.params.id); res.json({ canceled: true });
   }));
 
-  // ---------- Serviços do dia ----------
+  // ---------- Serviços do dia / período ----------
   // Para a atendente conferir no fim do dia: cada serviço lançado (pago ou a receber) e os pedidos
-  // abertos no dia que ainda não têm venda lançada.
+  // abertos no dia que ainda não têm venda lançada. Com from/to (até 366 dias) serve para calcular a
+  // comissão de um período. addon: pago = gravado na venda; a receber = cadastro atual do serviço.
   app.get('/api/store/sales/day-services', ...guard, route(async (req, res) => {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
-    const day = req.query.day ? String(req.query.day) : today;
-    if (!dayField.safeParse(day).success) return bad(res, 400, 'Data inválida');
+    const from = String(req.query.from || req.query.day || today), to = String(req.query.to || req.query.day || from);
+    if (![from, to].every(d => dayField.safeParse(d).success && !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d)) return bad(res, 400, 'Data inválida');
+    if (to < from) return bad(res, 400, 'A data final é antes da inicial');
+    if ((Date.parse(to) - Date.parse(from)) / 86400000 > 366) return bad(res, 400, 'Escolha um período de até 1 ano');
     const tz = TZ.replace(/'/g, '');
-    const [paid, pending, orders] = await Promise.all([
-      q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,c.phone customer_phone,u.name seller_name,
+    const inRange = col => `(${col} AT TIME ZONE '${tz}')::date BETWEEN $2::date AND $3::date`;
+    const args = [tid(req), from, to];
+    const [paid, pending, orders, sellers] = await Promise.all([
+      q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,c.phone customer_phone,x.seller_id,u.name seller_name,
           i.id item_id,i.name service,i.device_model pet,i.total_cents,i.addon,i.warranty_days,o.order_number,so.id os_id,so.number os_number
         FROM sale_items i JOIN sales x ON x.id=i.sale_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN users u ON u.id=x.seller_id LEFT JOIN orders o ON o.id=x.order_id
           LEFT JOIN pending_sales ps ON ps.paid_sale_id=x.id LEFT JOIN service_orders so ON so.pending_sale_id=ps.id
-        WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date=$2::date ORDER BY x.created_at,i.position`, [tid(req), day]),
-      q(`SELECT p.id pending_id,p.number,p.created_at,p.customer_id,c.name customer_name,c.phone customer_phone,u.name seller_name,o.order_number,
-          coalesce(e->>'service',p.description,'Valor avulso') service,e->>'device_model' pet,coalesce((e->>'unit_price_cents')::int,p.total_cents) total_cents,
-          (e->>'warranty_days')::int warranty_days,so.id os_id,so.number os_number
+        WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL AND ${inRange('x.created_at')} ORDER BY x.created_at,i.position`, args),
+      q(`SELECT p.id pending_id,p.number,p.created_at,p.customer_id,c.name customer_name,c.phone customer_phone,p.seller_id,u.name seller_name,o.order_number,
+          coalesce(it.e->>'service',p.description,'Valor avulso') service,it.e->>'device_model' pet,coalesce((it.e->>'unit_price_cents')::int,p.total_cents) total_cents,
+          (it.e->>'warranty_days')::int warranty_days,so.id os_id,so.number os_number,coalesce(sc.addon,false) addon
         FROM pending_sales p JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.seller_id LEFT JOIN orders o ON o.id=p.order_id
           LEFT JOIN service_orders so ON so.pending_sale_id=p.id
         LEFT JOIN LATERAL (SELECT e FROM jsonb_array_elements(coalesce(p.payload->'items','[]'::jsonb)) e WHERE e ? 'service') it ON true
-        WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL AND (p.created_at AT TIME ZONE '${tz}')::date=$2::date
-          AND (it.e IS NOT NULL OR NOT (p.payload ? 'items')) ORDER BY p.created_at`, [tid(req), day]),
+        LEFT JOIN service_catalog sc ON sc.tenant_id=p.tenant_id AND it.e->>'catalog_id' ~ '^[0-9a-fA-F-]{36}$' AND sc.id=(it.e->>'catalog_id')::uuid
+        WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL AND ${inRange('p.created_at')}
+          AND (it.e IS NOT NULL OR NOT (p.payload ? 'items')) ORDER BY p.created_at`, args),
       q(`SELECT o.id,o.order_number,o.created_at,o.status,o.customer_id,c.name customer_name,o.details->>'pet_name' pet,o.details->>'service' service
         FROM orders o LEFT JOIN customers c ON c.id=o.customer_id
-        WHERE o.tenant_id=$1 AND o.deleted_at IS NULL AND (o.created_at AT TIME ZONE '${tz}')::date=$2::date
+        WHERE o.tenant_id=$1 AND o.deleted_at IS NULL AND ${inRange('o.created_at')}
           AND NOT EXISTS(SELECT 1 FROM sales x WHERE x.order_id=o.id AND x.canceled_at IS NULL)
           AND NOT EXISTS(SELECT 1 FROM pending_sales p WHERE p.order_id=o.id AND p.canceled_at IS NULL)
-        ORDER BY o.created_at`, [tid(req), day])
+        ORDER BY o.created_at`, args),
+      // Percentual de comissão para pré-preencher a calculadora: o dono vê de todos; o operador, só o dele.
+      q(`SELECT id,name,commission_percent::float percent,commission_base base FROM users
+        WHERE tenant_id=$1 AND role IN ('owner','operator') AND ($2::boolean OR id=$3) ORDER BY lower(name)`, [tid(req), req.user.role === 'owner', req.user.id])
     ]);
     res.set('Cache-Control', 'no-store');
-    res.json({ day, today, paid: paid.rows, pending: pending.rows, orders_without_sale: orders.rows });
+    res.json({ day: from, from, to, today, paid: paid.rows, pending: pending.rows, orders_without_sale: orders.rows, commissions: sellers.rows });
   }));
 
   // Registra a venda. pendingId: recebimento de uma venda "a receber" (fica paga na mesma transação).

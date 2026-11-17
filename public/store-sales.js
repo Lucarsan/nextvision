@@ -2512,48 +2512,121 @@
     });
   }
 
-  // ---------------- Serviços do dia ----------------
+  // ---------------- Serviços do dia / período ----------------
   // Lista para a atendente conferir no fim do dia (como a planilha diária): serviços pagos e a receber,
-  // e pedidos abertos sem venda lançada. Imprime e baixa planilha (CSV que abre no Excel).
-  let dsDay = '';
+  // e pedidos abertos sem venda lançada. Com período (de/até) e filtros (tipo, serviço, vendedor,
+  // situação) calcula a comissão sobre o que está na lista. Imprime e baixa planilha (CSV que abre no Excel).
+  let dsFrom = '', dsTo = '';
+  const dsF = { kind: 'all', svc: '', seller: '', status: 'all', pct: null };
   const payText = x => Array.isArray(x.payments) && x.payments.length ? x.payments.map(p => (METHODS[p.method] || p.method) + ' ' + brl(p.amount_cents)).join(' + ') : METHODS[x.payment_method] || x.payment_method || '';
   const shiftDay = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
   const dayLabel = d => new Date(d + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+  const brDay = d => d.split('-').reverse().join('/');
+  const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+  const localDay = at => { const t = new Date(at); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
+  const svcKey = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const DS_KINDS = { all: 'Todos os serviços', addon: 'Apenas adicionais', main: 'Sem os adicionais', bath: 'Apenas banhos' };
+  const DS_STATUS = { all: 'Pagos e a receber', paid: 'Só pagos', open: 'Só a receber' };
+  const pctKey = () => 'fp_ds_pct_' + (config?.id || config?.name || '');
+  const savedPct = () => { try { const v = localStorage.getItem(pctKey()); return v == null ? null : Number(v); } catch { return null; } };
+  const savePct = v => { try { v == null ? localStorage.removeItem(pctKey()) : localStorage.setItem(pctKey(), String(v)); } catch { /* navegador sem armazenamento */ } };
   async function loadDayServices(box, alive) {
-    const d = await api('/store/sales/day-services' + (dsDay ? '?day=' + dsDay : '')); if (!alive()) return;
-    dsDay = d.day;
+    const qs = dsFrom ? '?from=' + dsFrom + '&to=' + (dsTo || dsFrom) : '';
+    const d = await api('/store/sales/day-services' + qs); if (!alive()) return;
+    dsFrom = d.from || d.day; dsTo = d.to || dsFrom;
+    const single = dsFrom === dsTo, span = daysBetween(dsFrom, dsTo) + 1;
     const tech = config?.niche === 'electronics' && !!window.FPServiceOrders, petCol = tech ? 'Aparelho' : 'Pet';
-    const rows = [...d.paid.map(x => ({ ...x, at: x.created_at, status: 'Pago · ' + payText(x), paidOk: true, ref: 'Venda ' + x.sale_number })),
+    const all = [...d.paid.map(x => ({ ...x, at: x.created_at, status: 'Pago · ' + payText(x), paidOk: true, ref: 'Venda ' + x.sale_number })),
       ...d.pending.map(x => ({ ...x, at: x.created_at, status: 'A receber', ref: 'A receber #' + x.number }))].sort((a, b) => new Date(a.at) - new Date(b.at));
-    const total = rows.reduce((a, x) => a + x.total_cents, 0), open = d.pending.reduce((a, x) => a + x.total_cents, 0);
-    const baths = rows.filter(x => /banho/i.test(x.service || '')).length;
-    box.innerHTML = `<section class="nv-card fs-day"><div class="nv-heading"><h2>Serviços do dia</h2>
-        <div class="fs-day-nav"><button type="button" class="nv-button secondary fs-small" id="fsDayPrev" aria-label="Dia anterior">‹</button><input type="date" id="fsDay" value="${d.day}" max="${d.today}"><button type="button" class="nv-button secondary fs-small" id="fsDayNext" aria-label="Próximo dia" ${d.day >= d.today ? 'disabled' : ''}>›</button></div></div>
-      <p class="nv-help">${esc(dayLabel(d.day))}. Confira com a planilha: cada linha é um serviço lançado no caixa (pago) ou guardado em "A receber".</p>
-      <div class="fs-goal-stats"><div><b>${rows.length}</b><small>serviços</small></div><div><b>${baths}</b><small>banhos</small></div><div><b>${brl(total)}</b><small>total</small></div><div><b>${brl(open)}</b><small>a receber</small></div></div>
+    // Opções dos filtros a partir do que veio no período (serviço pelo nome, sem diferenciar maiúsculas).
+    const svcNames = new Map(); all.forEach(x => { const k = svcKey(x.service); if (k && !svcNames.has(k)) svcNames.set(k, x.service.trim()); });
+    const sellers = new Map(); all.forEach(x => { if (x.seller_id) sellers.set(x.seller_id, x.seller_name || 'Sem nome'); });
+    (d.commissions || []).forEach(c => { if (!sellers.has(c.id) && dsF.seller === c.id) sellers.set(c.id, c.name); });
+    if (dsF.svc && !svcNames.has(dsF.svc)) dsF.svc = '';
+    if (dsF.seller && !sellers.has(dsF.seller)) dsF.seller = '';
+    const isBath = x => /banho/i.test(x.service || '');
+    const rows = all.filter(x => (dsF.kind === 'all' || (dsF.kind === 'addon' ? x.addon : dsF.kind === 'main' ? !x.addon : isBath(x)))
+      && (!dsF.svc || svcKey(x.service) === dsF.svc) && (!dsF.seller || x.seller_id === dsF.seller)
+      && (dsF.status === 'all' || (dsF.status === 'paid' ? x.paidOk : !x.paidOk)));
+    const filtered = rows.length !== all.length || dsF.kind !== 'all' || dsF.svc || dsF.seller || dsF.status !== 'all';
+    const total = rows.reduce((a, x) => a + x.total_cents, 0), open = rows.filter(x => !x.paidOk).reduce((a, x) => a + x.total_cents, 0);
+    const baths = rows.filter(isBath).length, addons = rows.filter(x => x.addon).length;
+    // Comissão: % digitado (lembrado neste navegador) ou, escolhido um vendedor, o % cadastrado em Metas e comissões.
+    const conf = dsF.seller ? (d.commissions || []).find(c => c.id === dsF.seller) : null;
+    const pct = dsF.pct != null ? dsF.pct : conf && conf.percent > 0 ? conf.percent : savedPct();
+    const commission = pct ? Math.round(total * pct / 100) : 0;
+    const BASES = { addons: 'adicionais', services: 'serviços', all: 'tudo' };
+    const filterText = [DS_KINDS[dsF.kind], dsF.svc ? svcNames.get(dsF.svc) : '', dsF.seller ? 'vendedor ' + sellers.get(dsF.seller) : '', dsF.status !== 'all' ? DS_STATUS[dsF.status] : ''].filter(Boolean).join(' · ');
+    const periodText = single ? dayLabel(dsFrom) : `${brDay(dsFrom)} a ${brDay(dsTo)} (${span} dias)`;
+    const when = x => (single ? '' : brDay(localDay(x.at)).slice(0, 5) + ' ') + hhmm(x.at);
+    const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${esc(k)}" ${k === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const addonHint = dsF.kind === 'addon' && !rows.length && all.length
+      ? '<p class="nv-help fs-ds-hint">Nenhum serviço deste período está marcado como <b>adicional</b>. Marque no cadastro do serviço (Caixa → Serviço → Editar → "Serviço adicional") ou escolha o serviço pelo nome no filtro "Serviço".</p>' : '';
+    box.innerHTML = `<section class="nv-card fs-day"><div class="nv-heading"><h2>${single ? 'Serviços do dia' : 'Serviços do período'}</h2>
+        <div class="fs-day-nav"><button type="button" class="nv-button secondary fs-small" id="fsDayPrev" aria-label="${single ? 'Dia anterior' : 'Período anterior'}">‹</button>
+          <label class="fs-ds-date"><small>De</small><input type="date" id="fsDayFrom" value="${dsFrom}" max="${d.today}" aria-label="Data inicial"></label>
+          <label class="fs-ds-date"><small>Até</small><input type="date" id="fsDayTo" value="${dsTo}" min="${dsFrom}" max="${d.today}" aria-label="Data final"></label>
+          <button type="button" class="nv-button secondary fs-small" id="fsDayNext" aria-label="${single ? 'Próximo dia' : 'Próximo período'}" ${dsTo >= d.today ? 'disabled' : ''}>›</button></div></div>
+      <div class="fs-ds-quick" role="group" aria-label="Período rápido">${[['today', 'Hoje'], ['yesterday', 'Ontem'], ['week', '7 dias'], ['month', 'Este mês'], ['lastmonth', 'Mês passado']].map(([k, t]) => `<button type="button" class="fs-chip" data-ds-quick="${k}">${t}</button>`).join('')}</div>
+      <div class="fs-ds-filters">
+        <label class="nv-field">Tipo<select id="fsDsKind">${opt(DS_KINDS, dsF.kind)}</select></label>
+        <label class="nv-field">Serviço<select id="fsDsSvc"><option value="">Todos</option>${opt(Object.fromEntries([...svcNames].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))), dsF.svc)}</select></label>
+        <label class="nv-field">Vendedor<select id="fsDsSeller"><option value="">Todos</option>${opt(Object.fromEntries([...sellers].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))), dsF.seller)}</select></label>
+        <label class="nv-field">Situação<select id="fsDsStatus">${opt(DS_STATUS, dsF.status)}</select></label>
+        ${filtered ? '<button type="button" class="nv-button secondary fs-small" id="fsDsClear">Limpar filtros</button>' : ''}
+      </div>
+      <p class="nv-help">${esc(periodText)}${filtered ? ' · ' + esc(filterText) : ''}. Cada linha é um serviço lançado no caixa (pago) ou guardado em "A receber".</p>
+      <div class="fs-goal-stats"><div><b>${rows.length}</b><small>serviços</small></div><div><b>${baths}</b><small>banhos</small></div><div><b>${addons}</b><small>adicionais</small></div><div><b>${brl(total)}</b><small>total</small></div><div><b>${brl(open)}</b><small>a receber</small></div>
+        <div class="fs-ds-comm"><label><small>Comissão</small><span><input id="fsDsPct" inputmode="decimal" value="${pct ? String(pct).replace('.', ',') : ''}" placeholder="0" aria-label="Percentual de comissão">%</span></label><b id="fsDsCommVal">${brl(commission)}</b>
+          <small>${conf && conf.percent > 0 && dsF.pct == null ? `cadastrado: ${String(conf.percent).replace('.', ',')}% sobre ${BASES[conf.base] || conf.base}` : 'sobre o total da lista'}</small></div></div>
+      ${addonHint}
       <div class="fs-row fs-day-actions"><button type="button" class="nv-button secondary" id="fsDayPrint">${FPIcon('printer')} Imprimir</button><button type="button" class="nv-button secondary" id="fsDayCsv">${FPIcon('copy')} Baixar planilha</button></div>
-      ${d.orders_without_sale.length ? `<div class="fs-day-warn"><b>${FPIcon('alert')} ${d.orders_without_sale.length} pedido${d.orders_without_sale.length > 1 ? 's' : ''} do dia sem venda lançada</b><small>Confira se o serviço foi cobrado ou guardado em "A receber".</small>
-        <ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${custLink(o.customer_id, esc(o.customer_name || 'sem cliente'))}${o.pet ? ' · ' + esc(o.pet) : ''}${o.service ? ' · ' + esc(o.service) : ''}</li>`).join('')}</ul></div>` : ''}
-      ${rows.length ? `<div class="fs-day-table" role="table"><div class="fs-day-row fs-day-h" role="row"><span>Hora</span><span>Cliente</span><span>${petCol}</span><span>Serviço</span><span class="n">Valor</span><span>Situação</span><span>Vendedor</span></div>
-        ${rows.map((x, i) => `<div class="fs-day-row${x.paidOk ? '' : ' fs-day-open'}" role="row"><span>${hhmm(x.at)}</span><span>${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}</span><span>${esc(x.pet || '')}</span><span>${esc(x.service || '')}${x.addon ? ' <span class="fs-tag">adicional</span>' : ''}</span><span class="n">${brl(x.total_cents)}</span><span>${esc(x.status)}${tech && x.paidOk ? ` <button type="button" class="fs-link" data-ds-warranty="${i}">${FPIcon('receipt')} Garantia</button>` : ''}</span><span>${esc(x.seller_name || '')}</span></div>`).join('')}</div>`
-        : '<p class="nv-help">Nenhum serviço lançado neste dia.</p>'}</section>`;
-    box.querySelectorAll('[data-ds-warranty]').forEach(b => b.onclick = () => window.FPServiceOrders.warrantyFromDay(rows[b.dataset.dsWarranty], d.day));
-    const go = day => { dsDay = day; loadDayServices(box, alive); };
-    $('fsDay').onchange = e => { if (e.target.value) go(e.target.value); };
-    $('fsDayPrev').onclick = () => go(shiftDay(d.day, -1));
-    $('fsDayNext').onclick = () => go(shiftDay(d.day, 1));
-    const cells = x => [d.day.split('-').reverse().join('/'), hhmm(x.at), x.customer_name || '', x.pet || '', x.service || '', centsText(x.total_cents), x.paidOk ? 'Pago' : 'A receber', x.paidOk ? payText(x) : '', x.seller_name || ''];
+      ${d.orders_without_sale.length ? `<div class="fs-day-warn"><b>${FPIcon('alert')} ${d.orders_without_sale.length} pedido${d.orders_without_sale.length > 1 ? 's' : ''} ${single ? 'do dia' : 'do período'} sem venda lançada</b><small>Confira se o serviço foi cobrado ou guardado em "A receber".</small>
+        <ul>${d.orders_without_sale.map(o => `<li>${when({ at: o.created_at })} · pedido ${esc(o.order_number || '')} · ${custLink(o.customer_id, esc(o.customer_name || 'sem cliente'))}${o.pet ? ' · ' + esc(o.pet) : ''}${o.service ? ' · ' + esc(o.service) : ''}</li>`).join('')}</ul></div>` : ''}
+      ${rows.length ? `<div class="fs-day-table${single ? '' : ' fs-day-range'}" role="table"><div class="fs-day-row fs-day-h" role="row"><span>${single ? 'Hora' : 'Data'}</span><span>Cliente</span><span>${petCol}</span><span>Serviço</span><span class="n">Valor</span><span>Situação</span><span>Vendedor</span></div>
+        ${rows.map((x, i) => `<div class="fs-day-row${x.paidOk ? '' : ' fs-day-open'}" role="row"><span>${when(x)}</span><span>${custLink(x.customer_id, esc(x.customer_name || 'Sem cliente'))}</span><span>${esc(x.pet || '')}</span><span>${esc(x.service || '')}${x.addon ? ' <span class="fs-tag">adicional</span>' : ''}</span><span class="n">${brl(x.total_cents)}</span><span>${esc(x.status)}${tech && x.paidOk ? ` <button type="button" class="fs-link" data-ds-warranty="${i}">${FPIcon('receipt')} Garantia</button>` : ''}</span><span>${esc(x.seller_name || '')}</span></div>`).join('')}</div>`
+        : `<p class="nv-help">${all.length ? 'Nenhum serviço com estes filtros.' : single ? 'Nenhum serviço lançado neste dia.' : 'Nenhum serviço lançado neste período.'}</p>`}</section>`;
+    box.querySelectorAll('[data-ds-warranty]').forEach(b => b.onclick = () => window.FPServiceOrders.warrantyFromDay(rows[b.dataset.dsWarranty], localDay(rows[b.dataset.dsWarranty].at)));
+    const reload = () => loadDayServices(box, alive);
+    const go = (from, to) => { if (to > d.today) to = d.today; if (from > to) from = to; dsFrom = from; dsTo = to; reload(); };
+    $('fsDayFrom').onchange = e => { const v = e.target.value; if (v) go(v, v > dsTo ? v : dsTo); };
+    $('fsDayTo').onchange = e => { const v = e.target.value; if (v) go(v < dsFrom ? v : dsFrom, v); };
+    $('fsDayPrev').onclick = () => go(shiftDay(dsFrom, -span), shiftDay(dsTo, -span));
+    $('fsDayNext').onclick = () => go(shiftDay(dsFrom, span), shiftDay(dsTo, span));
+    box.querySelectorAll('[data-ds-quick]').forEach(b => b.onclick = () => {
+      const t = d.today, m = t.slice(0, 8) + '01', pm = shiftDay(m, -1);
+      const r = { today: [t, t], yesterday: [shiftDay(t, -1), shiftDay(t, -1)], week: [shiftDay(t, -6), t], month: [m, t], lastmonth: [pm.slice(0, 8) + '01', pm] }[b.dataset.dsQuick];
+      go(r[0], r[1]);
+    });
+    const setF = (k, v) => { dsF[k] = v; if (k === 'seller') dsF.pct = null; reload(); };
+    $('fsDsKind').onchange = e => setF('kind', e.target.value);
+    $('fsDsSvc').onchange = e => setF('svc', e.target.value);
+    $('fsDsSeller').onchange = e => setF('seller', e.target.value);
+    $('fsDsStatus').onchange = e => setF('status', e.target.value);
+    if ($('fsDsClear')) $('fsDsClear').onclick = () => { Object.assign(dsF, { kind: 'all', svc: '', seller: '', status: 'all', pct: null }); reload(); };
+    // % da comissão: recalcula enquanto digita, sem redesenhar a lista (não perde o foco).
+    $('fsDsPct').oninput = e => {
+      const t = e.target.value.trim(), v = t ? Number(t.replace(',', '.')) : null;
+      if (v != null && !(v >= 0 && v <= 100)) { $('fsDsCommVal').textContent = '—'; return; }
+      dsF.pct = v; if (!dsF.seller) savePct(v);
+      $('fsDsCommVal').textContent = brl(v ? Math.round(total * v / 100) : 0);
+    };
+    const curPct = () => dsF.pct != null ? dsF.pct : pct;
+    const commLine = () => { const p = curPct(); return p ? `Comissão ${String(p).replace('.', ',')}% sobre ${brl(total)} = ${brl(Math.round(total * p / 100))}` : ''; };
+    const cells = x => [brDay(localDay(x.at)), hhmm(x.at), x.customer_name || '', x.pet || '', x.service || '', centsText(x.total_cents), x.paidOk ? 'Pago' : 'A receber', x.paidOk ? payText(x) : '', x.seller_name || '', x.addon ? 'Sim' : 'Não'];
     $('fsDayCsv').onclick = () => {
       const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-      const csv = '﻿' + [['Data', 'Hora', 'Cliente', petCol, 'Serviço', 'Valor', 'Situação', 'Pagamento', 'Vendedor'], ...rows.map(cells)].map(r => r.map(q).join(';')).join('\r\n');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `servicos-${d.day}.csv`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      const p = curPct();
+      const foot = [[], ['Total', '', '', '', '', centsText(total)], ...(p ? [['Comissão ' + String(p).replace('.', ',') + '%', '', '', '', '', centsText(Math.round(total * p / 100))]] : []), ...(filtered ? [['Filtros: ' + filterText]] : [])];
+      const csv = '﻿' + [['Data', 'Hora', 'Cliente', petCol, 'Serviço', 'Valor', 'Situação', 'Pagamento', 'Vendedor', 'Adicional'], ...rows.map(cells), ...foot].map(r => r.map(q).join(';')).join('\r\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = single ? `servicos-${dsFrom}.csv` : `servicos-${dsFrom}-a-${dsTo}.csv`; document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     };
     $('fsDayPrint').onclick = () => {
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Serviços do dia ${d.day}</title><style>body{font:12px Arial,sans-serif;margin:16px}h1{font-size:16px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}.ok{width:18px}</style></head><body>
-        <h1>Serviços do dia · ${esc(config?.name || '')}</h1><div>${esc(dayLabel(d.day))} · ${rows.length} serviços · ${baths} banhos · total ${brl(total)} · a receber ${brl(open)}</div>
-        <table><thead><tr><th class="ok">✓</th><th>Hora</th><th>Cliente</th><th>${petCol}</th><th>Serviço</th><th class="n">Valor</th><th>Situação</th><th>Vendedor</th></tr></thead><tbody>
-        ${rows.map(x => `<tr><td class="ok">☐</td><td>${hhmm(x.at)}</td><td>${esc(x.customer_name || '')}</td><td>${esc(x.pet || '')}</td><td>${esc(x.service || '')}</td><td class="n">${brl(x.total_cents)}</td><td>${esc(x.status)}</td><td>${esc(x.seller_name || '')}</td></tr>`).join('')}</tbody></table>
-        ${d.orders_without_sale.length ? `<h1 style="margin-top:14px">Pedidos sem venda lançada</h1><ul>${d.orders_without_sale.map(o => `<li>${hhmm(o.created_at)} · pedido ${esc(o.order_number || '')} · ${esc(o.customer_name || '')}${o.pet ? ' · ' + esc(o.pet) : ''}</li>`).join('')}</ul>` : ''}</body></html>`;
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Serviços ${single ? dsFrom : dsFrom + ' a ' + dsTo}</title><style>body{font:12px Arial,sans-serif;margin:16px}h1{font-size:16px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}.ok{width:18px}.c{margin-top:6px;font-weight:bold}</style></head><body>
+        <h1>${single ? 'Serviços do dia' : 'Serviços do período'} · ${esc(config?.name || '')}</h1><div>${esc(periodText)}${filtered ? ' · ' + esc(filterText) : ''}</div><div>${rows.length} serviços · ${baths} banhos · ${addons} adicionais · total ${brl(total)} · a receber ${brl(open)}</div>${commLine() ? `<div class="c">${esc(commLine())}</div>` : ''}
+        <table><thead><tr><th class="ok">✓</th><th>${single ? 'Hora' : 'Data'}</th><th>Cliente</th><th>${petCol}</th><th>Serviço</th><th class="n">Valor</th><th>Situação</th><th>Vendedor</th></tr></thead><tbody>
+        ${rows.map(x => `<tr><td class="ok">☐</td><td>${when(x)}</td><td>${esc(x.customer_name || '')}</td><td>${esc(x.pet || '')}</td><td>${esc(x.service || '')}${x.addon ? ' (adicional)' : ''}</td><td class="n">${brl(x.total_cents)}</td><td>${esc(x.status)}</td><td>${esc(x.seller_name || '')}</td></tr>`).join('')}</tbody></table>
+        ${d.orders_without_sale.length ? `<h1 style="margin-top:14px">Pedidos sem venda lançada</h1><ul>${d.orders_without_sale.map(o => `<li>${when({ at: o.created_at })} · pedido ${esc(o.order_number || '')} · ${esc(o.customer_name || '')}${o.pet ? ' · ' + esc(o.pet) : ''}</li>`).join('')}</ul>` : ''}</body></html>`;
       const frame = document.createElement('iframe'); frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.append(frame);
       frame.contentDocument.open(); frame.contentDocument.write(html); frame.contentDocument.close();
       setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } finally { setTimeout(() => frame.remove(), 60000); } }, 250);
@@ -2612,7 +2685,7 @@
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
   .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
   .fs-add-banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:2px solid var(--nv-orange,#f97316);border-radius:12px;padding:10px 12px;margin-bottom:10px}.fs-add-banner>div{flex:1;min-width:200px}.fs-adding #fsSaleBtn,.fs-adding .fs-methods,.fs-adding #fsSplit,.fs-adding #fsChangeBox,.fs-adding .fs-autoprint,.fs-adding #fsLiveBox,.fs-adding #fsOrderBox,.fs-adding #fsCbBox{display:none!important}.fs-later{margin-top:8px}.fs-later small{font-weight:500;opacity:.8}.fs-live{border:1px dashed var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fs-live select{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-live-done{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;margin-top:10px}.fs-live-done>div{flex:1;min-width:200px}.fs-live-done input{width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-size:13px}.fs-pending{border:2px solid var(--nv-orange,#f97316)}.fs-pend .fs-sale-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.fs-tag-ok{background:#dcfce7;color:#166534}
-  .fs-day-nav{display:flex;gap:6px;align-items:center}.fs-day-nav input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-day-actions{margin:8px 0}.fs-day-warn{border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:10px 0}.fs-day-warn small{display:block;color:var(--nv-muted)}.fs-day-warn ul{margin:6px 0 0;padding-left:18px}.fs-day-table{border:1px solid var(--nv-border);border-radius:12px;overflow:hidden;margin-top:8px}.fs-day-row{display:grid;grid-template-columns:56px 1.3fr .8fr 1.6fr 90px 1.3fr .9fr;gap:8px;padding:8px 10px;border-bottom:1px solid var(--nv-border);font-size:14px;align-items:center}.fs-day-row:last-child{border-bottom:0}.fs-day-row .n{text-align:right;font-weight:700}.fs-day-h{background:var(--nv-blue-soft,#f1f5f9);font-weight:700;font-size:12px;color:var(--nv-muted)}.fs-day-open{background:#fff7ed}@media(max-width:760px){.fs-day-row{grid-template-columns:48px 1fr 80px}.fs-day-row>span:nth-child(3),.fs-day-row>span:nth-child(6),.fs-day-row>span:nth-child(7){display:none}.fs-day-row>span:nth-child(2){grid-column:2}.fs-day-row>span:nth-child(4){grid-column:2;grid-row:2;font-size:13px;color:var(--nv-muted)}}
+  .fs-day-nav{display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap}.fs-day-nav input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-ds-date{display:flex;flex-direction:column;gap:2px}.fs-ds-date small{font-size:11px;color:var(--nv-muted);font-weight:600}.fs-ds-quick{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px}.fs-ds-quick .fs-chip{min-height:32px;padding:4px 12px;font-size:13px}.fs-ds-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:8px;align-items:end;margin:0 0 8px}.fs-ds-filters .nv-field{margin:0}.fs-ds-filters select{width:100%}.fs-ds-comm{display:flex;flex-direction:column;gap:2px;border:1px solid var(--nv-green,#16a34a)}.fs-ds-comm label{display:flex;flex-direction:column}.fs-ds-comm label span{display:flex;align-items:center;gap:4px;font-weight:700}.fs-ds-comm input{width:64px;padding:3px 6px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700}.fs-ds-hint{background:#fffbeb;border:1px solid #f59e0b;border-radius:10px;padding:8px 10px}@media(max-width:760px){.fs-ds-filters{grid-template-columns:1fr 1fr}}.fs-day-range .fs-day-row{grid-template-columns:96px 1.3fr .8fr 1.6fr 90px 1.3fr .9fr}.fs-day-actions{margin:8px 0}.fs-day-warn{border:1px solid #f59e0b;background:#fffbeb;border-radius:12px;padding:10px 12px;margin:10px 0}.fs-day-warn small{display:block;color:var(--nv-muted)}.fs-day-warn ul{margin:6px 0 0;padding-left:18px}.fs-day-table{border:1px solid var(--nv-border);border-radius:12px;overflow:hidden;margin-top:8px}.fs-day-row{display:grid;grid-template-columns:56px 1.3fr .8fr 1.6fr 90px 1.3fr .9fr;gap:8px;padding:8px 10px;border-bottom:1px solid var(--nv-border);font-size:14px;align-items:center}.fs-day-row:last-child{border-bottom:0}.fs-day-row .n{text-align:right;font-weight:700}.fs-day-h{background:var(--nv-blue-soft,#f1f5f9);font-weight:700;font-size:12px;color:var(--nv-muted)}.fs-day-open{background:#fff7ed}@media(max-width:760px){.fs-day-row{grid-template-columns:48px 1fr 80px}.fs-day-row>span:nth-child(3),.fs-day-row>span:nth-child(6),.fs-day-row>span:nth-child(7){display:none}.fs-day-row>span:nth-child(2){grid-column:2}.fs-day-row>span:nth-child(4){grid-column:2;grid-row:2;font-size:13px;color:var(--nv-muted)}.fs-day-range .fs-day-row{grid-template-columns:62px 1fr 80px}}
   .fs-pend-items{display:inline-flex;flex-wrap:wrap;gap:4px;margin:3px 0}.fs-pend-item{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--nv-blue-soft,#f1f5f9);border-radius:999px;padding:2px 4px 2px 9px}.fs-pend-item button{border:0;background:transparent;padding:2px;cursor:pointer;color:var(--nv-muted);display:inline-flex}.fs-pend-item button:hover{color:#b42318}.fs-pend-item .fp-ic{width:13px;height:13px}
   .fs-weekdays{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}.fs-cb-off{margin:6px 0 0}
   .fs-pcart-total{display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--nv-blue-soft)}.fs-pcart-total b{font-size:20px}

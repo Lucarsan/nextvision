@@ -199,6 +199,12 @@ test('painel: nova OS, orçamento aprovado, concluir, avisar, entregar e garanti
     await page.waitForSelector('.so-card:has-text("avisado")');
     await page.screenshot(shot('os-concluidos'));
 
+    // No caixa, o "A receber" da OS mostra o aparelho.
+    await page.locator('.nv-sidebar [data-view="cash"]').click();
+    await page.waitForSelector('#fsPending [data-pend-pay]');
+    assert.match(await page.locator('#fsPending').innerText(), /OS 1 · Não carrega · Samsung A32/);
+    await page.locator('.nv-sidebar [data-view="dayservices"]').click();
+    await page.waitForSelector('.so-tabs');
     // Recebe no caixa pela venda a receber; a OS fica paga. Entregue → garantia.
     const os = (await f.api('/store/service-orders?status=done')).rows[0];
     await f.api(`/store/sales/pending/${os.pending_sale_id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);

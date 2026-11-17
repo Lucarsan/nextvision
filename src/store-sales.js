@@ -11,6 +11,7 @@ import { registerStockValue } from './stock-value.js';
 import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
 import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
+import { registerServiceOrders } from './service-orders.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -39,6 +40,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   registerStockValue(app, { q, route, bad, valid, audit, guard, tid });
   registerStorePerformance(app, { q, route, bad, valid, audit, guard, owner, tid, uuid });
   const { adminOnly } = registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard, tid, uuid });
+  registerServiceOrders(app, { q, db, route, bad, valid, audit, guard, owner, tid, uuid });
   // Operador novato (access_level 'basic') não cancela venda, não lança saídas/sangria/suprimento,
   // não fecha o caixa e não dá desconto nem muda preço.
   const fullOnly = (req, res, next) => req.user.access_level === 'basic' ? bad(res, 403, 'Seu acesso (operador novato) não permite esta ação. Peça a um operador livre ou ao dono.') : next();
@@ -143,7 +145,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // ---------- Configuração ----------
   app.get('/api/store/sales/config', ...staff, route(async (req, res) => {
     const r = await q(`SELECT sales_enabled,google_review_url,loyalty_enabled,loyalty_target,loyalty_reward,loyalty_rules,
-      loyalty_min_sale_cents,status_message,offer_message,name,slug,${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)]);
+      loyalty_min_sale_cents,status_message,offer_message,name,slug,niche,${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)]);
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
@@ -1015,13 +1017,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!dayField.safeParse(day).success) return bad(res, 400, 'Data inválida');
     const tz = TZ.replace(/'/g, '');
     const [paid, pending, orders] = await Promise.all([
-      q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,u.name seller_name,
-          i.name service,i.device_model pet,i.total_cents,i.addon,o.order_number
+      q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,c.phone customer_phone,u.name seller_name,
+          i.name service,i.device_model pet,i.total_cents,i.addon,i.warranty_days,o.order_number,so.id os_id,so.number os_number
         FROM sale_items i JOIN sales x ON x.id=i.sale_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN users u ON u.id=x.seller_id LEFT JOIN orders o ON o.id=x.order_id
+          LEFT JOIN pending_sales ps ON ps.paid_sale_id=x.id LEFT JOIN service_orders so ON so.pending_sale_id=ps.id
         WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date=$2::date ORDER BY x.created_at,i.position`, [tid(req), day]),
-      q(`SELECT p.id pending_id,p.number,p.created_at,p.customer_id,c.name customer_name,u.name seller_name,o.order_number,
-          coalesce(e->>'service',p.description,'Valor avulso') service,e->>'device_model' pet,coalesce((e->>'unit_price_cents')::int,p.total_cents) total_cents
+      q(`SELECT p.id pending_id,p.number,p.created_at,p.customer_id,c.name customer_name,c.phone customer_phone,u.name seller_name,o.order_number,
+          coalesce(e->>'service',p.description,'Valor avulso') service,e->>'device_model' pet,coalesce((e->>'unit_price_cents')::int,p.total_cents) total_cents,
+          (e->>'warranty_days')::int warranty_days,so.id os_id,so.number os_number
         FROM pending_sales p JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.seller_id LEFT JOIN orders o ON o.id=p.order_id
+          LEFT JOIN service_orders so ON so.pending_sale_id=p.id
         LEFT JOIN LATERAL (SELECT e FROM jsonb_array_elements(coalesce(p.payload->'items','[]'::jsonb)) e WHERE e ? 'service') it ON true
         WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL AND (p.created_at AT TIME ZONE '${tz}')::date=$2::date
           AND (it.e IS NOT NULL OR NOT (p.payload ? 'items')) ORDER BY p.created_at`, [tid(req), day]),

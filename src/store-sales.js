@@ -12,7 +12,7 @@ import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
 import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
 import { registerServiceOrders } from './service-orders.js';
-import { matchParts } from './part-match.js';
+import { matchParts, partKindFor, fold } from './part-match.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -642,6 +642,48 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const rows = (await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind='part' AND device_model IS NOT NULL`, [tid(req)])).rows;
     res.json(matchParts(rows, model, service));
   }));
+  // Reposição → Serviços: peças que saíram em serviços (com os serviços que as usaram) e serviços feitos sem a
+  // peça escolhida, com a peça sugerida pelo aparelho, para ligar com um toque (ou dizer que não usou peça).
+  const SVC_SINCE = "now() - interval '120 days'";
+  app.get('/api/store/stock/restock/services', ...guard, route(async (req, res) => {
+    const parts = (await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind='part' ORDER BY coalesce(location,'~'),fp_fold(coalesce(device_model,'')),name`, [tid(req)])).rows;
+    const uses = (await q(`SELECT i.id,coalesce(i.product_id,i.restock_part_id) part_id,i.name,i.device_model,s.sale_number,s.created_at,i.restock_part_id IS NOT NULL linked_later
+      FROM sale_items i JOIN sales s ON s.id=i.sale_id
+      WHERE s.tenant_id=$1 AND s.canceled_at IS NULL AND i.service AND coalesce(i.product_id,i.restock_part_id) IS NOT NULL AND s.created_at > ${SVC_SINCE}
+      ORDER BY s.created_at DESC`, [tid(req)])).rows;
+    const open = (await q(`SELECT i.id,i.name,i.device_model,s.sale_number,s.created_at FROM sale_items i JOIN sales s ON s.id=i.sale_id
+      WHERE s.tenant_id=$1 AND s.canceled_at IS NULL AND i.service AND i.product_id IS NULL AND i.restock_part_id IS NULL AND NOT i.part_none AND s.created_at > ${SVC_SINCE}
+      ORDER BY s.created_at DESC LIMIT 300`, [tid(req)])).rows;
+    // Só tipos de peça que a loja tem cadastrados (com telas cadastradas, "Troca de conector" não aparece).
+    const kinds = new Set(parts.map(p => fold(p.name).trim().split(/\s+/)[0]));
+    const byPart = new Map();
+    for (const u of uses) { if (!byPart.has(u.part_id)) byPart.set(u.part_id, []); byPart.get(u.part_id).push(u); }
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      parts: parts.filter(p => p.restock_pending > 0).map(p => ({ ...p, uses: (byPart.get(p.id) || []).slice(0, p.restock_pending) })),
+      unidentified: open.filter(x => kinds.has(partKindFor(x.name))).map(x => ({ ...x, suggestions: x.device_model ? matchParts(parts, x.device_model, x.name).slice(0, 6) : [] }))
+    });
+  }));
+  // Liga um serviço já feito à peça que ele usou (entra na reposição; o estoque não muda) ou marca "não usou peça".
+  app.post('/api/store/sale-items/:id/part', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Serviço inválido');
+    const v = valid(z.object({ part_id: uuid.optional(), none: z.literal(true).optional() }).strict().refine(x => !!x.part_id !== !!x.none, 'Informe a peça ou "não usou peça"'), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const it = (await c.query(`SELECT i.id FROM sale_items i JOIN sales s ON s.id=i.sale_id WHERE i.id=$1 AND s.tenant_id=$2 AND s.canceled_at IS NULL AND i.service
+        AND i.product_id IS NULL AND i.restock_part_id IS NULL AND NOT i.part_none FOR UPDATE OF i`, [req.params.id, tid(req)])).rows[0];
+      if (!it) { await c.query('ROLLBACK'); return bad(res, 409, 'Este serviço já foi ligado a uma peça (ou foi cancelado). Atualize a lista.'); }
+      if (v.none) await c.query('UPDATE sale_items SET part_none=true WHERE id=$1', [it.id]);
+      else {
+        const p = await c.query(`UPDATE products SET restock_pending=restock_pending+1,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND active AND kind='part' RETURNING id`, [v.part_id, tid(req)]);
+        if (!p.rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça não encontrada'); }
+        await c.query('UPDATE sale_items SET restock_part_id=$1 WHERE id=$2', [v.part_id, it.id]);
+      }
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, v.none ? 'service_no_part' : 'service_part', 'sale_item', it.id]);
+      await c.query('COMMIT'); res.json({ ok: true });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
   // O que saiu do estoque (vendas e serviços, já descontando cancelamentos) num período, por item.
   // kind: part (peças), product (produtos) ou all. Sem período: últimos 30 dias.
   app.get('/api/store/stock/outflow', ...guard, route(async (req, res) => {
@@ -688,7 +730,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
   // Reposição: o que foi vendido e ainda não teve entrada de estoque, por produto e por modelo.
   app.get('/api/store/stock/restock', ...guard, route(async (req, res) => {
-    res.set('Cache-Control', 'no-store'); res.json(await restockRows(tid(req)));
+    const kind = ['part', 'product'].includes(req.query.kind) ? req.query.kind : '';
+    res.set('Cache-Control', 'no-store'); res.json((await restockRows(tid(req))).filter(r => !kind || r.kind === kind));
   }));
   // Histórico (log) do estoque: mais recentes primeiro. Filtros: produto, tipo, texto (nome/código), período.
   // Paginação: "before" = created_at do último item recebido.
@@ -1161,10 +1204,20 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (cats.rowCount !== catIds.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Serviço cadastrado não encontrado. Atualize a venda.'); }
         const catById = new Map(cats.rows.map(x => [x.id, x]));
         if (v.items.some(it => it.gift) && !v.items.some(it => it.service)) { await c.query('ROLLBACK'); return bad(res, 400, 'Brinde só vai junto com um serviço na mesma venda'); }
+        // Serviço sem peça escolhida, mas com aparelho: se uma só peça do estoque serve (ex.: Troca de tela + A12),
+        // ela é usada (baixa 1 e entra na reposição), como se tivesse sido escolhida.
+        let tenantParts = null;
+        const autoPart = async it => {
+          if (it.part_id || !it.device_model || !partKindFor(it.service)) return null;
+          tenantParts ??= (await c.query(`SELECT p.id,p.name,p.cost_cents,p.device_model,p.stock_qty,s.name supplier_name FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
+            WHERE p.tenant_id=$1 AND p.active AND p.kind='part' AND p.device_model IS NOT NULL`, [tid(req)])).rows;
+          const exact = matchParts(tenantParts, it.device_model, it.service).filter(x => x.match === 'exact');
+          return exact.length === 1 ? exact[0] : null;
+        };
         for (const [n, it] of v.items.entries()) {
           if (it.service) {
             // O que o operador digitou vale; o que ficou em branco vem da peça escolhida.
-            const part = it.part_id ? partById.get(it.part_id) : null;
+            const part = it.part_id ? partById.get(it.part_id) : await autoPart(it);
             merged.set('s:' + n, { id: part?.id || null, service: true, name: it.service.replace(/\s+/g, ' '), barcode: null,
               cost_cents: it.cost_cents !== undefined && it.cost_cents !== null ? it.cost_cents : part?.cost_cents ?? null,
               supplier: cleanName(it.supplier) || part?.supplier_name || null, device_model: cleanName(it.device_model) || part?.device_model || null,
@@ -1320,6 +1373,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto'); }
       await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [req.user.id, v.reason, req.params.id]);
       // Devolve ao estoque o que a venda baixou.
+      // Peça ligada depois ao serviço (só reposição, sem estoque): sai da reposição.
+      await c.query(`UPDATE products p SET restock_pending=GREATEST(0,p.restock_pending-i.qty),updated_at=now()
+        FROM (SELECT restock_part_id,count(*)::int qty FROM sale_items WHERE sale_id=$1 AND restock_part_id IS NOT NULL GROUP BY restock_part_id) i WHERE p.id=i.restock_part_id`, [req.params.id]);
       await c.query(`UPDATE products p SET stock_qty=CASE WHEN p.stock_qty IS NULL THEN NULL ELSE LEAST(999999,p.stock_qty+i.qty) END,restock_pending=GREATEST(0,p.restock_pending-i.qty),updated_at=now()
         FROM (SELECT product_id,sum(quantity)::int qty FROM sale_items WHERE sale_id=$1 AND product_id IS NOT NULL AND variant_id IS NULL GROUP BY product_id) i
         WHERE p.id=i.product_id AND p.tenant_id=$2`, [req.params.id, tid(req)]);

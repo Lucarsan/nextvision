@@ -1866,42 +1866,61 @@
     document.querySelectorAll('[data-fs-vdel]').forEach(b => b.onclick = async () => { if (!confirm('Tirar este modelo da lista de sugestões?')) return; try { await api(`/store/products/${p.id}/variants/${b.dataset.fsVdel}`, 'DELETE'); again(); } catch (err) { feedback(err.message, true); } });
   }
   // Reposição: o que foi vendido e ainda não teve entrada de estoque. Imprime para levar às compras.
-  // O que saiu do estoque num período (vendas e serviços, já sem os cancelados), por item, mais recente primeiro.
-  async function outflowView(box) {
-    const today = new Date().toLocaleDateString('sv-SE'), ago = n => new Date(Date.now() - n * 864e5).toLocaleDateString('sv-SE');
-    const range = { today: [today, today], '7': [ago(6), today], '30': [ago(29), today], month: [today.slice(0, 8) + '01', today] }[outPeriod];
-    box.innerHTML = `<div class="fs-row"><label class="nv-field">Período<select id="fsOutPeriod">${[['today', 'Hoje'], ['7', 'Últimos 7 dias'], ['30', 'Últimos 30 dias'], ['month', 'Este mês']].map(([v, t]) => `<option value="${v}"${v === outPeriod ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
-      <label class="nv-field">Mostrar<select id="fsOutKind">${[['part', 'Peças (telas…)'], ['product', 'Produtos'], ['', 'Tudo']].map(([v, t]) => `<option value="${v}"${v === outKind ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
-      <span class="fs-grow"></span><button type="button" class="nv-button secondary" id="fsOutPrint" disabled>${FPIcon('printer')}Imprimir</button></div><div id="fsOutList" class="nv-list"><p class="nv-help">Carregando…</p></div>`;
-    $('fsOutPeriod').onchange = e => { outPeriod = e.target.value; outflowView(box); };
-    $('fsOutKind').onchange = e => { outKind = e.target.value; outflowView(box); };
-    let d; try { d = await api(`/store/stock/outflow?from=${range[0]}&to=${range[1]}&kind=${outKind}`); } catch (err) { $('fsOutList').textContent = err.message; return; }
+  // Serviços: peças para repor (com os serviços que as usaram) e serviços feitos sem a peça escolhida,
+  // com a peça sugerida pelo aparelho para confirmar (ou "não usou peça").
+  async function restockServices(box, again) {
+    let d; try { d = await api('/store/stock/restock/services'); } catch (err) { box.textContent = err.message; return; }
     if (!box.isConnected) return;
-    const total = d.rows.reduce((a, r) => a + r.qty, 0), label = r => esc(r.name) + (r.variant ? ' · ' + esc(r.variant) : r.device_model ? ' · ' + esc(r.device_model) : '');
-    $('fsOutList').innerHTML = (d.rows.length ? `<p class="nv-help">${total} unidade(s) saíram em ${d.rows.length} item(ns).</p>` : '') + (d.rows.map(r => `<div class="fs-sale"><div><b>${label(r)}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br>
-        <small>Última saída ${dmy(r.last_at)} ${hhmm(r.last_at)}${r.sales?.length ? ' · venda nº ' + r.sales.join(', ') : ''}${r.location ? ' · ' + esc(r.location) : ''}</small><br>
-        <small>Estoque agora: <b class="${r.stock_qty != null && r.stock_qty <= 0 ? 'fs-neg' : ''}">${r.stock_qty ?? '—'}</b>${r.pending ? ` · <span class="fs-neg">falta repor ${r.pending}</span>` : ' · já reposto'}</small></div>
-      <div class="fs-sale-end"><b>saiu ${r.qty}</b></div></div>`).join('') || '<p class="nv-help">Nada saiu neste período.</p>');
-    const pr = $('fsOutPrint'); pr.disabled = !d.rows.length;
-    pr.onclick = () => {
+    const total = d.parts.reduce((a, p) => a + p.restock_pending, 0), cost = d.parts.reduce((a, p) => a + (p.cost_cents || 0) * p.restock_pending, 0);
+    const use = u => `${dmy(u.created_at)} · venda nº ${u.sale_number}${u.device_model ? ' · ' + esc(u.device_model) : ''}`;
+    const exactOf = x => x.suggestions.filter(p => p.match === 'exact');
+    const sug = x => x.suggestions.map(p => `<button type="button" class="fs-chip${p.match === 'exact' && exactOf(x).length === 1 ? ' fs-chip-on' : ''}" data-link="${x.id}:${p.id}"><b>${esc(partLabel(p))}</b><small>${p.location ? esc(p.location) + ' · ' : ''}estoque ${p.stock_qty ?? '—'}${p.match === 'close' ? ' · parecido' : ''}</small></button>`).join('');
+    const sure = d.unidentified.filter(x => exactOf(x).length === 1);
+    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Peças (telas…) que saíram nos serviços e ainda não foram repostas. Somem quando a compra chegar (botão <b>Chegou</b>).</p><button type="button" class="nv-button" id="fsRsPrint"${d.parts.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
+      ${d.parts.length ? `<p class="nv-help">${total} peça(s) para repor · custo estimado ${brl(cost)}</p>` : ''}
+      <div class="nv-list">${d.parts.map(p => `<div class="fs-sale"><div><b>${esc(partLabel(p))}</b><br><small>${p.location ? esc(p.location) + ' · ' : ''}estoque agora <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.cost_cents != null ? ' · custo ' + brl(p.cost_cents) : ''}${p.supplier_name ? ' · ' + esc(p.supplier_name) : ''}</small>
+          ${p.uses.length ? `<br><small class="nv-help">Saiu em: ${p.uses.map(use).join(' | ')}</small>` : ''}</div>
+        <div class="fs-sale-end"><b class="fs-neg">saiu ${p.restock_pending} · repor</b><button type="button" class="nv-button secondary fs-small" data-rs-in="${p.id}">Chegou</button></div></div>`).join('') || '<p class="nv-help">Nenhuma peça para repor.</p>'}</div>
+      ${d.unidentified.length ? `<h3 class="fs-rs-h">Serviços sem peça identificada (${d.unidentified.length})</h3>
+        <div class="fs-row"><p class="nv-help fs-grow">Serviços de tela, bateria… feitos sem escolher a peça do estoque. Toque na peça usada para ela entrar na reposição (o estoque não muda, porque já foi contado).</p>${sure.length ? `<button type="button" class="nv-button secondary" id="fsRsAll">Confirmar as ${sure.length} marcadas</button>` : ''}</div>
+        <div class="nv-list">${d.unidentified.map(x => `<div class="fs-sale fs-rs-open"><div class="fs-grow"><b>${esc(x.name)}</b> <small>${dmy(x.created_at)} · venda nº ${x.sale_number}</small><br><small>Aparelho: ${x.device_model ? '<b>' + esc(x.device_model) + '</b>' : '<span class="fs-tag-warn">não informado</span>'}</small>
+            <div class="fs-hit-list">${sug(x)}<button type="button" class="fs-chip" data-pick="${x.id}"><b>Outra peça…</b></button><button type="button" class="fs-chip" data-none="${x.id}"><b>Não usou peça</b></button></div><div class="fs-sugg" data-pickbox="${x.id}"></div></div></div>`).join('')}</div>` : ''}`;
+    const link = async (id, body) => { try { await api(`/store/sale-items/${id}/part`, 'POST', body); } catch (err) { feedback(err.message, true); throw err; } };
+    box.querySelectorAll('[data-link]').forEach(b => b.onclick = async () => { const [id, pid] = b.dataset.link.split(':'); try { await link(id, { part_id: pid }); feedback('Peça ligada ao serviço e posta na reposição.'); again(); } catch { /* aviso já mostrado */ } });
+    box.querySelectorAll('[data-none]').forEach(b => b.onclick = async () => { try { await link(b.dataset.none, { none: true }); again(); } catch { /* aviso já mostrado */ } });
+    box.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+      const id = b.dataset.pick, pb = box.querySelector(`[data-pickbox="${id}"]`);
+      pb.innerHTML = '<input type="search" placeholder="Buscar peça: tela a32, bateria…" aria-label="Buscar a peça usada"><div class="fs-results fs-drop"></div>';
+      const inp = pb.querySelector('input'), list = pb.querySelector('.fs-results'); let t;
+      inp.oninput = () => { clearTimeout(t); t = setTimeout(async () => { let rows = []; try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(inp.value.trim())); } catch { return; }
+        list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(partLabel(p))}</b> <small>${p.location ? esc(p.location) + ' · ' : ''}estoque ${p.stock_qty ?? '—'}</small></button>`).join('') || '<p class="nv-help">Nenhuma peça encontrada.</p>';
+        list.querySelectorAll('[data-n]').forEach(bb => bb.onclick = async () => { try { await link(id, { part_id: rows[bb.dataset.n].id }); again(); } catch { /* aviso já mostrado */ } }); }, 200); };
+      inp.focus();
+    });
+    if ($('fsRsAll')) $('fsRsAll').onclick = async () => {
+      let ok = 0; for (const x of sure) { try { await link(x.id, { part_id: exactOf(x)[0].id }); ok++; } catch { break; } }
+      feedback(`${ok} serviço(s) ligados às peças e postos na reposição.`); again();
+    };
+    box.querySelectorAll('[data-rs-in]').forEach(b => b.onclick = () => { const p = d.parts.find(x => x.id === b.dataset.rsIn); stockDialog({ ...p, name: partLabel(p) }, again); });
+    $('fsRsPrint').onclick = () => {
       const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
-      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>O que saiu do estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}</style></head><body>
-        <h1>O que saiu do estoque · ${esc(config?.name || '')}</h1><div>${d.from.split('-').reverse().join('/')} a ${d.to.split('-').reverse().join('/')} · ${total} unidade(s)</div>
-        <table><thead><tr><th>Item</th><th>Lugar</th><th class="n">Saiu</th><th>Última saída</th><th class="n">Estoque agora</th><th class="n">Falta repor</th></tr></thead><tbody>
-        ${d.rows.map(r => `<tr><td>${label(r)}</td><td>${esc(r.location || '')}</td><td class="n"><b>${r.qty}</b></td><td>${dmy(r.last_at)} ${hhmm(r.last_at)}</td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.pending || ''}</td></tr>`).join('')}
-        </tbody></table><script>setTimeout(()=>print(),200)<\/script></body></html>`);
+      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de peças</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:28px}.box{display:inline-block;width:12px;height:12px;border:1.5px solid #111;border-radius:2px}</style></head><body>
+        <h1>Reposição de peças · ${esc(config?.name || '')}</h1><div>${new Date().toLocaleString('pt-BR')}</div>
+        <table><thead><tr><th class="ck">OK</th><th>Peça</th><th>Aparelho</th><th>Lugar</th><th>Fornecedor</th><th class="n">Repor</th><th class="n">Estoque agora</th><th class="n">Custo estimado</th></tr></thead><tbody>
+        ${d.parts.map(p => `<tr><td class="ck"><span class="box"></span></td><td>${esc(p.name)}</td><td>${esc(p.device_model || '')}</td><td>${esc(p.location || '')}</td><td>${esc(p.supplier_name || '')}</td><td class="n"><b>${p.restock_pending}</b></td><td class="n">${p.stock_qty ?? '—'}</td><td class="n">${p.cost_cents != null ? brl(p.cost_cents * p.restock_pending) : '—'}</td></tr>`).join('')}
+        </tbody></table><p><b>Total estimado: ${brl(cost)}</b> (pelo custo cadastrado)</p><script>setTimeout(()=>print(),200)<\/script></body></html>`);
       w.document.close();
     };
   }
-  // Reposição em duas vistas: "Para repor" (saiu e ainda não teve entrada) e "O que saiu" (tudo o que saiu num período).
-  let restockView = 'pending', outPeriod = '30', outKind = 'part';
+  // Reposição em duas listas: Produtos (vendidos no caixa) e Serviços (peças que saíram nos serviços feitos).
+  let restockView = 'product';
   async function restockTab(box) {
-    const seg = `<div class="fs-chips fs-restock-view">${[['pending', 'Para repor'], ['out', 'O que saiu']].map(([k, t]) => `<button type="button" class="fs-chip${restockView === k ? ' fs-chip-on' : ''}" data-rv="${k}" aria-pressed="${restockView === k}"><b>${t}</b></button>`).join('')}</div>`;
+    const seg = `<div class="fs-chips fs-restock-view">${[['product', FPIcon('cart') + 'Produtos'], ['part', FPIcon('wrench') + 'Serviços']].map(([k, t]) => `<button type="button" class="fs-chip${restockView === k ? ' fs-chip-on' : ''}" data-rv="${k}" aria-pressed="${restockView === k}"><b>${t}</b></button>`).join('')}</div>`;
     const bindSeg = () => box.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { restockView = b.dataset.rv; restockTab(box); });
-    if (restockView === 'out') { box.innerHTML = seg + '<div id="fsOut"></div>'; bindSeg(); return outflowView($('fsOut')); }
-    let rows = []; try { rows = await api('/store/stock/restock'); } catch (err) { box.textContent = err.message; return; }
-    box.innerHTML = `${seg}<div class="fs-row"><p class="nv-help fs-grow">Saiu (venda ou serviço) e ainda não foi reposto. Some quando você dá entrada no estoque. Para ver tudo o que saiu num período, toque em <b>O que saiu</b>.</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
-      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.location ? ' · ' + esc(r.location) : ''}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">saiu ${r.pending} · repor</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
+    if (restockView === 'part') { box.innerHTML = seg + '<div id="fsRsSvc"><p class="nv-help">Carregando…</p></div>'; bindSeg(); return restockServices($('fsRsSvc'), () => restockTab(box)); }
+    let rows = []; try { rows = await api('/store/stock/restock?kind=product'); } catch (err) { box.textContent = err.message; return; }
+    box.innerHTML = `${seg}<div class="fs-row"><p class="nv-help fs-grow">Produtos vendidos e ainda não repostos. Somem quando você dá entrada no estoque.</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
+      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b><br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">saiu ${r.pending} · repor</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
     bindSeg();
     if ($('fsRestockPrint')) $('fsRestockPrint').onclick = () => {
       const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
@@ -2770,7 +2789,7 @@ ${view === 'sum' ? `
 .fs-part-loc{margin:14px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--nv-muted,#667085)}
 .fs-part-end{align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.fs-count{display:flex;flex-direction:column;font-size:11px;color:var(--nv-muted,#667085)}.fs-count input{width:74px;padding:7px 8px;font-size:16px;font-weight:600;text-align:center;border:1px solid #D0D5DD;border-radius:8px}
 .fs-more{position:relative}.fs-more summary{display:inline-block;list-style:none;cursor:pointer;padding:6px 10px;border:1px solid #D0D5DD;border-radius:8px;font-weight:700}.fs-more summary::-webkit-details-marker{display:none}.fs-more[open]>div{position:absolute;right:0;z-index:5;display:flex;flex-direction:column;gap:4px;background:#fff;border:1px solid #E4E7EC;border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(16,24,40,.12);min-width:170px}
-.fs-tag-warn{color:#B54708;font-weight:600}.fs-restock-view,.fs-part-filter{margin:8px 0}
+.fs-tag-warn{color:#B54708;font-weight:600}.fs-rs-h{margin:18px 0 4px;font-size:15px}.fs-rs-open .fs-hit-list{margin-top:6px}.fs-restock-view,.fs-part-filter{margin:8px 0}.fs-restock-view .fs-chip b{display:inline-flex;align-items:center;gap:6px}
 .fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
   @media(max-width:900px){.fs-grid{grid-template-columns:1fr}.fs-newsale{order:-1}}
   .fs-cashbar{position:relative}.fs-cashbar-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;margin-left:auto}.fs-cashbar:has(.fs-seller:not([hidden])) .fs-cashbar-side{padding-top:26px}

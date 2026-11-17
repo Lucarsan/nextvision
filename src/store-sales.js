@@ -151,7 +151,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
     const loyalty_unit = await loyaltyUnit({ query: q }, tid(req));
-    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent), review_link_base: reviewLinkBase() });
+    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, admin_free: !!req.user.admin_free, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent), review_link_base: reviewLinkBase() });
   }));
   // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
   app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {

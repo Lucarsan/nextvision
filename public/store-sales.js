@@ -41,7 +41,13 @@
   // Senha do admin (a mesma do "Valor do estoque"): pedida uma vez e válida por 15 minutos nesta tela.
   // Usa uma janela própria por cima da que estiver aberta, para não perder o que foi digitado.
   let adminGrant = null; // { token, until }
-  function askAdmin(reason) {
+  // Dono liberado da senha do admin: libera direto, sem abrir a janela.
+  async function autoAdmin() {
+    if (!config?.admin_free) return false;
+    try { const r = await api('/store/admin/unlock', 'POST', {}); adminGrant = { token: r.admin_token, until: Date.parse(r.expires_at) - 15000 }; return true; } catch { return false; }
+  }
+  async function askAdmin(reason) {
+    if (await autoAdmin()) return true;
     return new Promise(resolve => {
       let d = $('fsAdminDialog');
       if (!d) { d = document.createElement('dialog'); d.id = 'fsAdminDialog'; d.className = 'nv-dialog fs-admin-dialog'; document.body.appendChild(d); }
@@ -63,7 +69,7 @@
   }
   // Usado também pelo painel principal (Configurações → Relatórios).
   async function ensureAdmin(reason) { if (adminGrant && adminGrant.until > Date.now()) return true; adminGrant = null; return askAdmin(reason); }
-  window.FPAdmin = { ensure: ensureAdmin, header: () => adminGrant && adminGrant.until > Date.now() ? { 'X-Admin-Token': adminGrant.token } : {}, forget: () => { adminGrant = null; } };
+  window.FPAdmin = { ensure: ensureAdmin, free: () => !!config?.admin_free, header: () => adminGrant && adminGrant.until > Date.now() ? { 'X-Admin-Token': adminGrant.token } : {}, forget: () => { adminGrant = null; } };
   async function adminApi(path, method, body, reason) {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (!adminGrant || adminGrant.until < Date.now()) { adminGrant = null; if (!(await askAdmin(reason))) throw Object.assign(Error('Ação cancelada: precisa da senha do admin.'), { canceled: true }); }
@@ -1655,6 +1661,7 @@
   // Valor do estoque: login e senha próprios (não ficam salvos; só na memória enquanto a página está aberta).
   let valueCreds = null;
   async function valueTab(box) {
+    if (config?.admin_free) valueCreds = valueCreds || {}; // dono liberado: abre direto
     const ask = msg => {
       box.innerHTML = `<form id="fsValF" class="fs-valf" autocomplete="off"><p class="nv-help">${FPIcon('lock')} Área restrita: quanto vale o que está no estoque (custo, venda e lucro).</p>
         <label class="nv-field">Login<input name="login" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
@@ -1666,7 +1673,7 @@
     };
     const show = async () => {
       let d; try { d = await api('/store/stock/value', 'POST', valueCreds); }
-      catch (err) { valueCreds = null; return ask(err.message); }
+      catch (err) { valueCreds = null; if (config?.admin_free) { box.innerHTML = `<p class="nv-help fs-neg">${esc(err.message)}</p>`; return; } return ask(err.message); }
       if (!box.isConnected) return;
       const P = d.products, pct = (a, b) => b > 0 ? (Math.round(a / b * 1000) / 10).toLocaleString('pt-BR') + '%' : '—';
       const nm = r => `${esc(r.name)}${r.variant ? ` <span class="fs-var">${esc(r.variant)}</span>` : ''}`;
@@ -2598,7 +2605,7 @@
     $('fsGoalsUnlock').onclick = async () => { if (await ensureAdmin('Metas e comissões pedem a senha do admin.') && alive()) loadGoals(box, alive); };
   }
   async function loadGoals(box, alive) {
-    if (!(adminGrant && adminGrant.until > Date.now())) return goalsLocked(box, alive, '');
+    if (!(adminGrant && adminGrant.until > Date.now()) && !(await autoAdmin())) return goalsLocked(box, alive, '');
     let d;
     try { d = await api('/store/sales/performance' + (goalMonth ? '?month=' + goalMonth : ''), 'GET', undefined, { 'X-Admin-Token': adminGrant.token }); }
     catch (err) { if (err.admin_required) { adminGrant = null; if (alive()) goalsLocked(box, alive, 'A liberação expirou. Digite a senha de novo.'); return; } throw err; }

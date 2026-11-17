@@ -24,10 +24,12 @@ const uuid=z.string().uuid();
 const auth=(req,res,next)=>{
  try{const token=/^Bearer (.+)$/i.exec(req.get('authorization')||'')?.[1];if(!token)return bad(res,401,'Não autenticado');req.user=jwt.verify(token,secret,{algorithms:['HS256']});}
  catch{return bad(res,401,'Sessão inválida');}
- q('SELECT u.active,u.role,u.tenant_id,u.access_level,t.status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.id=$1',[req.user.id]).then(({rows})=>{
+ q('SELECT u.active,u.role,u.tenant_id,u.access_level,u.admin_password_free,t.status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.id=$1',[req.user.id]).then(({rows})=>{
   const user=rows[0];if(!user?.active||user.role!==req.user.role||user.tenant_id!==req.user.tenant_id)return bad(res,403,'Conta sem autorização');
   // Nível lido a cada requisição: mudar na central vale na hora, sem novo login.
   req.user.access_level=user.role==='operator'?user.access_level:'full';
+  // Dono liberado da senha do admin (users.admin_password_free).
+  req.user.admin_free=user.role==='owner'&&user.admin_password_free===true;
   if(['owner','operator'].includes(user.role)&&!['trial','active'].includes(user.status))return bad(res,403,'Acesso da loja bloqueado. Entre em contato com a central.');
   next();
  }).catch(next);

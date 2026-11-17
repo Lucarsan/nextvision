@@ -82,7 +82,8 @@ test('caixa registra serviço com peça, fornecedor e aparelho sugeridos', {
     await page.getByRole('tab', { name: 'Peças' }).click();
     await page.waitForSelector('#fsPartList .fs-sale');
     const parts = await page.locator('#fsPartList').innerText();
-    assert.match(parts, /Tela · Galaxy A12/); assert.match(parts, /Estoque: 1/); assert.match(parts, /repor 1/);
+    assert.match(parts, /Tela · Galaxy A12/); assert.match(parts, /saíram 1 \(repor\)/);
+    assert.equal(await page.locator('#fsPartList [data-p-count]').inputValue(), '1');
     await page.screenshot({ path: process.env.SHOT_DIR ? process.env.SHOT_DIR + '/estoque-pecas.png' : undefined });
     await page.getByRole('tab', { name: 'Fornecedores' }).click();
     await page.waitForSelector('text=Modelos de aparelho');

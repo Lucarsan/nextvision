@@ -225,6 +225,7 @@
         <div class="fs-actions"><button type="button" class="nv-button secondary" id="fsEye"></button><button class="nv-button secondary" id="fsProducts">${FPIcon('package')}Estoque</button><button class="nv-button secondary" id="fsExpense">− Lançar despesa</button><button class="nv-button secondary" id="fsWithdraw">Sangria</button><button class="nv-button secondary" id="fsDeposit">Suprimento</button><button class="nv-button secondary" id="fsPrint">${FPIcon('printer')}Relatório</button><button class="nv-button" id="fsClose">Fechar caixa</button></div></div></section>
       <div class="fs-grid">
         <div class="fs-col-report">
+          <section class="nv-card fs-pending fs-pixopen" id="fsPixOpen" hidden></section>
           <section class="nv-card fs-pending" id="fsPending" hidden></section>
           <section class="nv-card"><div class="nv-heading"><h2>Vendas deste caixa</h2></div><div class="fs-methods-sum">${methods}</div>
             <div class="nv-list">${data.sales.map(saleRow).join('') || '<p class="nv-help">As vendas registradas aparecem aqui.</p>'}</div>
@@ -276,7 +277,7 @@
     $('fsProducts').onclick = () => productsDialog();
     $('fsSale').onsubmit = e => submitSale(e, box, alive, !!addTo); // incluindo: Enter não registra venda paga
     $('fsLaterBtn').onclick = () => submitSale({ preventDefault() {}, currentTarget: $('fsSale') }, box, alive, true);
-    drawLiveBox(); drawPending(box, alive);
+    drawLiveBox(); drawPending(box, alive); drawPixOpen(box, alive);
     const ap = $('fsAutoPrint'); ap.checked = autoPrint(); ap.onchange = () => { try { localStorage.setItem(RECEIPT_AUTO_KEY, ap.checked ? '1' : '0'); } catch { /* só nesta tela */ } };
     quickCart = []; lastAuto = ''; drawQuick();
     $('fsWithdraw').onclick = () => movement('withdrawal', box, alive);
@@ -598,11 +599,92 @@
       } catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
       return;
     }
+    // Pix com a InfinitePay ligada: gera o QR na hora e só registra a venda quando o Pix for confirmado.
+    if (config?.infinitepay && !split && body.payment_method === 'pix') {
+      const done = r => saleDone(r, { service, onlyService, seller, received: null, cashDue: 0, split: false }, box, alive);
+      return pixCharge(body, payable(), btn, status, done, box, alive);
+    }
     btn.disabled = true;
-    try { lastSale = await api('/store/sales', 'POST', body); setTimeout(refreshDue, 300); modeTouched = false; if (lastSale.live_order) window.FPOrders?.share?.(lastSale.live_order.id); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
-      receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
-      if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : '')); await loadCash(box, alive); }
+    try { await saleDone(await api('/store/sales', 'POST', body), { service, onlyService, seller, received, cashDue, split }, box, alive); }
     catch (err) { status.textContent = err.message; } finally { if (btn.isConnected) btn.disabled = false; }
+  }
+  // Venda registrada: limpa a tela, comprovante automático e mensagem.
+  async function saleDone(r, { service, onlyService, seller, received, cashDue, split }, box, alive) {
+    lastSale = r; setTimeout(refreshDue, 300); modeTouched = false; if (lastSale.live_order) window.FPOrders?.share?.(lastSale.live_order.id); cbWanted = false; if (service) { svc = {}; svcCart = []; servicesCache = null; } cart = []; cartDiscount = ''; quickCart = []; if (seller) lastSellerId = seller; lastSale.change_cents = received != null ? received - cashDue : null; if (split) splitRows = [{ method: 'cash', amount: '' }, { method: 'pix' }];
+    receiptExtras.set(lastSale.sale.id, { received_cents: received, change_cents: lastSale.change_cents });
+    if ($('fsAutoPrint')?.checked) printReceipt(lastSale.sale.id); feedback(`${onlyService ? 'Serviço' : 'Venda'} #${lastSale.sale.sale_number} registrad${onlyService ? 'o' : 'a'}: ${brl(lastSale.sale.total_cents)}.` + (lastSale.change_cents != null ? ` Troco: ${brl(lastSale.change_cents)}.` : ''));
+    await loadCash(box, alive);
+  }
+
+  // ---------- Pix pela InfinitePay ----------
+  // Janela com o QR do link de pagamento; pergunta ao servidor a cada 2,5 s; quando o Pix é confirmado,
+  // registra a venda e mostra "Pago". Fechar a janela não perde nada: a cobrança fica em "Pix pela InfinitePay".
+  let pixTimer = null;
+  const stopPix = () => { if (pixTimer) clearTimeout(pixTimer); pixTimer = null; };
+  async function pixCharge(body, amount, btn, status, done, box, alive) {
+    if (!Number.isFinite(amount) || amount < 100) { status.textContent = 'A cobrança Pix pela InfinitePay é a partir de R$ 1,00.'; return; }
+    btn.disabled = true; status.textContent = 'Gerando o QR do Pix…';
+    let ch;
+    try { ch = await api('/store/sales/pix-charges', 'POST', { sale: body, amount_cents: amount }); status.textContent = ''; }
+    catch (err) { status.textContent = err.message; return; } finally { if (btn.isConnected) btn.disabled = false; }
+    const phone = saleCustomer?.phone || $('fsNewPhone')?.value?.trim() || '';
+    pixWindow(ch, { qr: ch.qr, phone, done }, box, alive);
+  }
+  function pixWindow(ch, { qr, phone, done }, box, alive) {
+    stopPix();
+    const waText = `Pagamento de ${brl(ch.amount_cents)} — toque no link, copie o código Pix e pague no app do seu banco: ${ch.checkout_url}`;
+    const d = openDialog(`${header('Cobrar no Pix')}
+      <div class="fs-pix" data-pix="${ch.id}">
+        <div class="fs-pix-amt">${brl(ch.amount_cents)}</div>
+        ${qr ? `<img class="fs-pix-qr" src="${qr}" alt="QR Code do pagamento" width="260" height="260">` : ''}
+        <p class="nv-help">O cliente lê o QR com a câmera do celular, toca em <b>copiar código Pix</b> e paga no app de qualquer banco.</p>
+        <div class="fs-pix-link"><input readonly value="${esc(ch.checkout_url || '')}" aria-label="Link de pagamento"><button type="button" class="nv-button secondary fs-small" data-pix-copy>Copiar</button>
+          <a class="nv-button fp-whats fs-small" target="_blank" rel="noopener" href="${esc(waLink(phone, waText))}">WhatsApp</a></div>
+        <p class="fs-pix-state" role="status" aria-live="polite" data-pix-state><span class="fs-pix-wait"></span> Aguardando pagamento…</p>
+        <div class="fs-actions"><button type="button" class="nv-button secondary" data-pix-cancel>Cancelar cobrança</button><button type="button" class="nv-button secondary" data-close-dialog>Fechar (continua aguardando)</button></div>
+      </div>`);
+    const state = d.querySelector('[data-pix-state]');
+    d.querySelector('[data-pix-copy]').onclick = () => { const i = d.querySelector('.fs-pix-link input'); i.select(); navigator.clipboard?.writeText(i.value).catch(() => {}); };
+    d.querySelector('[data-pix-cancel]').onclick = async () => {
+      if (!confirm('Cancelar esta cobrança? Se o cliente já pagou, ela continua aparecendo para registrar.')) return;
+      try { await api(`/store/sales/pix-charges/${ch.id}/cancel`, 'POST', {}); stopPix(); d.close(); feedback('Cobrança Pix cancelada.'); drawPixOpen(box, alive); } catch (err) { state.textContent = err.message; }
+    };
+    d.addEventListener('close', () => { stopPix(); drawPixOpen(box, alive); }, { once: true });
+    const paid = async c => {
+      stopPix();
+      state.innerHTML = `<b class="fs-pos">✅ Pago — ${brl(c.paid_amount_cents || c.amount_cents)}</b> · registrando a venda…`;
+      d.querySelector('.fs-pix-qr')?.classList.add('fs-pix-done'); d.querySelector('[data-pix-cancel]')?.remove(); d.querySelector('.fs-pix-link')?.remove(); const cl = d.querySelector('.fs-pix [data-close-dialog]'); if (cl) cl.textContent = 'Fechar';
+      try {
+        const r = await api(`/store/sales/pix-charges/${ch.id}/finish`, 'POST', {});
+        state.innerHTML = `<b class="fs-pos">✅ Pago — ${brl(r.sale.total_cents)}</b> · venda #${r.sale.sale_number} registrada.`;
+        await done(r);
+      } catch (err) { state.innerHTML = `<b class="fs-pos">✅ Pix recebido.</b> <span class="fs-neg">${esc(err.message)}</span>`; drawPixOpen(box, alive); }
+    };
+    const tick = async () => {
+      if (!d.open || d.querySelector('[data-pix]')?.dataset.pix !== ch.id) return stopPix();
+      try { const c = await api(`/store/sales/pix-charges/${ch.id}`); if (c.status === 'paid') return paid(c); if (c.status === 'canceled') { state.textContent = 'Cobrança cancelada.'; return stopPix(); } } catch { /* tenta de novo */ }
+      pixTimer = setTimeout(tick, 2500);
+    };
+    pixTimer = setTimeout(tick, 2500);
+  }
+  // Cobranças Pix em aberto (aguardando) e pagas sem venda registrada (janela fechada antes de cair).
+  async function drawPixOpen(box, alive) {
+    const card = $('fsPixOpen'); if (!card || !config?.infinitepay) return;
+    let r; try { r = await api('/store/sales/pix-charges'); } catch { return; }
+    if (!alive() || !card.isConnected) return;
+    const rows = r.charges; card.hidden = !rows.length; if (!rows.length) { card.innerHTML = ''; return; }
+    card.innerHTML = `<div class="nv-heading"><h2>Pix pela InfinitePay <span class="nv-pill">${rows.length}</span></h2></div>
+      <div class="fs-list">${rows.map(c => `<div class="fs-sale"><div><b>${brl(c.amount_cents)}</b> · ${hhmm(c.created_at)}${c.customer_name ? ' · ' + esc(c.customer_name) : ''}<br><small>${c.status === 'paid' ? '<b class="fs-pos">Pago</b> — falta registrar a venda' : 'Aguardando pagamento'}${c.description ? ' · ' + esc(c.description) : ''}</small></div>
+        <div class="fs-sale-end">${c.status === 'paid' ? `<button type="button" class="nv-button fs-small" data-pixo-finish="${c.id}">Registrar venda</button>` : `<button type="button" class="nv-button secondary fs-small" data-pixo-show="${c.id}">Mostrar QR</button>`}</div></div>`).join('')}</div>`;
+    card.querySelectorAll('[data-pixo-finish]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { const s = await api(`/store/sales/pix-charges/${b.dataset.pixoFinish}/finish`, 'POST', {}); lastSale = s; lastSale.change_cents = null; feedback(`Venda #${s.sale.sale_number} registrada (Pix InfinitePay): ${brl(s.sale.total_cents)}.`); await loadCash(box, alive); }
+      catch (err) { feedback(err.message, true); b.disabled = false; }
+    });
+    card.querySelectorAll('[data-pixo-show]').forEach(b => b.onclick = () => {
+      const c = rows.find(x => x.id === b.dataset.pixoShow);
+      pixWindow(c, { qr: null, phone: '', done: async s => { lastSale = s; lastSale.change_cents = null; feedback(`Venda #${s.sale.sale_number} registrada (Pix InfinitePay): ${brl(s.sale.total_cents)}.`); await loadCash(box, alive); } }, box, alive);
+    });
   }
   // Bloco do pedido ao vivo aberto junto: link e WhatsApp com a mensagem de pedido criado.
   function liveBlock(s) {
@@ -2857,6 +2939,11 @@ ${view === 'sum' ? `
   .fs-methods{border:0;padding:0;margin:8px 0;display:flex;gap:6px;flex-wrap:wrap}.fs-methods legend{font-size:13px;color:var(--nv-text);margin-bottom:6px}.fs-methods label{cursor:pointer}.fs-methods input{position:absolute;opacity:0;pointer-events:none}.fs-methods span{display:inline-block;padding:8px 14px;border:1px solid var(--nv-border);border-radius:999px;background:var(--nv-surface)}.fs-methods input:checked+span{background:var(--nv-blue);border-color:var(--nv-blue);color:#fff}.fs-methods input:focus-visible+span{outline:2px solid var(--nv-blue);outline-offset:2px}
   .fs-results{display:flex;flex-direction:column;gap:4px;margin-top:4px}.fs-results button{text-align:left;border:1px solid var(--nv-border);border-radius:10px;background:var(--nv-surface);padding:8px 10px;cursor:pointer}.fs-results button:hover{border-color:var(--nv-blue)}
   .fs-picked,.fs-last{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;background:var(--nv-blue-soft)}.fs-last{margin-top:14px}
+  .fs-pix{display:grid;justify-items:center;gap:10px;text-align:center;min-width:min(340px,80vw)}.fs-pix-amt{font-size:1.8rem;font-weight:800}
+  .fs-pix-qr{width:260px;height:260px;max-width:70vw;max-height:70vw;image-rendering:pixelated;border:1px solid var(--nv-border);border-radius:12px;background:#fff;padding:6px}.fs-pix-qr.fs-pix-done{opacity:.25}
+  .fs-pix-link{display:flex;gap:6px;width:100%}.fs-pix-link input{flex:1;min-width:0;font-size:.8rem}
+  .fs-pix-state{font-size:1.05rem;margin:4px 0}.fs-pix-wait{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--nv-blue,#2563eb);animation:fsPixPulse 1s infinite alternate;vertical-align:middle}
+  @keyframes fsPixPulse{from{opacity:.25}to{opacity:1}}
   .fs-loyal{display:flex;align-items:center;gap:8px;margin-top:4px}.fs-bar{width:110px;height:6px;border-radius:9px;background:var(--nv-border);overflow:hidden}.fs-bar span{display:block;height:100%;background:var(--nv-green)}.fs-loyal small{color:var(--nv-muted)}
   .fs-sale,.fs-msg{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--nv-border)}.fs-sale small,.fs-msg small{color:var(--nv-muted)}.fs-sale.canceled{opacity:.55}.fs-sale.canceled b{text-decoration:line-through}.fs-sale-end{display:flex;gap:8px;align-items:center}.fs-msg.sent{opacity:.7}
   .fs-pill{display:inline-block;margin:0 6px 6px 0;padding:6px 10px;border-radius:999px;background:var(--nv-blue-soft);font-size:13px}.fs-methods-sum{margin-bottom:6px}

@@ -13,6 +13,7 @@ import { registerStorePerformance } from './store-performance.js';
 import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
 import { registerServiceOrders } from './service-orders.js';
 import { matchParts, partKindFor, fold } from './part-match.js';
+import { registerInfinitePay } from './infinitepay.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -151,7 +152,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
     const loyalty_unit = await loyaltyUnit({ query: q }, tid(req));
-    res.json({ enabled: true, timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, admin_free: !!req.user.admin_free, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent), review_link_base: reviewLinkBase() });
+    res.json({ enabled: true, infinitepay: await infinitePayOn(tid(req)), timezone: TZ, today_weekday: weekdayNow(), role: req.user.role, access_level: req.user.access_level, admin_free: !!req.user.admin_free, ...rest, loyalty_unit, cashback_percent: Number(rest.cashback_percent), review_link_base: reviewLinkBase() });
   }));
   // Cashback: só o dono liga e define as regras (percentual, validade, limite de uso por compra, valor mínimo).
   app.patch('/api/store/sales/cashback', ...owner, route(async (req, res) => {
@@ -957,6 +958,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const v = valid(saleSchema, req, res); if (!v) return;
     return createSale(req, res, v, null);
   }));
+  // Cobrança Pix pela InfinitePay (só nas lojas com a chave no servidor).
+  const { infinitePayOn } = registerInfinitePay(app, { q, route, bad, valid, audit, guard, tid, saleSchema, createSale });
   // ---------- Vendas a receber ----------
   // O cliente deixa o pet (ou leva algo) e paga depois: a venda fica guardada com itens, cliente, vendedor e
   // pedido; ao receber, vira uma venda normal no caixa aberto (cashback, fidelidade e estoque nesse momento).
@@ -1184,7 +1187,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   // Registra a venda. pendingId: recebimento de uma venda "a receber" (fica paga na mesma transação).
-  async function createSale(req, res, v, pendingId) {
+  // opts.pixCharge: cobrança Pix da InfinitePay já paga; o total tem que ser o valor pago e o vínculo é gravado junto.
+  async function createSale(req, res, v, pendingId, opts = {}) {
     if (!v.payment_method === !v.payments) return bad(res, 400, 'Escolha a forma de pagamento');
     if (v.payments && new Set(v.payments.map(p => p.method)).size !== v.payments.length) return bad(res, 400, 'Cada forma de pagamento só pode aparecer uma vez');
     if (v.cashback_use_cents && !v.customer_id) return bad(res, 400, 'Cashback só pode ser usado por cliente já cadastrado');
@@ -1302,6 +1306,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         if (v.cashback_use_cents > allowed) { await c.query('ROLLBACK'); return bad(res, 400, allowed ? `O cliente pode usar no máximo ${money(allowed)} de cashback nesta venda. Atualize a venda.` : 'O cliente não tem cashback disponível para esta venda. Atualize a venda.'); }
         cbUsed = v.cashback_use_cents; total -= cbUsed; spread(items, cbUsed);
       }
+      if (opts.pixCharge && total !== opts.pixCharge.amount_cents) { await c.query('ROLLBACK'); return bad(res, 409, `O Pix pago na InfinitePay foi de ${money(opts.pixCharge.amount_cents)}, mas a venda agora dá ${money(total)} (preço, cashback ou desconto mudou). Registre a venda à mão com a forma Pix.`); }
       if (v.payments) {
         const paid = v.payments.reduce((a, p) => a + p.amount_cents, 0);
         if (paid !== total) { await c.query('ROLLBACK'); return bad(res, 400, `As formas de pagamento somam ${money(paid)}, mas o total a pagar é ${money(total)}. Confira os valores.`); }
@@ -1310,6 +1315,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
+      if (opts.pixCharge && !(await c.query("UPDATE pix_charges SET sale_id=$1 WHERE id=$2 AND tenant_id=$3 AND sale_id IS NULL AND status='paid'", [sale.id, opts.pixCharge.id, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'A venda desta cobrança já foi registrada.'); }
       if (cbUsed) {
         const use = (await c.query('INSERT INTO cashback_uses(tenant_id,customer_id,sale_id,amount_cents) VALUES($1,$2,$3,$4) RETURNING id', [tid(req), customerId, sale.id, cbUsed])).rows[0];
         let left = cbUsed; // consome primeiro o que vence antes

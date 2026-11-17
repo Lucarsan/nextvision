@@ -1018,7 +1018,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const tz = TZ.replace(/'/g, '');
     const [paid, pending, orders] = await Promise.all([
       q(`SELECT x.id sale_id,x.sale_number,x.created_at,x.payment_method,x.payments,x.customer_id,c.name customer_name,c.phone customer_phone,u.name seller_name,
-          i.name service,i.device_model pet,i.total_cents,i.addon,i.warranty_days,o.order_number,so.id os_id,so.number os_number
+          i.id item_id,i.name service,i.device_model pet,i.total_cents,i.addon,i.warranty_days,o.order_number,so.id os_id,so.number os_number
         FROM sale_items i JOIN sales x ON x.id=i.sale_id LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN users u ON u.id=x.seller_id LEFT JOIN orders o ON o.id=x.order_id
           LEFT JOIN pending_sales ps ON ps.paid_sale_id=x.id LEFT JOIN service_orders so ON so.pending_sale_id=ps.id
         WHERE x.tenant_id=$1 AND i.service AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date=$2::date ORDER BY x.created_at,i.position`, [tid(req), day]),

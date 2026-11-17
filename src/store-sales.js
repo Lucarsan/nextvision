@@ -12,6 +12,7 @@ import { registerStoreAdmin, newPrice } from './store-admin.js';
 import { registerStorePerformance } from './store-performance.js';
 import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
 import { registerServiceOrders } from './service-orders.js';
+import { matchParts } from './part-match.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -400,7 +401,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   // ---------- Produtos (código de barras) ----------
   // O leitor USB funciona como teclado: digita o código e Enter. O painel procura aqui.
-  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,variant_stock,restock_pending,labels_pending,active,updated_at,kind,cashback,restock,supplier_id,device_model,(SELECT s.name FROM suppliers s WHERE s.id=products.supplier_id) supplier_name,(SELECT a.base_cents FROM price_rule_applied a WHERE a.product_id=products.id) seasonal_base_cents';
+  const productFields = 'id,name,barcode,price_cents,cost_cents,stock_qty,generated_barcode,ask_variant,variant_stock,restock_pending,labels_pending,active,updated_at,kind,cashback,restock,supplier_id,device_model,location,counted_at,(SELECT s.name FROM suppliers s WHERE s.id=products.supplier_id) supplier_name,(SELECT a.base_cents FROM price_rule_applied a WHERE a.product_id=products.id) seasonal_base_cents';
   // Fornecedor e modelo de aparelho: acha pelo nome (sem diferenciar maiúsculas) ou cria; cada uso sobe na lista de sugestões.
   const cleanName = v => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 80);
   const touchName = async (cq, table, tenant, name, use = true) => {
@@ -418,10 +419,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     SELECT $1,$2,$3,$4,$5,$6,$7,$8,a.s,CASE WHEN $9 THEN $10::int ELSE a.s-$5 END,$11 FROM a`,
     [tenant, productId, variantId, kind, quantity, unitCost ?? null, saleId ?? null, userId ?? null, 'before' in opts, opts.before ?? null, opts.note ?? null]);
   // Peça: o "modelo" é o aparelho e o fornecedor vai junto, para a lista de compras.
-  const restockRows = async tenant => (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents,p.barcode,p.kind,s.name supplier_name
+  const restockRows = async tenant => (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,p.device_model variant,p.restock_pending pending,p.stock_qty,p.cost_cents,p.barcode,p.kind,s.name supplier_name,p.location
       FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.tenant_id=$1 AND p.active AND p.restock AND NOT p.ask_variant AND p.restock_pending>0
     UNION ALL
-    SELECT p.id,v.id,p.name,v.name,v.restock_pending,CASE WHEN p.variant_stock='total' THEN p.stock_qty ELSE v.stock_qty END,p.cost_cents,p.barcode,p.kind,NULL
+    SELECT p.id,v.id,p.name,v.name,v.restock_pending,CASE WHEN p.variant_stock='total' THEN p.stock_qty ELSE v.stock_qty END,p.cost_cents,p.barcode,p.kind,NULL,p.location
       FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.tenant_id=$1 AND p.active AND p.restock AND v.active AND v.restock_pending>0
     ORDER BY 9,10 NULLS LAST,3,4`, [tenant])).rows;
   // Modelo de um produto com modelos: acha pelo nome (sem diferenciar maiúsculas) ou cria.
@@ -443,6 +444,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     kind: z.enum(['product', 'part']).optional(),
     supplier: z.string().trim().max(80).optional(),
     device_model: z.string().trim().max(80).optional(),
+    // Onde a peça fica guardada na loja ("Caixa 01").
+    location: z.string().trim().max(40).optional(),
     // Gera cashback ao vender (troca de espécie por Pix, crédito de celular: não) e entra na lista de reposição.
     cashback: z.boolean().optional(),
     restock: z.boolean().optional()
@@ -457,8 +460,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const words = term ? term.split(' ').filter(Boolean).slice(0, 8) : [];
     const deleted = !!term && req.query.include_deleted === '1';
     const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND (active OR $5) AND kind=$3 AND
-        ($2='' OR barcode=$2 OR fp_fold(name || ' ' || coalesce(device_model,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
-      ORDER BY (barcode=$2) DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,name,device_model,updated_at DESC LIMIT 500`, [tid(req), term, kind, words, deleted]);
+        ($2='' OR barcode=$2 OR fp_fold(name || ' ' || coalesce(device_model,'') || ' ' || coalesce(location,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
+      ORDER BY (barcode=$2) DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,
+        CASE WHEN $3='part' THEN coalesce(location,'~') END,CASE WHEN $3='part' THEN fp_fold(coalesce(device_model,'')) END,name,device_model,updated_at DESC LIMIT 500`, [tid(req), term, kind, words, deleted]);
     res.set('Cache-Control', 'no-store'); res.json(r.rows);
   }));
   // Produto excluído volta para a lista com o cadastro antigo (nome, código, preços); o estoque recomeça do zero.
@@ -490,8 +494,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const sup = part ? await touchName(q, 'suppliers', tid(req), v.supplier, false) : null;
       if (part && v.device_model) await touchName(q, 'device_models', tid(req), v.device_model, false);
       const perModel = v.ask_variant && v.variant_stock !== 'total';
-      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by,kind,supplier_id,device_model,variant_stock,cashback,restock) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12,$13,$14) RETURNING ${productFields}`,
-        [tid(req), v.name, v.barcode || '', v.price_cents ?? 0, v.cost_cents ?? null, perModel ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id, part ? 'part' : 'product', sup?.id || null, part ? cleanName(v.device_model) : '', v.variant_stock || 'model', v.cashback ?? true, v.restock ?? true]);
+      const r = await q(`INSERT INTO products(tenant_id,name,barcode,price_cents,cost_cents,stock_qty,ask_variant,created_by,kind,supplier_id,device_model,variant_stock,cashback,restock,location) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12,$13,$14,NULLIF($15,'')) RETURNING ${productFields}`,
+        [tid(req), v.name, v.barcode || '', v.price_cents ?? 0, v.cost_cents ?? null, perModel ? null : v.stock_qty ?? null, !!v.ask_variant, req.user.id, part ? 'part' : 'product', sup?.id || null, part ? cleanName(v.device_model) : '', v.variant_stock || 'model', v.cashback ?? true, v.restock ?? true, cleanName(v.location).slice(0, 40)]);
       if (!perModel && v.stock_qty > 0) await ledger(q, tid(req), r.rows[0].id, null, 'entry', v.stock_qty, v.cost_cents, null, req.user.id, { before: null, note: part ? 'Peça cadastrada' : 'Produto cadastrado' });
       await audit(req, 'create', 'product', r.rows[0].id); res.status(201).json(r.rows[0]);
     } catch (e) { if (!dupBarcode(e, res)) throw e; }
@@ -525,10 +529,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           stock_qty=CASE WHEN $8 THEN $9::int ELSE stock_qty END,
           ask_variant=COALESCE($10,ask_variant),variant_stock=COALESCE($14,variant_stock),
           cashback=COALESCE($15,cashback),restock=COALESCE($16,restock),
-          restock_pending=CASE WHEN $16 IS FALSE THEN 0 ELSE restock_pending END,updated_at=now()
+          restock_pending=CASE WHEN $16 IS FALSE THEN 0 ELSE restock_pending END,
+          location=CASE WHEN $17::text IS NULL THEN location ELSE NULLIF($17,'') END,updated_at=now()
         WHERE id=$4 AND tenant_id=$5 AND active RETURNING ${productFields}`, [v.name ?? null, v.barcode ?? null, v.price_cents ?? null, req.params.id, tid(req),
         'cost_cents' in v, v.cost_cents ?? null, 'stock_qty' in v, v.stock_qty ?? null, v.ask_variant ?? null,
-        'supplier' in v, sup?.id || null, 'device_model' in v ? cleanName(v.device_model) : null, v.variant_stock ?? null, v.cashback ?? null, v.restock ?? null]);
+        'supplier' in v, sup?.id || null, 'device_model' in v ? cleanName(v.device_model) : null, v.variant_stock ?? null, v.cashback ?? null, v.restock ?? null,
+        'location' in v ? cleanName(v.location).slice(0, 40) : null]);
       if (!r.rowCount) return bad(res, 404, 'Produto não encontrado');
       // Quantidade trocada direto no cadastro também entra no log.
       const before = old?.stock_qty ?? null, after = r.rows[0].stock_qty;
@@ -607,6 +613,53 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const out = (await q(`SELECT ${productFields} FROM products WHERE id=$1`, [p.id])).rows[0];
       res.json({ ...out, variants, added: v.items.reduce((a, x) => a + x.add, 0) });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
+  // Conferência: a pessoa contou e informa a quantidade que tem de verdade (não soma: substitui).
+  // A diferença entra no log como ajuste e o item fica "conferido" com data e quem contou.
+  app.post('/api/store/products/:id/count', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Produto inválido');
+    const v = valid(z.object({ qty: z.number().int().min(0).max(99999) }).strict(), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const p = await stockLock(c, req);
+      if (!p) { await c.query('ROLLBACK'); return bad(res, 404, 'Produto não encontrado'); }
+      if (p.ask_variant && p.variant_stock !== 'total') { await c.query('ROLLBACK'); return bad(res, 400, 'Este produto conta o estoque por modelo'); }
+      const before = p.stock_qty, diff = v.qty - (before ?? 0);
+      await c.query('UPDATE products SET stock_qty=$1,counted_at=now(),counted_by=$2,updated_at=now() WHERE id=$3', [v.qty, req.user.id, p.id]);
+      if (diff !== 0 || before == null) await ledger((sql, params) => c.query(sql, params), tid(req), p.id, null, 'adjust', diff, null, null, req.user.id,
+        { before, note: `Conferência: contado ${v.qty}` + (before == null ? '' : diff > 0 ? ` (sobrava ${diff} a mais)` : diff < 0 ? ` (faltavam ${-diff})` : '') });
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'stock_count', 'product', p.id]);
+      await c.query('COMMIT');
+      res.json((await q(`SELECT ${productFields} FROM products WHERE id=$1`, [p.id])).rows[0]);
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
+  // Peça para o aparelho digitado no serviço (caixa e OS): "A12" → Tela · Samsung A02/A12, com preço e custo.
+  app.get('/api/store/parts/match', ...guard, route(async (req, res) => {
+    const model = String(req.query.model || '').trim().slice(0, 120), service = String(req.query.service || '').trim().slice(0, 120);
+    res.set('Cache-Control', 'no-store');
+    if (model.length < 2) return res.json([]);
+    const rows = (await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind='part' AND device_model IS NOT NULL`, [tid(req)])).rows;
+    res.json(matchParts(rows, model, service));
+  }));
+  // O que saiu do estoque (vendas e serviços, já descontando cancelamentos) num período, por item.
+  // kind: part (peças), product (produtos) ou all. Sem período: últimos 30 dias.
+  app.get('/api/store/stock/outflow', ...guard, route(async (req, res) => {
+    const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+    let from = day(req.query.from), to = day(req.query.to);
+    if (!from) from = new Date(Date.now() - 29 * 864e5).toLocaleDateString('sv-SE', { timeZone: TZ });
+    if (!to) to = new Date().toLocaleDateString('sv-SE', { timeZone: TZ });
+    const kind = ['part', 'product'].includes(req.query.kind) ? req.query.kind : '';
+    const r = await q(`SELECT p.id product_id,p.name,p.kind,p.device_model,v.name variant,p.location,p.stock_qty product_stock,v.stock_qty variant_stock,p.variant_stock mode,p.restock_pending,v.restock_pending variant_pending,
+        -sum(m.quantity)::int qty,max(m.created_at) FILTER (WHERE m.kind='sale') last_at,
+        (array_agg(x.sale_number ORDER BY m.created_at DESC) FILTER (WHERE m.kind='sale' AND x.sale_number IS NOT NULL))[1:5] sales
+      FROM stock_movements m JOIN products p ON p.id=m.product_id LEFT JOIN product_variants v ON v.id=m.variant_id LEFT JOIN sales x ON x.id=m.sale_id
+      WHERE m.tenant_id=$1 AND m.kind IN ('sale','cancel') AND ($4='' OR p.kind=$4)
+        AND m.created_at >= ($2::date)::timestamp AT TIME ZONE $5 AND m.created_at < ($3::date + 1)::timestamp AT TIME ZONE $5
+      GROUP BY p.id,v.id HAVING -sum(m.quantity) > 0
+      ORDER BY max(m.created_at) DESC LIMIT 500`, [tid(req), from, to, kind, TZ]);
+    res.set('Cache-Control', 'no-store');
+    res.json({ from, to, rows: r.rows.map(x => ({ ...x, stock_qty: x.variant && x.mode !== 'total' ? x.variant_stock : x.product_stock, pending: x.variant ? x.variant_pending : x.restock_pending })) });
   }));
   // Marcar modelos como repostos sem mexer no estoque (a loja contou tudo junto e repôs).
   app.post('/api/store/products/:id/restocked', ...guard, route(async (req, res) => {

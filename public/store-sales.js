@@ -949,7 +949,11 @@
         return;
       }
       const p = priceOf(i);
-      svc.name = i.name; svc.price = p != null ? centsText(p) : ''; svc.catalog_id = i.id; svc.autoPrice = p != null; svc.calc = '';
+      svc.name = i.name; svc.catalog_id = i.id; svc.calc = '';
+      // Tela posta pelo aparelho, mas o serviço é outro (conector, bateria…): a tela sai.
+      if (svc.part && svc.partAuto && !fp(i.name).includes(fp(svc.part.name).split(' ')[0])) { svc.part = null; svc.partAuto = false; svc.cost = ''; if (svc.priceFromPart) { svc.price = ''; svc.priceFromPart = false; } }
+      // Peça já escolhida com preço próprio (tela do modelo): o preço dela continua valendo.
+      if (!(svc.part?.price_cents > 0 && svc.priceFromPart)) { svc.price = p != null ? centsText(p) : ''; svc.autoPrice = p != null; svc.priceFromPart = false; }
       if (isPet()) { if (svcPet && !String(svc.model || '').trim()) svc.model = svcPet.name; repriceSvc(); }
       // Custo: o da peça escolhida vale mais; sem peça, usa o custo cadastrado no serviço.
       if (!svc.part) svc.cost = i.cost_cents != null ? centsText(i.cost_cents) : (svc.cost || '');
@@ -1038,6 +1042,7 @@
       <div class="nv-field"${hide}>Peça do estoque <small class="nv-help">opcional · preenche aparelho, fornecedor e custo, e baixa do estoque</small><div id="fsSvcPart"></div></div>
       <div class="fs-row"><label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsSvcModel" maxlength="80" placeholder="${FP.ex('item')}" value="${esc(svc.model || '')}"></label>
         <label class="nv-field fs-grow fs-sugg"${hide}>Fornecedor<input id="fsSvcSupplier" maxlength="80" placeholder="De quem veio a peça" value="${esc(svc.supplier || '')}"></label></div>
+      <div id="fsSvcModelHit" class="fs-model-hit"${hide}></div>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input id="fsSvcPrice" inputmode="decimal" placeholder="0,00" value="${esc(svc.price || '')}"></label>
         <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
         <label class="nv-field"${hide}>Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
@@ -1047,18 +1052,24 @@
       <button type="button" class="nv-button secondary fs-wide fs-svc-add" id="fsSvcAdd">${FPIcon('plus') || '+'} Pôr na venda e lançar outro serviço</button>${pet ? '</details>' : ''}
       <p class="nv-help fs-svc-tip">Para vender produto junto, toque em <b>Produto</b> (ou bipe o código): o serviço continua na mesma venda.</p>`;
     const read = () => { if (svc.autoPrice && $('fsSvcPrice').value !== (svc.price || '')) { svc.autoPrice = false; svc.calc = ''; const k = $('fsSvcCalc'); if (k) k.remove(); }
+      if (svc.priceFromPart && $('fsSvcPrice').value !== (svc.price || '')) svc.priceFromPart = false;
+      // Peça que o sistema pôs pelo aparelho: trocou o aparelho, ela sai (e o preço/custo que vieram dela também).
+      if ($('fsSvcModel').value !== (svc.model || '')) { svc.noAutoPart = false;
+        if (svc.part && svc.partAuto) { if (svc.priceFromPart) { $('fsSvcPrice').value = ''; svc.priceFromPart = false; } $('fsSvcCost').value = ''; svc.part = null; svc.partAuto = false; drawPartPicker(); } }
       if (svc.catalog_id && normName($('fsSvcName').value) !== normName(svc.name)) { svc.catalog_id = null; svc.autoPrice = false; }
       svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
     const profit = profitNote;
     box.oninput = box.onchange = read;
-    suggestField($('fsSvcModel'), '/store/device-models', read);
+    suggestField($('fsSvcModel'), '/store/device-models', () => { read(); modelHits(true); });
+    { let t; $('fsSvcModel').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => modelHits(false), 250); });
+      $('fsSvcModel').addEventListener('change', () => { clearTimeout(t); modelHits(true); }); }
     suggestField($('fsSvcSupplier'), '/store/suppliers', read);
     // Serviço já feito antes: sugere o nome e, se o preço estiver vazio, o último preço cobrado.
     (servicesCache ? Promise.resolve(servicesCache) : api('/store/sales/services').then(r => (servicesCache = r)).catch(() => [])).then(rows => {
       const dl = $('fsSvcNames'); if (!dl) return; dl.innerHTML = rows.map(r => `<option value="${esc(r.name)}">`).join('');
       $('fsSvcName').onchange = () => { const hit = rows.find(r => r.name.toLowerCase() === $('fsSvcName').value.trim().toLowerCase()); if (hit && !$('fsSvcPrice').value.trim() && hit.last_price_cents) $('fsSvcPrice').value = centsText(hit.last_price_cents); read(); $('fsSale')?.dispatchEvent(new Event('input')); };
     });
-    drawPartPicker(); drawGiftPicker(); drawServiceChips(); if (pet) drawPetPicker(); read();
+    drawPartPicker(); drawGiftPicker(); drawServiceChips(); if (pet) drawPetPicker(); read(); modelHits(true);
     $('fsSvcAdd').onclick = () => {
       const err = svcFilled() ? svcProblem() : `Informe o serviço (ex.: ${svcEx('one')}).`, st = $('fsSaleStatus');
       if (err) { if (st) st.textContent = err; return; }
@@ -1100,7 +1111,7 @@
     if (svc.part) {
       const p = svc.part;
       box.innerHTML = `<div class="fs-picked"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? esc(p.supplier_name) + ' · ' : ''}custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.stock_qty != null ? ` · <span class="${p.stock_qty <= 0 ? 'fs-neg' : ''}">estoque ${p.stock_qty}</span>` : ''}</small></div><button type="button" class="nv-button secondary fs-small" id="fsSvcPartOff">Tirar peça</button></div>`;
-      $('fsSvcPartOff').onclick = () => { svc.part = null; drawPartPicker(); };
+      $('fsSvcPartOff').onclick = () => { svc.part = null; svc.partAuto = false; svc.noAutoPart = true; drawPartPicker(); modelHits(false); };
       return;
     }
     box.innerHTML = `<div class="fs-sugg"><input id="fsSvcPartQ" type="search" placeholder="Buscar peça: tela a12, bateria iphone…" aria-label="Buscar peça do estoque"><div id="fsSvcPartList" class="fs-results fs-drop"></div></div>`;
@@ -1119,12 +1130,28 @@
   }
   const fp = v => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   // Peça escolhida: aparelho, fornecedor e custo vêm dela; preço sugerido só entra se o preço estiver vazio.
-  function usePart(p) {
-    svc.part = p;
-    if (p.device_model) svc.model = p.device_model;
+  // Aparelho digitado → peça do estoque que serve nele (telas). Uma só exata: já entra com preço e custo.
+  // Várias (com aro/sem aro, A14 4G/5G…): mostra para escolher com um toque.
+  let hitSeq = 0;
+  async function modelHits(apply) {
+    const box = $('fsSvcModelHit'); if (!box || isPet()) return;
+    const model = String($('fsSvcModel')?.value ?? svc.model ?? '').trim();
+    if (model.length < 2 || svc.part) { box.innerHTML = ''; return; }
+    const seq = ++hitSeq; let rows = [];
+    try { rows = await api(`/store/parts/match?model=${encodeURIComponent(model)}&service=${encodeURIComponent(String(svc.name || '').trim())}`); } catch { return; }
+    if (seq !== hitSeq || !box.isConnected || svc.part) return;
+    const exact = rows.filter(r => r.match === 'exact');
+    if (apply && !svc.noAutoPart && exact.length === 1) { usePart(exact[0], { auto: true }); return; }
+    box.innerHTML = rows.length ? `<div class="nv-help">Peça do estoque para <b>${esc(model)}</b>${exact.length > 1 ? ' (escolha uma)' : ''}:</div><div class="fs-hit-list">${rows.map((p, n) => `<button type="button" class="fs-chip" data-hit="${n}"><b>${esc(partLabel(p))}</b><small>${p.price_cents > 0 ? brl(p.price_cents) + ' · ' : ''}custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'} · <span class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">estoque ${p.stock_qty ?? '—'}</span>${p.match === 'close' ? ' · parecido' : ''}</small></button>`).join('')}</div>` : '';
+    box.querySelectorAll('[data-hit]').forEach(b => b.onclick = () => usePart(rows[b.dataset.hit], { auto: true }));
+  }
+  // Pelo aparelho digitado (opts.auto): o aparelho fica como foi digitado e o preço da peça vale mais que o último cobrado.
+  function usePart(p, opts = {}) {
+    svc.part = p; svc.partAuto = !!opts.auto; svc.noAutoPart = false;
+    if (p.device_model && (!opts.auto || !String(svc.model || '').trim())) svc.model = p.device_model;
     if (p.supplier_name) svc.supplier = p.supplier_name;
     if (p.cost_cents != null) svc.cost = centsText(p.cost_cents);
-    if (!String(svc.price || '').trim() && p.price_cents > 0) svc.price = centsText(p.price_cents);
+    if (p.price_cents > 0 && (!String(svc.price || '').trim() || svc.autoPrice || svc.priceFromPart)) { svc.price = centsText(p.price_cents); svc.autoPrice = false; svc.calc = ''; svc.priceFromPart = true; }
     if (!String(svc.name || '').trim()) svc.name = 'Troca de ' + p.name.toLowerCase();
     drawService(); $('fsSale')?.dispatchEvent(new Event('input'));
   }
@@ -1154,11 +1181,13 @@
       <p class="nv-help">Peças usadas nos serviços (telas, baterias…). Cadastre uma peça para cada modelo de aparelho e fornecedor.</p>
       <div class="fs-row"><label class="nv-field fs-grow">Peça<input name="name" maxlength="120" required list="fsPartNames" value="${esc(initial.name || '')}" placeholder="Ex.: Tela, Bateria"></label><datalist id="fsPartNames">${PART_NAMES.map(n => `<option value="${n}">`).join('')}</datalist>
         <label class="nv-field fs-grow fs-sugg">${FP.ex('itemLabel')}<input id="fsPartModel" name="device_model" maxlength="80" value="${esc(initial.device_model || '')}" placeholder="${FP.ex('variant')}"></label></div>
-      <label class="nv-field fs-sugg">Fornecedor<input id="fsPartSupplier" name="supplier" maxlength="80" value="${esc(initial.supplier_name || '')}" placeholder="De quem a loja compra esta peça"></label>
+      <div class="fs-row"><label class="nv-field fs-grow fs-sugg">Fornecedor<input id="fsPartSupplier" name="supplier" maxlength="80" value="${esc(initial.supplier_name || '')}" placeholder="De quem a loja compra esta peça"></label>
+        <label class="nv-field" style="flex:0 0 150px">Onde fica<input name="location" maxlength="40" list="fsPartLocs" value="${esc(initial.location || '')}" placeholder="Ex.: Caixa 01"></label><datalist id="fsPartLocs">${[...new Set(partLocations)].map(l => `<option value="${esc(l)}">`).join('')}</datalist></div>
       <div class="fs-row"><label class="nv-field fs-grow">Preço de custo<input name="cost" inputmode="decimal" value="${initial.cost_cents != null ? centsText(initial.cost_cents) : ''}" placeholder="0,00"></label>
         <label class="nv-field fs-grow">Preço do serviço com esta peça <small class="nv-help">(opcional)</small><input name="price" inputmode="decimal" value="${initial.price_cents > 0 ? centsText(initial.price_cents) : ''}" placeholder="0,00"></label>
         ${editing ? '' : '<label class="nv-field" style="flex:0 0 130px">Quantidade na loja<input name="stock" inputmode="numeric" placeholder="Ex.: 3"></label>'}</div>
-      ${editing ? `<p class="nv-help">Estoque atual: <b>${initial.stock_qty ?? '—'}</b>. Para somar ou corrigir, use "+ Estoque" na lista de peças.</p>` : ''}
+      ${editing ? `<p class="nv-help">Estoque atual: <b>${initial.stock_qty ?? '—'}</b>. Para corrigir, digite a quantidade contada na lista de peças e toque em "Conferido"; para somar uma compra, use "+ Estoque".</p>` : ''}
+      <p class="nv-help">Com o preço do serviço preenchido, ao digitar o aparelho no caixa ou na OS o sistema já sugere esta peça com o preço e o custo.</p>
       <button class="nv-button">${editing ? 'Salvar' : onSaved && !onSaved.list ? 'Cadastrar e usar no serviço' : 'Cadastrar'}</button><p role="status" class="nv-help"></p></form>`);
     const f = $('fsPart'), st = f.querySelector('[role=status]');
     suggestField($('fsPartModel'), '/store/device-models'); suggestField($('fsPartSupplier'), '/store/suppliers');
@@ -1171,7 +1200,7 @@
       if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Preço de custo inválido.'; return; }
       if (priceRaw && (!Number.isFinite(price) || price < 0)) { st.textContent = 'Preço do serviço inválido.'; return; }
       if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Quantidade: use um número inteiro.'; return; }
-      const body = { name, cost_cents: cost, price_cents: price, supplier: f.elements.supplier.value.trim(), device_model: f.elements.device_model.value.trim() };
+      const body = { name, cost_cents: cost, price_cents: price, supplier: f.elements.supplier.value.trim(), device_model: f.elements.device_model.value.trim(), location: f.elements.location.value.trim() };
       if (!editing) { body.kind = 'part'; body.stock_qty = stock ?? 0; }
       try {
         const p = editing ? await adminApi('/store/products/' + initial.id, 'PATCH', body, 'Editar peça já cadastrada pede a senha do admin.') : await api('/store/products', 'POST', body);
@@ -1179,19 +1208,46 @@
       } catch (err) { st.textContent = err.message; }
     };
   }
+  // Peças: agrupadas pelo lugar onde ficam (Caixa 01…). Conferência: digite a quantidade contada e toque em
+  // "Conferido" (ou Enter, que já vai para a próxima). O estoque passa a ser o contado e a diferença vai para o log.
+  let partLocations = [], partFilter = 'all';
   async function partsTab(box, term = '') {
-    box.innerHTML = `<div class="fs-row"><input id="fsPartSearch" class="fs-grow" type="search" placeholder="Buscar peça ou modelo (ex.: tela a12)" value="${esc(term)}" aria-label="Buscar peça"><button type="button" class="nv-button" id="fsPartNew">+ Nova peça</button></div>
-      <p class="nv-help">Peças que a loja tem para os serviços. Ao registrar um serviço com a peça, o estoque baixa sozinho e a peça entra na reposição.</p><div id="fsPartList" class="nv-list"></div>`;
+    box.innerHTML = `<div class="fs-row"><input id="fsPartSearch" class="fs-grow" type="search" placeholder="Buscar peça, modelo ou caixa (ex.: tela a12)" value="${esc(term)}" aria-label="Buscar peça"><button type="button" class="nv-button" id="fsPartNew">+ Nova peça</button></div>
+      <div class="fs-chips fs-part-filter" id="fsPartFilter"></div>
+      <p class="nv-help">Para conferir: conte a peça, digite a quantidade e toque em <b>Conferido</b> (Enter confirma e vai para a próxima). Ao usar a peça num serviço, o estoque baixa sozinho e ela entra na reposição.</p><div id="fsPartList" class="nv-list"></div>`;
     const input = $('fsPartSearch'), list = $('fsPartList'); let timer, rows = [];
     const reopen = () => productsDialog(input.value.trim(), 'parts'); reopen.list = true;
-    const draw = async () => {
-      try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(input.value.trim())); } catch (err) { list.textContent = err.message; return; }
-      if (!list.isConnected) return;
-      list.innerHTML = rows.map(p => `<div class="fs-sale fs-prod"><div><b>${esc(partLabel(p))}</b><br><small>${p.supplier_name ? 'Fornecedor: ' + esc(p.supplier_name) : 'sem fornecedor'} · custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.price_cents > 0 ? ' · serviço ' + brl(p.price_cents) : ''}</small><br>
-          <small>Estoque: <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.restock_pending ? ` · <span class="fs-neg">repor ${p.restock_pending}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque</button><button type="button" class="nv-button secondary fs-small" data-p-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></div>`).join('')
-        || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : 'Nenhuma peça cadastrada ainda. ' + FP.ex('parts')}</p>`;
+    const counted = p => p.counted_at ? `<span class="fs-pos" title="Conferido em ${dmy(p.counted_at)} ${hhmm(p.counted_at)}">✓ conferido ${dmy(p.counted_at)}</span>` : '<span class="fs-tag-warn">a conferir</span>';
+    const keep = p => partFilter === 'todo' ? !p.counted_at : partFilter === 'out' ? p.stock_qty != null && p.stock_qty <= 0 : true;
+    const rowHtml = p => `<div class="fs-sale fs-prod fs-part" data-part="${p.id}"><div><b>${esc(partLabel(p))}</b><br><small>${p.location ? esc(p.location) + ' · ' : ''}custo ${p.cost_cents != null ? brl(p.cost_cents) : '—'}${p.price_cents > 0 ? ' · serviço ' + brl(p.price_cents) : ''}${p.supplier_name ? ' · ' + esc(p.supplier_name) : ''}</small><br>
+          <small>${counted(p)}${p.restock_pending ? ` · <span class="fs-neg">saíram ${p.restock_pending} (repor)</span>` : ''}</small></div>
+        <div class="fs-sale-end fs-part-end"><label class="fs-count">Estoque<input type="number" min="0" max="99999" inputmode="numeric" value="${p.stock_qty ?? ''}" data-p-count="${p.id}" aria-label="Quantidade de ${esc(partLabel(p))}" class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}"></label>
+          <button type="button" class="nv-button fs-small" data-p-ok="${p.id}">Conferido</button>
+          <details class="fs-more"><summary aria-label="Mais ações">⋯</summary><div><button type="button" class="nv-button secondary fs-small" data-p-edit="${p.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-p-stock="${p.id}">+ Estoque (compra)</button><button type="button" class="nv-button secondary fs-small" data-p-hist="${p.id}">Histórico</button><button type="button" class="nv-button secondary fs-small" data-p-del="${p.id}">Excluir</button></div></details></div></div>`;
+    const drawFilter = () => {
+      const todo = rows.filter(p => !p.counted_at).length, out = rows.filter(p => p.stock_qty != null && p.stock_qty <= 0).length;
+      $('fsPartFilter').innerHTML = [['all', `Todas (${rows.length})`], ['todo', `A conferir (${todo})`], ['out', `Sem estoque (${out})`]]
+        .map(([k, t]) => `<button type="button" class="fs-chip${partFilter === k ? ' fs-chip-on' : ''}" data-pf="${k}" aria-pressed="${partFilter === k}"><b>${t}</b></button>`).join('');
+      $('fsPartFilter').querySelectorAll('[data-pf]').forEach(b => b.onclick = () => { partFilter = b.dataset.pf; paint(); });
+    };
+    const paint = () => {
+      drawFilter();
+      const shown = rows.filter(keep); let lastLoc = null, html = '';
+      for (const p of shown) { const loc = p.location || ''; if (loc !== lastLoc) { html += `<h4 class="fs-part-loc">${loc ? esc(loc) : 'Sem lugar definido'}</h4>`; lastLoc = loc; } html += rowHtml(p); }
+      list.innerHTML = html || `<p class="nv-help">${input.value.trim() ? 'Nenhuma peça encontrada.' : partFilter === 'todo' ? 'Tudo conferido.' : partFilter === 'out' ? 'Nenhuma peça zerada.' : 'Nenhuma peça cadastrada ainda. ' + FP.ex('parts')}</p>`;
       const byId = id => rows.find(p => p.id === id);
+      const save = async (id, next) => {
+        const inp = list.querySelector(`[data-p-count="${id}"]`), n = Number(inp.value);
+        if (inp.value.trim() === '' || !Number.isInteger(n) || n < 0) { feedback('Digite a quantidade contada (0 ou mais).', true); inp.focus(); return; }
+        try {
+          const p = await api(`/store/products/${id}/count`, 'POST', { qty: n }), i = rows.findIndex(x => x.id === id), was = rows[i].stock_qty;
+          rows[i] = p; feedback(`${partLabel(p)}: ${n} conferido${was != null && was !== n ? ` (era ${was})` : ''}.`);
+          const order = rows.filter(keep).map(x => x.id), at = order.indexOf(id), nextId = next ? order[at + 1] : null;
+          paint(); if (nextId) { const ni = list.querySelector(`[data-p-count="${nextId}"]`); ni?.focus(); ni?.select(); }
+        } catch (err) { feedback(err.message, true); }
+      };
+      list.querySelectorAll('[data-p-count]').forEach(inp => inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(inp.dataset.pCount, true); } });
+      list.querySelectorAll('[data-p-ok]').forEach(b => b.onclick = () => save(b.dataset.pOk, false));
       list.querySelectorAll('[data-p-edit]').forEach(b => b.onclick = () => partDialog(byId(b.dataset.pEdit), reopen));
       list.querySelectorAll('[data-p-stock]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pStock); stockDialog({ ...p, name: partLabel(p) }, reopen); });
       list.querySelectorAll('[data-p-hist]').forEach(b => b.onclick = () => { const p = byId(b.dataset.pHist); logFilter = { product_id: p.id, name: partLabel(p) }; productsDialog('', 'log'); });
@@ -1200,8 +1256,14 @@
         try { await adminApi('/store/products/' + p.id, 'DELETE', undefined, 'Excluir peça pede a senha do admin.'); if (svc.part?.id === p.id) svc.part = null; draw(); } catch (err) { if (!err.canceled) feedback(err.message, true); }
       });
     };
+    const draw = async () => {
+      try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(input.value.trim())); } catch (err) { list.textContent = err.message; return; }
+      if (!list.isConnected) return;
+      partLocations = rows.map(p => p.location).filter(Boolean);
+      paint();
+    };
     input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 200); };
-    $('fsPartNew').onclick = () => partDialog({}, reopen);
+    $('fsPartNew').onclick = () => partDialog({ location: partLocations.at(-1) || '' }, reopen);
     input.focus(); draw();
   }
   // Fornecedores e modelos de aparelho que aparecem nas sugestões. Excluir só tira da lista de sugestões.
@@ -1804,10 +1866,43 @@
     document.querySelectorAll('[data-fs-vdel]').forEach(b => b.onclick = async () => { if (!confirm('Tirar este modelo da lista de sugestões?')) return; try { await api(`/store/products/${p.id}/variants/${b.dataset.fsVdel}`, 'DELETE'); again(); } catch (err) { feedback(err.message, true); } });
   }
   // Reposição: o que foi vendido e ainda não teve entrada de estoque. Imprime para levar às compras.
+  // O que saiu do estoque num período (vendas e serviços, já sem os cancelados), por item, mais recente primeiro.
+  async function outflowView(box) {
+    const today = new Date().toLocaleDateString('sv-SE'), ago = n => new Date(Date.now() - n * 864e5).toLocaleDateString('sv-SE');
+    const range = { today: [today, today], '7': [ago(6), today], '30': [ago(29), today], month: [today.slice(0, 8) + '01', today] }[outPeriod];
+    box.innerHTML = `<div class="fs-row"><label class="nv-field">Período<select id="fsOutPeriod">${[['today', 'Hoje'], ['7', 'Últimos 7 dias'], ['30', 'Últimos 30 dias'], ['month', 'Este mês']].map(([v, t]) => `<option value="${v}"${v === outPeriod ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="nv-field">Mostrar<select id="fsOutKind">${[['part', 'Peças (telas…)'], ['product', 'Produtos'], ['', 'Tudo']].map(([v, t]) => `<option value="${v}"${v === outKind ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      <span class="fs-grow"></span><button type="button" class="nv-button secondary" id="fsOutPrint" disabled>${FPIcon('printer')}Imprimir</button></div><div id="fsOutList" class="nv-list"><p class="nv-help">Carregando…</p></div>`;
+    $('fsOutPeriod').onchange = e => { outPeriod = e.target.value; outflowView(box); };
+    $('fsOutKind').onchange = e => { outKind = e.target.value; outflowView(box); };
+    let d; try { d = await api(`/store/stock/outflow?from=${range[0]}&to=${range[1]}&kind=${outKind}`); } catch (err) { $('fsOutList').textContent = err.message; return; }
+    if (!box.isConnected) return;
+    const total = d.rows.reduce((a, r) => a + r.qty, 0), label = r => esc(r.name) + (r.variant ? ' · ' + esc(r.variant) : r.device_model ? ' · ' + esc(r.device_model) : '');
+    $('fsOutList').innerHTML = (d.rows.length ? `<p class="nv-help">${total} unidade(s) saíram em ${d.rows.length} item(ns).</p>` : '') + (d.rows.map(r => `<div class="fs-sale"><div><b>${label(r)}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br>
+        <small>Última saída ${dmy(r.last_at)} ${hhmm(r.last_at)}${r.sales?.length ? ' · venda nº ' + r.sales.join(', ') : ''}${r.location ? ' · ' + esc(r.location) : ''}</small><br>
+        <small>Estoque agora: <b class="${r.stock_qty != null && r.stock_qty <= 0 ? 'fs-neg' : ''}">${r.stock_qty ?? '—'}</b>${r.pending ? ` · <span class="fs-neg">falta repor ${r.pending}</span>` : ' · já reposto'}</small></div>
+      <div class="fs-sale-end"><b>saiu ${r.qty}</b></div></div>`).join('') || '<p class="nv-help">Nada saiu neste período.</p>');
+    const pr = $('fsOutPrint'); pr.disabled = !d.rows.length;
+    pr.onclick = () => {
+      const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
+      w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>O que saiu do estoque</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}</style></head><body>
+        <h1>O que saiu do estoque · ${esc(config?.name || '')}</h1><div>${d.from.split('-').reverse().join('/')} a ${d.to.split('-').reverse().join('/')} · ${total} unidade(s)</div>
+        <table><thead><tr><th>Item</th><th>Lugar</th><th class="n">Saiu</th><th>Última saída</th><th class="n">Estoque agora</th><th class="n">Falta repor</th></tr></thead><tbody>
+        ${d.rows.map(r => `<tr><td>${label(r)}</td><td>${esc(r.location || '')}</td><td class="n"><b>${r.qty}</b></td><td>${dmy(r.last_at)} ${hhmm(r.last_at)}</td><td class="n">${r.stock_qty ?? '—'}</td><td class="n">${r.pending || ''}</td></tr>`).join('')}
+        </tbody></table><script>setTimeout(()=>print(),200)<\/script></body></html>`);
+      w.document.close();
+    };
+  }
+  // Reposição em duas vistas: "Para repor" (saiu e ainda não teve entrada) e "O que saiu" (tudo o que saiu num período).
+  let restockView = 'pending', outPeriod = '30', outKind = 'part';
   async function restockTab(box) {
+    const seg = `<div class="fs-chips fs-restock-view">${[['pending', 'Para repor'], ['out', 'O que saiu']].map(([k, t]) => `<button type="button" class="fs-chip${restockView === k ? ' fs-chip-on' : ''}" data-rv="${k}" aria-pressed="${restockView === k}"><b>${t}</b></button>`).join('')}</div>`;
+    const bindSeg = () => box.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { restockView = b.dataset.rv; restockTab(box); });
+    if (restockView === 'out') { box.innerHTML = seg + '<div id="fsOut"></div>'; bindSeg(); return outflowView($('fsOut')); }
     let rows = []; try { rows = await api('/store/stock/restock'); } catch (err) { box.textContent = err.message; return; }
-    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Vendido e ainda não reposto (some quando você dá entrada no estoque).</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
-      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">repor ${r.pending}</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
+    box.innerHTML = `${seg}<div class="fs-row"><p class="nv-help fs-grow">Saiu (venda ou serviço) e ainda não foi reposto. Some quando você dá entrada no estoque. Para ver tudo o que saiu num período, toque em <b>O que saiu</b>.</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
+      <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b>${r.kind === 'part' ? ' <span class="fs-tag-svc">peça</span>' : ''}<br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.location ? ' · ' + esc(r.location) : ''}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">saiu ${r.pending} · repor</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
+    bindSeg();
     if ($('fsRestockPrint')) $('fsRestockPrint').onclick = () => {
       const w = window.open('', '_blank'); if (!w) { feedback('Libere pop-ups para imprimir.', true); return; }
       const total = rows.reduce((a, r) => a + (r.cost_cents || 0) * r.pending, 0);
@@ -2671,7 +2766,12 @@ ${view === 'sum' ? `
   }
 
   // ---------------- Integração com o painel ----------------
-  const css = `.fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
+  const css = `.fs-model-hit:empty{display:none}.fs-model-hit{margin:-4px 0 10px}.fs-hit-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}.fs-hit-list .fs-chip{text-align:left}
+.fs-part-loc{margin:14px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--nv-muted,#667085)}
+.fs-part-end{align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.fs-count{display:flex;flex-direction:column;font-size:11px;color:var(--nv-muted,#667085)}.fs-count input{width:74px;padding:7px 8px;font-size:16px;font-weight:600;text-align:center;border:1px solid #D0D5DD;border-radius:8px}
+.fs-more{position:relative}.fs-more summary{display:inline-block;list-style:none;cursor:pointer;padding:6px 10px;border:1px solid #D0D5DD;border-radius:8px;font-weight:700}.fs-more summary::-webkit-details-marker{display:none}.fs-more[open]>div{position:absolute;right:0;z-index:5;display:flex;flex-direction:column;gap:4px;background:#fff;border:1px solid #E4E7EC;border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(16,24,40,.12);min-width:170px}
+.fs-tag-warn{color:#B54708;font-weight:600}.fs-restock-view,.fs-part-filter{margin:8px 0}
+.fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
   @media(max-width:900px){.fs-grid{grid-template-columns:1fr}.fs-newsale{order:-1}}
   .fs-cashbar{position:relative}.fs-cashbar-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;margin-left:auto}.fs-cashbar:has(.fs-seller:not([hidden])) .fs-cashbar-side{padding-top:26px}
   .fs-seller{position:absolute;top:12px;right:16px;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--nv-muted)}.fs-seller[hidden]{display:none}

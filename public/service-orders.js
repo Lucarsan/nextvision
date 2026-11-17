@@ -172,7 +172,7 @@
         <div class="so-grid"><label class="nv-field">Valor de venda (R$)<input name="price" inputmode="decimal" value="${price}" placeholder="0,00"></label>
         <label class="nv-field">Custo (R$)<input name="cost" inputmode="decimal" value="${o.cost_cents != null ? (o.cost_cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}" placeholder="peça + gastos"></label>
         <div class="nv-field"><span>Lucro</span><b id="soProfit" class="so-profit">—</b></div></div>
-        <div class="nv-field"><span>Peça do estoque (baixa 1 quando o caixa receber a OS)</span><div id="soPart"></div></div>
+        <div class="nv-field"><span>Peça do estoque (baixa 1 quando o caixa receber a OS)</span><div id="soPart"></div><div id="soModelHit" class="fs-model-hit"></div></div>
         <div class="so-grid">
         <label class="nv-field">Prazo combinado<input type="date" name="due_on" value="${v('due_on')}"></label>
         <label class="nv-field">Garantia<select name="warranty_days">${opts.map(([d, t]) => `<option value="${d}" ${d === wd ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
@@ -193,13 +193,15 @@
     const money = el => el.value.trim() ? parseMoney(el.value) : null;
     const profit = () => { const p = money(f.elements.price), c = money(f.elements.cost); $('soProfit').textContent = Number.isFinite(p) && Number.isFinite(c) && p != null && c != null ? H().brl(p - c) : '—'; $('soProfit').className = 'so-profit' + (p != null && c != null && p < c ? ' fs-neg' : ''); };
     f.elements.accOtherText.oninput = () => { if (f.elements.accOtherText.value.trim()) f.elements.accOther.checked = true; };
-    f.elements.price.oninput = profit; f.elements.cost.oninput = profit; profit();
+    // Preço/custo que vieram da peça escolhida pelo aparelho: mudam junto se o aparelho mudar; digitou, fica o digitado.
+    let partAuto = false, priceAuto = false, costAuto = false, noAuto = false;
+    f.elements.price.oninput = () => { priceAuto = false; profit(); }; f.elements.cost.oninput = () => { costAuto = false; profit(); }; profit();
     const centsTxt = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
     const drawPart = () => {
       const box = $('soPart'); if (!box) return;
       if (part) {
         box.innerHTML = `<div class="fs-picked"><span><b>${esc(part.name)}${part.device_model ? ' ' + esc(part.device_model) : ''}</b> <small>${part.cost_cents != null ? 'custo ' + H().brl(part.cost_cents) : ''}${part.stock_qty != null ? ' · estoque ' + part.stock_qty : ''}</small></span><button type="button" class="fs-link" id="soPartX">Tirar peça</button></div>`;
-        $('soPartX').onclick = () => { part = null; drawPart(); }; return;
+        $('soPartX').onclick = () => { part = null; partAuto = false; noAuto = true; drawPart(); hits(false); }; return;
       }
       box.innerHTML = `<div class="fs-sugg"><input id="soPartQ" type="search" placeholder="Buscar peça: tela a32, bateria iphone…"><div id="soPartList" class="fs-results fs-drop"></div></div>`;
       const qi = $('soPartQ'), list = $('soPartList'); let tm;
@@ -207,11 +209,38 @@
         let rows = []; try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(qi.value.trim() || f.elements.model.value.trim())); } catch (e) { list.textContent = e.message; return; }
         if (document.activeElement !== qi) return;
         list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(p.name)}${p.device_model ? ' ' + esc(p.device_model) : ''}</b> <small>${p.cost_cents != null ? 'custo ' + H().brl(p.cost_cents) : 'sem custo'} · estoque ${p.stock_qty ?? '—'}</small></button>`).join('') || '<p>Nenhuma peça encontrada (cadastre em Estoque → Peças).</p>';
-        list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); part = rows[b.dataset.n]; if (part.cost_cents != null && !f.elements.cost.value.trim()) f.elements.cost.value = centsTxt(part.cost_cents); profit(); drawPart(); });
+        list.querySelectorAll('[data-n]').forEach(b => b.onmousedown = e => { e.preventDefault(); setPart(rows[b.dataset.n], false); });
       };
       qi.onfocus = load; qi.oninput = () => { clearTimeout(tm); tm = setTimeout(load, 200); }; qi.onblur = () => setTimeout(() => { if (list.isConnected) list.innerHTML = ''; }, 150);
     };
-    drawPart();
+    // Peça escolhida (na busca ou pelo aparelho): custo e preço do serviço vêm dela se estiverem vazios ou automáticos.
+    const setPart = (p, auto) => {
+      part = p; partAuto = auto; noAuto = false;
+      if (p.cost_cents != null && (!f.elements.cost.value.trim() || costAuto || !auto)) { f.elements.cost.value = centsTxt(p.cost_cents); costAuto = auto; }
+      if (p.price_cents > 0 && (!f.elements.price.value.trim() || priceAuto)) { f.elements.price.value = centsTxt(p.price_cents); priceAuto = true; }
+      if (!f.elements.service.value.trim()) f.elements.service.value = 'Troca de ' + p.name.toLowerCase().replace(/\s+(com|sem) aro$/, '');
+      profit(); drawPart(); $('soModelHit').innerHTML = '';
+    };
+    const clearAuto = () => { part = null; partAuto = false; if (priceAuto) { f.elements.price.value = ''; priceAuto = false; } if (costAuto) { f.elements.cost.value = ''; costAuto = false; } profit(); drawPart(); };
+    // Aparelho digitado (marca + modelo) → telas do estoque que servem. Uma só exata: já entra; várias: escolher.
+    let hitSeq = 0, hitTimer;
+    const hits = async apply => {
+      const box = $('soModelHit'); if (!box) return;
+      if (part && !partAuto) { box.innerHTML = ''; return; }
+      const model = f.elements.model.value.trim(), full = (f.elements.brand.value.trim() + ' ' + model).trim();
+      if (model.length < 2) { if (partAuto) clearAuto(); box.innerHTML = ''; return; }
+      const seq = ++hitSeq; let rows = [];
+      try { rows = await api(`/store/parts/match?model=${encodeURIComponent(full)}&service=${encodeURIComponent(f.elements.service.value.trim())}`); } catch { return; }
+      if (seq !== hitSeq || !box.isConnected) return;
+      const exact = rows.filter(r => r.match === 'exact');
+      if (partAuto && !rows.some(r => r.id === part.id)) clearAuto();
+      if (apply && !noAuto && exact.length === 1 && part?.id !== exact[0].id) { setPart(exact[0], true); return; }
+      const others = rows.filter(r => r.id !== part?.id);
+      box.innerHTML = others.length ? `<div class="nv-help">${part ? 'Outras peças' : 'Peça do estoque'} para <b>${esc(full)}</b>${!part && exact.length > 1 ? ' (escolha uma)' : ''}:</div><div class="fs-hit-list">${others.map((p, n) => `<button type="button" class="fs-chip" data-hit="${n}"><b>${esc(p.name)} · ${esc(p.device_model || '')}</b><small>${p.price_cents > 0 ? H().brl(p.price_cents) + ' · ' : ''}custo ${p.cost_cents != null ? H().brl(p.cost_cents) : '—'} · estoque ${p.stock_qty ?? '—'}${p.match === 'close' ? ' · parecido' : ''}</small></button>`).join('')}</div>` : '';
+      box.querySelectorAll('[data-hit]').forEach(b => b.onclick = () => setPart(others[b.dataset.hit], true));
+    };
+    for (const k of ['model', 'brand', 'service']) f.elements[k].addEventListener('input', () => { clearTimeout(hitTimer); hitTimer = setTimeout(() => hits(true), 350); });
+    drawPart(); if (isNew) hits(false);
     // Atalhos: defeitos e serviços mais usados (serviço cadastrado também preenche valor e custo, se vazios).
     (async () => {
       try { sugg = sugg || await api('/store/service-orders/suggestions'); } catch { return; }
@@ -220,8 +249,8 @@
       $('soSvcChips').innerHTML = sugg.services.map((x, i) => `<button type="button" class="fs-chip" data-s="${i}">${esc(x.name)}${x.price_cents ? `<small>${H().brl(x.price_cents)}</small>` : ''}</button>`).join('');
       f.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const el = f.elements.problem, t = sugg.problems[b.dataset.p]; el.value = el.value.trim() && !el.value.includes(t) ? el.value.trim() + ', ' + t : t; });
       f.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const x = sugg.services[b.dataset.s]; f.elements.service.value = x.name;
-        if (x.price_cents && !f.elements.price.value.trim()) f.elements.price.value = centsTxt(x.price_cents);
-        if (x.cost_cents != null && !f.elements.cost.value.trim()) f.elements.cost.value = centsTxt(x.cost_cents); profit(); });
+        if (x.price_cents && (!f.elements.price.value.trim() || priceAuto) && !(part && priceAuto)) { f.elements.price.value = centsTxt(x.price_cents); priceAuto = true; }
+        if (x.cost_cents != null && !f.elements.cost.value.trim()) { f.elements.cost.value = centsTxt(x.cost_cents); costAuto = true; } profit(); hits(true); });
     })();
     if (isNew) {
       const q = $('soCustQ'), drop = $('soCustDrop'); let timer;

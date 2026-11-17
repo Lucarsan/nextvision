@@ -1,0 +1,758 @@
+[
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A01",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 150,
+  "price": 160
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A01 Core",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A02/A12",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A02S/A03S/A03/A04E",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A03 Core",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A05",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A06",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A07",
+  "qty": 0,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A13/A23/M23",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 170,
+  "price": 180
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A14 4G",
+  "qty": 1,
+  "cost": 100,
+  "sheet_price": 150,
+  "price": 160
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A14 5G",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A15",
+  "qty": 0,
+  "cost": 110,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung J5 Prime",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung J6",
+  "qty": 4,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung J7 Prime",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung J7 Pro",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 01",
+  "name": "Tela",
+  "device_model": "Samsung A05S",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela",
+  "device_model": "Samsung A16",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A20",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela",
+  "device_model": "Samsung A20S",
+  "qty": 0,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela",
+  "device_model": "Samsung A21S",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 160,
+  "price": 170
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A22",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A25",
+  "qty": 1,
+  "cost": 110,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A30",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A30S",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A31",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A32 4G",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A51",
+  "qty": 2,
+  "cost": 100,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 02",
+  "name": "Tela com aro",
+  "device_model": "Samsung A54",
+  "qty": 1,
+  "cost": 100,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela com aro",
+  "device_model": "Moto E6i",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "Moto E7/E7 Power/E7i Power",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela sem aro",
+  "device_model": "Moto E7 Plus/G9 Play",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "Moto E13/E25",
+  "qty": 2,
+  "cost": 100,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "Moto E20",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 170,
+  "price": 180
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "Moto E22",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 170,
+  "price": 180
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "Moto Edge 30 Neo",
+  "qty": 1,
+  "cost": 100,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "iPhone 8 Plus",
+  "qty": 1,
+  "cost": 100,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "iPhone 11",
+  "qty": 1,
+  "cost": 120,
+  "sheet_price": 240,
+  "price": 250
+ },
+ {
+  "location": "Caixa 03",
+  "name": "Tela",
+  "device_model": "iPhone 11 Pro Max",
+  "qty": 1,
+  "cost": 120,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G04/G04S/G24/G14",
+  "qty": 2,
+  "cost": 70,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G05",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G06",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela com aro",
+  "device_model": "Moto G9 Power",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela sem aro",
+  "device_model": "Moto G9 Power",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G10/G20/G30",
+  "qty": 1,
+  "cost": 70,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G13/G23/G34/G45/G53",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G14/G32/G54/G55/G64/G73",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G22/E32",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G50",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G60",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 04",
+  "name": "Tela",
+  "device_model": "Moto G62",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi A2",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi A5",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 8",
+  "qty": 2,
+  "cost": 70,
+  "sheet_price": 180,
+  "price": 190
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 9A",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 9T",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 9 Pro",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 10",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 10S",
+  "qty": 0,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 11",
+  "qty": 0,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 12",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 12",
+  "qty": 2,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 12S",
+  "qty": 3,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 13",
+  "qty": 0,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 13C",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 13 4G/Poco M7 Pro",
+  "qty": 0,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi Note 14/Note 13 Pro",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 05",
+  "name": "Tela",
+  "device_model": "Redmi 14C",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Poco F3/F4",
+  "qty": 1,
+  "cost": 110,
+  "sheet_price": 220,
+  "price": 230
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Poco M3",
+  "qty": 1,
+  "cost": 75,
+  "sheet_price": 185,
+  "price": 195
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Poco X4 Pro",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Poco X5",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Poco C71",
+  "qty": 1,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme C35",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme C51/C53/Note 50",
+  "qty": 2,
+  "cost": 90,
+  "sheet_price": 200,
+  "price": 210
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme C55",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme C61/C63/Note 60",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme Note 60X",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Realme C65",
+  "qty": 0,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Infinix 9",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "Tecno Spark 30/Infinix Hot 50",
+  "qty": 2,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "LG K41",
+  "qty": 1,
+  "cost": 80,
+  "sheet_price": 190,
+  "price": 200
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "LG K50S",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ },
+ {
+  "location": "Caixa 06",
+  "name": "Tela",
+  "device_model": "LG K51S",
+  "qty": 1,
+  "cost": 85,
+  "sheet_price": 195,
+  "price": 205
+ }
+]

@@ -114,6 +114,25 @@ test('painel: achar pelo pet no caixa e conferir os serviços do dia', {
     await page.waitForSelector('.fs-day h2:has-text("Serviços do período"), .fs-day h2:has-text("Serviços do dia")');
     await page.waitForSelector('.fs-day-table:has-text("Tosa Higiênica")');
     assert.match(await page.locator('.fs-goal-stats').innerText(), /2\s*serviços[\s\S]*1\s*adicionais[\s\S]*R\$\s*75,00\s*total/);
+    // Resumo por serviço (padrão no período): quantidade (pets) e valor (média por pet), totais de banho e tosa.
+    if (await page.locator('[data-ds-view="sum"][aria-selected="true"]').count() === 0) await page.locator('[data-ds-view="sum"]').click();
+    await page.waitForSelector('.fs-ds-sum');
+    const sum = await page.locator('.fs-ds-sum').innerText();
+    assert.match(sum, /Banho de cheiro\s*1 \(1\)\s*R\$\s*50,00 \(R\$\s*50,00\)/);
+    assert.match(sum, /Tosa Higiênica\s*adicional\s*1 \(1\)\s*R\$\s*25,00/);
+    assert.match(sum, /Total\s*2 \(2\)\s*R\$\s*75,00 \(R\$\s*37,50\)/);
+    assert.match(await page.locator('.fs-ds-groups').innerText(), /Banhos\s*1 \(1\)[\s\S]*Tosas\s*1 \(1\)/);
+    const [dlSum] = await Promise.all([page.waitForEvent('download'), page.locator('#fsDayCsv').click()]);
+    const csvSum = await (await dlSum.createReadStream()).toArray().then(b => Buffer.concat(b).toString('utf8'));
+    assert.match(dlSum.suggestedFilename(), /^resumo-servicos-/);
+    assert.match(csvSum, /"Banho de cheiro";"Não";"1";"1";"50,00";"50,00"/); assert.match(csvSum, /"Total";"";"2";"2";"75,00";"37,50"/);
+    await page.screenshot(shot('servicos-resumo'));
+    // Clicar no serviço do resumo abre a lista só dele.
+    await page.locator('[data-ds-svc]', { hasText: 'Banho de cheiro' }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.fs-day-table .fs-day-row:not(.fs-day-h)').length === 1);
+    assert.match(await page.locator('.fs-day-table').innerText(), /Banho de cheiro/);
+    await page.locator('#fsDsSvc').selectOption('');
+    await page.waitForFunction(() => document.querySelectorAll('.fs-day-table .fs-day-row:not(.fs-day-h)').length === 2);
     await page.locator('#fsDsKind').selectOption('addon');
     await page.waitForFunction(() => document.querySelectorAll('.fs-day-table .fs-day-row:not(.fs-day-h)').length === 1);
     assert.match(await page.locator('.fs-day-table').innerText(), /Tosa Higiênica/);

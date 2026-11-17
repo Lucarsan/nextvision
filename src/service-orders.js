@@ -62,6 +62,8 @@ export function registerServiceOrders(app, { q, db, route, bad, valid, audit, gu
     if (p && !p.canceled_at) {
       if (want) {
         const old = (await c.query('SELECT payload FROM pending_sales WHERE id=$1', [p.id])).rows[0].payload;
+        // "Não usou peça" marcado na reposição continua valendo enquanto a OS não tiver peça.
+        if (!item.part_id && old.items?.[0]?.part_none) item.part_none = true;
         await c.query('UPDATE pending_sales SET payload=$1,total_cents=$2,description=$3 WHERE id=$4', [JSON.stringify({ ...old, items: [item], description: 'OS ' + os.number }), os.price_cents, 'OS ' + os.number, p.id]);
       } else await c.query("UPDATE pending_sales SET canceled_at=now(),canceled_by=$2,cancel_reason=$3 WHERE id=$1", [p.id, userId, `OS ${os.number} saiu do caixa`]);
       return null;

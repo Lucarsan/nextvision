@@ -657,12 +657,28 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       ORDER BY s.created_at DESC LIMIT 300`, [tid(req)])).rows;
     // Só tipos de peça que a loja tem cadastrados (com telas cadastradas, "Troca de conector" não aparece).
     const kinds = new Set(parts.map(p => fold(p.name).trim().split(/\s+/)[0]));
-    const byPart = new Map();
-    for (const u of uses) { if (!byPart.has(u.part_id)) byPart.set(u.part_id, []); byPart.get(u.part_id).push(u); }
+    // "A receber" (OS e vendas para pagar depois): o serviço já foi feito, então a peça já conta para repor.
+    // Peça escolhida (ou a única que serve pelo aparelho) entra na conta; a baixa no estoque continua no recebimento.
+    const pend = (await q(`SELECT p.id,p.number,p.created_at,p.total_cents,p.description,p.payload,p.customer_id,c.name customer_name,c.phone customer_phone
+      FROM pending_sales p JOIN customers c ON c.id=p.customer_id WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL ORDER BY p.created_at DESC`, [tid(req)])).rows;
+    const byPart = new Map(), partIds = new Set(parts.map(p => p.id)), pendOpen = [];
+    const add = (pid, u) => { if (!byPart.has(pid)) byPart.set(pid, { paid: [], due: [] }); byPart.get(pid)[u.due ? 'due' : 'paid'].push(u); };
+    for (const u of uses) add(u.part_id, u);
+    for (const p of pend) (p.payload.items || []).forEach((it, idx) => {
+      if (!it.service || it.part_none || !kinds.has(partKindFor(it.service))) return;
+      const base = { pending_id: p.id, idx, name: it.service, device_model: it.device_model || null, unit_price_cents: it.unit_price_cents, pending_number: p.number, created_at: p.created_at,
+        total_cents: p.total_cents, description: p.description, customer_id: p.customer_id, customer_name: p.customer_name, customer_phone: p.customer_phone,
+        items: (p.payload.items || []).map(i => ({ name: i.service || i.name || 'Item', device_model: i.device_model || null, total_cents: (i.unit_price_cents ?? 0) * (i.quantity || 1) })), due: true };
+      const exact = !it.part_id && it.device_model ? matchParts(parts, it.device_model, it.service).filter(x => x.match === 'exact') : [];
+      const pid = it.part_id && partIds.has(it.part_id) ? it.part_id : exact.length === 1 ? exact[0].id : null;
+      if (pid) add(pid, { ...base, auto: !it.part_id });
+      else pendOpen.push({ ...base, suggestions: it.device_model ? matchParts(parts, it.device_model, it.service).slice(0, 6) : [] });
+    });
     res.set('Cache-Control', 'no-store');
     res.json({
-      parts: parts.filter(p => p.restock_pending > 0).map(p => ({ ...p, uses: (byPart.get(p.id) || []).slice(0, p.restock_pending) })),
-      unidentified: open.filter(x => kinds.has(partKindFor(x.name))).map(x => ({ ...x, suggestions: x.device_model ? matchParts(parts, x.device_model, x.name).slice(0, 6) : [] }))
+      parts: parts.map(p => { const g = byPart.get(p.id) || { paid: [], due: [] }; return { ...p, due_count: g.due.length, uses: [...g.due, ...g.paid.slice(0, p.restock_pending)] }; })
+        .filter(p => p.restock_pending > 0 || p.due_count > 0),
+      unidentified: [...pendOpen, ...open.filter(x => kinds.has(partKindFor(x.name))).map(x => ({ ...x, suggestions: x.device_model ? matchParts(parts, x.device_model, x.name).slice(0, 6) : [] }))]
     });
   }));
   // Liga um serviço já feito à peça que ele usou (entra na reposição; o estoque não muda) ou marca "não usou peça".
@@ -682,6 +698,26 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         await c.query('UPDATE sale_items SET restock_part_id=$1 WHERE id=$2', [v.part_id, it.id]);
       }
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, v.none ? 'service_no_part' : 'service_part', 'sale_item', it.id]);
+      await c.query('COMMIT'); res.json({ ok: true });
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
+  // "A receber": escolhe a peça do serviço (vai junto ao receber: baixa no estoque e reposição) ou "não usou peça".
+  // Se a venda veio de uma OS, a peça também fica na OS.
+  app.post('/api/store/sales/pending/:id/items/:idx/part', ...guard, route(async (req, res) => {
+    const idx = Number(req.params.idx);
+    if (!uuid.safeParse(req.params.id).success || !Number.isInteger(idx) || idx < 0 || idx > 300) return bad(res, 400, 'Item inválido');
+    const v = valid(z.object({ part_id: uuid.optional(), none: z.literal(true).optional() }).strict().refine(x => !!x.part_id !== !!x.none, 'Informe a peça ou "não usou peça"'), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const p = (await c.query('SELECT id,payload FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [req.params.id, tid(req)])).rows[0];
+      const it = p?.payload.items?.[idx];
+      if (!it?.service) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou mudou. Atualize a lista.'); }
+      if (v.part_id && !(await c.query("SELECT 1 FROM products WHERE id=$1 AND tenant_id=$2 AND active AND kind='part'", [v.part_id, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça não encontrada'); }
+      if (v.part_id) { it.part_id = v.part_id; delete it.part_none; } else { delete it.part_id; it.part_none = true; }
+      await c.query('UPDATE pending_sales SET payload=$1 WHERE id=$2', [JSON.stringify(p.payload), p.id]);
+      await c.query('UPDATE service_orders SET part_id=$1,updated_at=now() WHERE pending_sale_id=$2 AND tenant_id=$3', [v.part_id || null, p.id, tid(req)]);
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, v.none ? 'service_no_part' : 'service_part', 'pending_sale', p.id]);
       await c.query('COMMIT'); res.json({ ok: true });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
@@ -903,7 +939,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         // Serviço: preço cobrado, custo, fornecedor, aparelho e garantia. part_id = peça do estoque usada (baixa 1).
         // catalog_id: serviço cadastrado (pet shop: adicional ou principal, para comissão e metas).
         z.object({ service: z.string().trim().min(2).max(120), unit_price_cents: cents, cost_cents: cents.nullable().optional(), supplier: z.string().trim().max(80).optional(),
-          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), warranty_days: z.number().int().min(0).max(3650).optional(), catalog_id: uuid.optional() }).strict()
+          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), part_none: z.boolean().optional(), warranty_days: z.number().int().min(0).max(3650).optional(), catalog_id: uuid.optional() }).strict()
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
@@ -1209,7 +1245,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         // ela é usada (baixa 1 e entra na reposição), como se tivesse sido escolhida.
         let tenantParts = null;
         const autoPart = async it => {
-          if (it.part_id || !it.device_model || !partKindFor(it.service)) return null;
+          if (it.part_id || it.part_none || !it.device_model || !partKindFor(it.service)) return null;
           tenantParts ??= (await c.query(`SELECT p.id,p.name,p.cost_cents,p.device_model,p.stock_qty,s.name supplier_name FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
             WHERE p.tenant_id=$1 AND p.active AND p.kind='part' AND p.device_model IS NOT NULL`, [tid(req)])).rows;
           const exact = matchParts(tenantParts, it.device_model, it.service).filter(x => x.match === 'exact');
@@ -1223,7 +1259,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
               cost_cents: it.cost_cents !== undefined && it.cost_cents !== null ? it.cost_cents : part?.cost_cents ?? null,
               supplier: cleanName(it.supplier) || part?.supplier_name || null, device_model: cleanName(it.device_model) || part?.device_model || null,
               warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1,
-              catalog_id: it.catalog_id || null, addon: !!(it.catalog_id && catById.get(it.catalog_id)?.addon) });
+              catalog_id: it.catalog_id || null, addon: !!(it.catalog_id && catById.get(it.catalog_id)?.addon), part_none: !part && !!it.part_none });
             continue;
           }
           const prod = it.product_id ? byId.get(it.product_id) : null;
@@ -1299,9 +1335,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const cq = (sql, params) => c.query(sql, params);
       for (const x of items) {
         const vr = x.vid ? { id: x.vid } : null;
-        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift,catalog_id,addon)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
-          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift, x.catalog_id || null, !!x.addon]);
+        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift,catalog_id,addon,part_none)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
+          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift, x.catalog_id || null, !!x.addon, !!x.part_none]);
         if (!x.id) continue;
         // Baixa no estoque (do modelo, ou do produto quando controla estoque) e marca para reposição.
         // Modelo contado no total: o modelo só marca a reposição; a baixa é no produto.

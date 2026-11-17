@@ -79,6 +79,38 @@ test('peças: lugar, conferência, peça pelo aparelho e o que saiu', { skip }, 
     semNow = (await api('/store/products?kind=part&q=g9 power')).find(p => p.id === sem.id);
     assert.deepEqual([semNow.stock_qty, semNow.restock_pending], [sem.stock_qty, sem.restock_pending]);
     assert.ok(s5.sale.id);
+
+    // A receber (OS / pagar depois): já conta para repor; a peça baixa do estoque só ao receber.
+    const cli = await api('/customers', { method: 'POST', body: { name: 'Eliseu', phone: '85977770000' } }, 201);
+    const a12now = (await api('/store/products?kind=part&q=a12'))[0];
+    const pa = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, items: [{ service: 'OS 7 · Troca de tela', unit_price_cents: 19500, device_model: 'Samsung A12' }] } }, 201);
+    const pb = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, description: 'cliente pediu urgência', items: [{ service: 'OS 8 · Troca de tela', unit_price_cents: 20500, device_model: 'Motorola G9 Power' }] } }, 201);
+    rs = await api('/store/stock/restock/services');
+    let rowA12 = rs.parts.find(p => p.id === a12.id);
+    assert.equal(rowA12.due_count, 1); assert.equal(rowA12.uses[0].pending_number, pa.number); assert.equal(rowA12.uses[0].customer_name, 'Eliseu');
+    const dueG9 = rs.unidentified.find(x => x.pending_id === pb.id);
+    assert.equal(dueG9.suggestions.length, 2); assert.equal(dueG9.description, 'cliente pediu urgência'); assert.equal(dueG9.total_cents, 20500);
+    assert.equal((await api('/store/products?kind=part&q=a12'))[0].stock_qty, a12now.stock_qty, 'a receber não baixa o estoque');
+    await api(`/store/sales/pending/${pb.id}/items/0/part`, { method: 'POST', body: { part_id: sem.id } });
+    rs = await api('/store/stock/restock/services');
+    assert.equal(rs.parts.find(p => p.id === sem.id).due_count, 1); assert.ok(!rs.unidentified.some(x => x.pending_id === pb.id));
+    assert.equal((await request(`/store/sales/pending/${pb.id}/items/3/part`, { method: 'POST', body: { none: true } })).status, 409);
+    // Recebeu: baixa 1 da peça e passa de "a receber" para reposição normal (sem contar duas vezes).
+    await api(`/store/sales/pending/${pa.id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);
+    await api(`/store/sales/pending/${pb.id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);
+    rs = await api('/store/stock/restock/services');
+    rowA12 = rs.parts.find(p => p.id === a12.id);
+    assert.equal(rowA12.due_count, 0); assert.equal(rowA12.stock_qty, a12now.stock_qty - 1); assert.equal(rowA12.restock_pending, a12now.restock_pending + 1);
+    const semRow = rs.parts.find(p => p.id === sem.id);
+    assert.deepEqual([semRow.due_count, semRow.stock_qty, semRow.restock_pending], [0, sem.stock_qty - 1, sem.restock_pending + 1]);
+    // "Não usou peça" num a receber: ao receber, não puxa a tela sozinho.
+    const pc = await api('/store/sales/pending', { method: 'POST', body: { customer_id: cli.id, items: [{ service: 'Troca de tela', unit_price_cents: 100, device_model: 'Note 8' }] } }, 201);
+    const n8 = (await api('/store/products?kind=part&q=note 8'))[0];
+    assert.equal((await api('/store/stock/restock/services')).parts.find(p => p.id === n8.id).due_count, 1, 'Note 8: única tela, conta sozinho');
+    await api(`/store/sales/pending/${pc.id}/items/0/part`, { method: 'POST', body: { none: true } });
+    assert.equal((await api('/store/stock/restock/services')).parts.find(p => p.id === n8.id)?.due_count || 0, 0);
+    await api(`/store/sales/pending/${pc.id}/pay`, { method: 'POST', body: { payment_method: 'pix' } }, 201);
+    assert.equal((await api('/store/products?kind=part&q=note 8'))[0].stock_qty, n8.stock_qty);
   } finally { await f.cleanup(); }
 });
 
@@ -119,23 +151,28 @@ test('painel: conferir peças, tela pelo aparelho no caixa e na OS, o que saiu',
     // Reposição: botões Produtos e Serviços; serviço antigo sem peça aparece com a tela sugerida.
     await f.api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ service: 'Troca de tela', unit_price_cents: 18000, device_model: 'Galaxy A14 5G' }] } }, 201);
     await f.api('/store/sales', { method: 'POST', body: { new_customer: { name: 'Carla Lima', phone: '85988887777' }, payment_method: 'pix', description: 'tela do iPhone da filha', items: [{ service: 'Troca de tela', unit_price_cents: 18000 }] } }, 201);
+    await f.api('/store/sales/pending', { method: 'POST', body: { new_customer: { name: 'Eliseu', phone: '85977770000' }, items: [{ service: 'OS 7 · Troca de tela', unit_price_cents: 19000, device_model: 'XIAOMI Note 8' }] } }, 201);
     await page.locator('[data-ptab=restock]').click(); await page.waitForSelector('[data-rv]');
     assert.deepEqual(await page.locator('[data-rv]').allInnerTexts(), ['Produtos', 'Serviços']);
     await page.locator('[data-rv=part]').click();
+    await page.waitForSelector('.fs-sale:has-text("a receber nº 1")');
+    assert.match(await page.locator('.fs-sale', { hasText: 'Tela · Redmi Note 8' }).first().innerText(), /a receber nº 1 · Eliseu · XIAOMI Note 8[\s\S]*saiu 1 · repor[\s\S]*1 a receber/);
+    await page.locator('.fs-sale', { hasText: 'Tela · Redmi Note 8' }).first().locator('[data-peek-btn]').click();
+    assert.match(await page.locator('.fs-sale-peek:not([hidden])').innerText(), /A receber nº 1[\s\S]*ainda não pago[\s\S]*Eliseu[\s\S]*Total a receber\s*R\$\s?190,00/);
     await page.waitForSelector('.fs-sale:has-text("Tela · Samsung A14 5G")');
     assert.match(await page.locator('#fsRsSvc').innerText(), /Tela · Samsung A14 5G[\s\S]*Saiu em: .*Galaxy A14 5G[\s\S]*saiu 1 · repor/, 'serviço com aparelho já baixou a tela sozinho');
     assert.match(await page.locator('#fsRsSvc').innerText(), /Serviços sem peça identificada \(1\)[\s\S]*não informado/);
     // Ver a venda sem sair da reposição: cliente, o que foi escrito, itens, total e pagamento.
     assert.match(await page.locator('.fs-rs-open').innerText(), /Cliente: Carla Lima[\s\S]*Escrito na venda: Troca de tela · tela do iPhone da filha/);
-    await page.locator('.fs-rs-open [data-sale-open]').click();
+    await page.locator('.fs-rs-open [data-peek-btn]').click();
     await page.waitForSelector('.fs-rs-open .fs-sale-peek:not([hidden])');
     assert.match(await page.locator('.fs-rs-open .fs-sale-peek').innerText(), /Venda nº 2[\s\S]*Carla Lima · 85988887777[\s\S]*Troca de tela[\s\S]*Total pago\s*R\$\s?180,00[\s\S]*Pagamento: Pix/);
     await page.screenshot(shot('reposicao-ver-venda'));
-    await page.locator('.fs-rs-open [data-sale-open]').click();
+    await page.locator('.fs-rs-open [data-peek-btn]').click();
     assert.equal(await page.locator('.fs-rs-open .fs-sale-peek').isHidden(), true);
     await page.locator('[data-pick]').click(); await page.locator('[data-pickbox] input').fill('note 8');
     await page.locator('[data-pickbox] button', { hasText: 'Redmi Note 8' }).click();
-    await page.waitForFunction(() => !document.querySelector('.fs-rs-open') && /Tela · Redmi Note 8/.test(document.getElementById('fsRsSvc')?.innerText || ''));
+    await page.waitForFunction(() => !document.querySelector('.fs-rs-open') && /saiu 2 · repor/.test(document.getElementById('fsRsSvc')?.innerText || ''));
     await page.screenshot(shot('reposicao-servicos'));
     await page.locator('[data-close-dialog]').first().click();
 

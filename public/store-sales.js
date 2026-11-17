@@ -1878,54 +1878,70 @@
   async function restockServices(box, again) {
     let d; try { d = await api('/store/stock/restock/services'); } catch (err) { box.textContent = err.message; return; }
     if (!box.isConnected) return;
-    const total = d.parts.reduce((a, p) => a + p.restock_pending, 0), cost = d.parts.reduce((a, p) => a + (p.cost_cents || 0) * p.restock_pending, 0);
-    const use = u => `<button type="button" class="fs-link" data-sale-open="${u.sale_id}" data-sale-box="u${u.id}">${dmy(u.created_at)} · venda nº ${u.sale_number}${u.customer_name ? ' · ' + esc(u.customer_name) : ''}${u.device_model ? ' · ' + esc(u.device_model) : ''}</button>`;
+    const qty = p => p.restock_pending + (p.due_count || 0);
+    const total = d.parts.reduce((a, p) => a + qty(p), 0), cost = d.parts.reduce((a, p) => a + (p.cost_cents || 0) * qty(p), 0);
+    // Cada serviço (pago ou a receber) tem uma chave para abrir os detalhes e um endereço para ligar à peça.
+    const keyOf = x => x.pending_id ? `p${x.pending_id}_${x.idx}` : `o${x.id}`;
+    const urlOf = x => x.pending_id ? `/store/sales/pending/${x.pending_id}/items/${x.idx}/part` : `/store/sale-items/${x.id}/part`;
+    const where = x => x.due ? `<span class="fs-tag-due">a receber nº ${x.pending_number}</span>` : `venda nº ${x.sale_number}`;
+    const all = [];
+    const use = u => { all.push(u); return `<button type="button" class="fs-link" data-peek-btn="${all.length - 1}">${dmy(u.created_at)} · ${where(u)}${u.customer_name ? ' · ' + esc(u.customer_name) : ''}${u.device_model ? ' · ' + esc(u.device_model) : ''}</button>`; };
     const exactOf = x => x.suggestions.filter(p => p.match === 'exact');
-    const sug = x => x.suggestions.map(p => `<button type="button" class="fs-chip${p.match === 'exact' && exactOf(x).length === 1 ? ' fs-chip-on' : ''}" data-link="${x.id}:${p.id}"><b>${esc(partLabel(p))}</b><small>${p.location ? esc(p.location) + ' · ' : ''}estoque ${p.stock_qty ?? '—'}${p.match === 'close' ? ' · parecido' : ''}</small></button>`).join('');
     const sure = d.unidentified.filter(x => exactOf(x).length === 1);
-    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Peças (telas…) que saíram nos serviços e ainda não foram repostas. Somem quando a compra chegar (botão <b>Chegou</b>).</p><button type="button" class="nv-button" id="fsRsPrint"${d.parts.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
-      ${d.parts.length ? `<p class="nv-help">${total} peça(s) para repor · custo estimado ${brl(cost)}</p>` : ''}
-      <div class="nv-list">${d.parts.map(p => `<div class="fs-sale"><div><b>${esc(partLabel(p))}</b><br><small>${p.location ? esc(p.location) + ' · ' : ''}estoque agora <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.cost_cents != null ? ' · custo ' + brl(p.cost_cents) : ''}${p.supplier_name ? ' · ' + esc(p.supplier_name) : ''}</small>
-          ${p.uses.length ? `<br><small class="nv-help">Saiu em: ${p.uses.map(use).join(' | ')}</small>${p.uses.map(u => `<div class="fs-sale-peek" data-peek="u${u.id}" hidden></div>`).join('')}` : ''}</div>
-        <div class="fs-sale-end"><b class="fs-neg">saiu ${p.restock_pending} · repor</b><button type="button" class="nv-button secondary fs-small" data-rs-in="${p.id}">Chegou</button></div></div>`).join('') || '<p class="nv-help">Nenhuma peça para repor.</p>'}</div>
-      ${d.unidentified.length ? `<h3 class="fs-rs-h">Serviços sem peça identificada (${d.unidentified.length})</h3>
-        <div class="fs-row"><p class="nv-help fs-grow">Serviços de tela, bateria… feitos sem escolher a peça do estoque. Toque na peça usada para ela entrar na reposição (o estoque não muda, porque já foi contado).</p>${sure.length ? `<button type="button" class="nv-button secondary" id="fsRsAll">Confirmar as ${sure.length} marcadas</button>` : ''}</div>
-        <div class="nv-list">${d.unidentified.map(x => `<div class="fs-sale fs-rs-open"><div class="fs-grow"><b>${esc(x.name)}</b> <small>${dmy(x.created_at)} ${hhmm(x.created_at)} · venda nº ${x.sale_number} · ${brl(x.unit_price_cents)}</small> <button type="button" class="nv-button secondary fs-small" data-sale-open="${x.sale_id}" data-sale-box="o${x.id}">${FPIcon('receipt')}Ver venda</button>
+    const sug = (x, n) => x.suggestions.map((p, m) => `<button type="button" class="fs-chip${p.match === 'exact' && exactOf(x).length === 1 ? ' fs-chip-on' : ''}" data-link="${n}:${m}"><b>${esc(partLabel(p))}</b><small>${p.location ? esc(p.location) + ' · ' : ''}estoque ${p.stock_qty ?? '—'}${p.match === 'close' ? ' · parecido' : ''}</small></button>`).join('');
+    const partsHtml = d.parts.map(p => { const btns = p.uses.map(use).join(' | '), first = all.length - p.uses.length;
+      return `<div class="fs-sale"><div><b>${esc(partLabel(p))}</b><br><small>${p.location ? esc(p.location) + ' · ' : ''}estoque agora <b class="${p.stock_qty != null && p.stock_qty <= 0 ? 'fs-neg' : ''}">${p.stock_qty ?? '—'}</b>${p.cost_cents != null ? ' · custo ' + brl(p.cost_cents) : ''}${p.supplier_name ? ' · ' + esc(p.supplier_name) : ''}</small>
+          ${p.uses.length ? `<br><small class="nv-help">Saiu em: ${btns}</small>${p.uses.map((u, i) => `<div class="fs-sale-peek" data-peek="${first + i}" hidden></div>`).join('')}` : ''}</div>
+        <div class="fs-sale-end"><b class="fs-neg">saiu ${qty(p)} · repor</b>${p.due_count ? `<small class="nv-help">${p.due_count} a receber</small>` : ''}<button type="button" class="nv-button secondary fs-small" data-rs-in="${p.id}">Chegou</button></div></div>`; }).join('');
+    const openHtml = d.unidentified.map((x, n) => { all.push(x); const k = all.length - 1;
+      return `<div class="fs-sale fs-rs-open"><div class="fs-grow"><b>${esc(x.name)}</b> <small>${dmy(x.created_at)} ${hhmm(x.created_at)} · ${where(x)} · ${brl(x.unit_price_cents)}</small> <button type="button" class="nv-button secondary fs-small" data-peek-btn="${k}">${FPIcon('receipt')}Ver ${x.due ? 'a receber' : 'venda'}</button>
             <br><small>Cliente: ${x.customer_name ? custLink(x.customer_id, '<b>' + esc(x.customer_name) + '</b>') : 'sem cliente'} · Aparelho: ${x.device_model ? '<b>' + esc(x.device_model) + '</b>' : '<span class="fs-tag-warn">não informado</span>'}</small>
             ${x.description ? `<br><small>Escrito na venda: <i>${esc(x.description)}</i></small>` : ''}
-            <div class="fs-sale-peek" data-peek="o${x.id}" hidden></div>
-            <div class="fs-hit-list">${sug(x)}<button type="button" class="fs-chip" data-pick="${x.id}"><b>Outra peça…</b></button><button type="button" class="fs-chip" data-none="${x.id}"><b>Não usou peça</b></button></div><div class="fs-sugg" data-pickbox="${x.id}"></div></div></div>`).join('')}</div>` : ''}`;
-    const link = async (id, body) => { try { await api(`/store/sale-items/${id}/part`, 'POST', body); } catch (err) { feedback(err.message, true); throw err; } };
-    // Ver a venda aqui mesmo (abre e fecha): cliente, telefone, vendedor, itens com preço, pagamento e o que foi escrito.
-    box.querySelectorAll('[data-sale-open]').forEach(b => b.onclick = async () => {
-      const peek = box.querySelector(`[data-peek="${b.dataset.saleBox}"]`); if (!peek) return;
-      if (!peek.hidden) { peek.hidden = true; return; }
-      let r; try { r = await api(`/store/sales/${b.dataset.saleOpen}/receipt`); } catch (err) { feedback(err.message, true); return; }
-      const when = new Date(r.created_at).toLocaleString('pt-BR', { timeZone: r.timezone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-      peek.innerHTML = `<div class="fs-peek-h"><b>Venda nº ${r.sale_number}</b> · ${when}${r.canceled_at ? ' · <span class="fs-neg">cancelada: ' + esc(r.cancel_reason || '') + '</span>' : ''}</div>
+            <div class="fs-sale-peek" data-peek="${k}" hidden></div>
+            <div class="fs-hit-list">${sug(x, n)}<button type="button" class="fs-chip" data-pick="${n}"><b>Outra peça…</b></button><button type="button" class="fs-chip" data-none="${n}"><b>Não usou peça</b></button></div><div class="fs-sugg" data-pickbox="${n}"></div></div></div>`; }).join('');
+    box.innerHTML = `<div class="fs-row"><p class="nv-help fs-grow">Peças (telas…) que saíram nos serviços, pagos ou <b>a receber</b>, e ainda não foram repostas. Somem quando a compra chegar (botão <b>Chegou</b>).</p><button type="button" class="nv-button" id="fsRsPrint"${d.parts.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
+      ${d.parts.length ? `<p class="nv-help">${total} peça(s) para repor · custo estimado ${brl(cost)}</p>` : ''}
+      <div class="nv-list">${partsHtml || '<p class="nv-help">Nenhuma peça para repor.</p>'}</div>
+      ${d.unidentified.length ? `<h3 class="fs-rs-h">Serviços sem peça identificada (${d.unidentified.length})</h3>
+        <div class="fs-row"><p class="nv-help fs-grow">Serviços de tela, bateria… sem a peça do estoque escolhida. Toque na peça usada para ela entrar na reposição. Nos pagos o estoque não muda (já foi contado); nos <b>a receber</b> a peça baixa do estoque quando o caixa receber.</p>${sure.length ? `<button type="button" class="nv-button secondary" id="fsRsAll">Confirmar as ${sure.length} marcadas</button>` : ''}</div>
+        <div class="nv-list">${openHtml}</div>` : ''}`;
+    const link = async (x, body) => { try { await api(urlOf(x), 'POST', body); } catch (err) { feedback(err.message, true); throw err; } };
+    // Detalhes ali mesmo (abre e fecha). Venda paga: comprovante do servidor; a receber: o que está guardado nela.
+    const peekPaid = r => { const when = new Date(r.created_at).toLocaleString('pt-BR', { timeZone: r.timezone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return `<div class="fs-peek-h"><b>Venda nº ${r.sale_number}</b> · ${when}${r.canceled_at ? ' · <span class="fs-neg">cancelada: ' + esc(r.cancel_reason || '') + '</span>' : ''}</div>
         <div>Cliente: ${r.customer_name ? custLink(r.customer_id, '<b>' + esc(r.customer_name) + '</b>') + (r.customer_phone ? ' · ' + esc(r.customer_phone) : '') : 'sem cliente'}${r.seller_name ? ' · vendedor: ' + esc(r.seller_name) : ''}${r.order_number ? ' · pedido ' + esc(r.order_number) : ''}</div>
         ${r.description ? `<div>Escrito na venda: <i>${esc(r.description)}</i></div>` : ''}
         <table class="fs-peek-t">${r.items.map(i => `<tr><td>${i.quantity > 1 ? i.quantity + 'x ' : ''}${esc(i.name)}${i.service ? ' <span class="fs-tag-svc">serviço</span>' : ''}${i.warranty_days ? ` <small>garantia ${i.warranty_days} dias</small>` : ''}</td><td class="n">${i.gift ? 'brinde' : brl(i.total_cents)}</td></tr>`).join('')}
           ${r.discount_cents ? `<tr><td>Desconto</td><td class="n">−${brl(r.discount_cents)}</td></tr>` : ''}${r.cashback_used_cents ? `<tr><td>Cashback usado</td><td class="n">−${brl(r.cashback_used_cents)}</td></tr>` : ''}
           <tr class="fs-peek-tot"><td>Total pago</td><td class="n">${brl(r.total_cents)}</td></tr></table>
         <div>Pagamento: ${payLabel(r)}</div>
-        <div class="fs-row"><button type="button" class="nv-button secondary fs-small" data-peek-print="${r.id}">${FPIcon('printer')}Imprimir comprovante</button>${r.customer_id ? `<button type="button" class="nv-button secondary fs-small" data-customer-history="${esc(r.customer_id)}">Histórico do cliente</button>` : ''}</div>`;
+        <div class="fs-row"><button type="button" class="nv-button secondary fs-small" data-peek-print="${r.id}">${FPIcon('printer')}Imprimir comprovante</button>${r.customer_id ? `<button type="button" class="nv-button secondary fs-small" data-customer-history="${esc(r.customer_id)}">Histórico do cliente</button>` : ''}</div>`; };
+    const peekDue = x => `<div class="fs-peek-h"><b>A receber nº ${x.pending_number}</b> · ${new Date(x.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })} · <span class="fs-tag-due">ainda não pago</span></div>
+        <div>Cliente: ${x.customer_name ? custLink(x.customer_id, '<b>' + esc(x.customer_name) + '</b>') + (x.customer_phone ? ' · ' + esc(x.customer_phone) : '') : 'sem cliente'}</div>
+        ${x.description ? `<div>Escrito: <i>${esc(x.description)}</i></div>` : ''}
+        <table class="fs-peek-t">${(x.items || []).map(i => `<tr><td>${esc(i.name)}${i.device_model ? ' · ' + esc(i.device_model) : ''}</td><td class="n">${brl(i.total_cents)}</td></tr>`).join('')}
+          <tr class="fs-peek-tot"><td>Total a receber</td><td class="n">${brl(x.total_cents)}</td></tr></table>
+        <div class="fs-row">${x.customer_id ? `<button type="button" class="nv-button secondary fs-small" data-customer-history="${esc(x.customer_id)}">Histórico do cliente</button>` : ''}</div>`;
+    box.querySelectorAll('[data-peek-btn]').forEach(b => b.onclick = async () => {
+      const k = b.dataset.peekBtn, x = all[k], peek = box.querySelector(`[data-peek="${k}"]`); if (!peek || !x) return;
+      if (!peek.hidden) { peek.hidden = true; return; }
+      if (x.due) peek.innerHTML = peekDue(x);
+      else { let r; try { r = await api(`/store/sales/${x.sale_id}/receipt`); } catch (err) { feedback(err.message, true); return; } peek.innerHTML = peekPaid(r); peek.querySelector('[data-peek-print]').onclick = () => printReceipt(r.id); }
       peek.hidden = false;
-      peek.querySelector('[data-peek-print]').onclick = () => printReceipt(r.id);
     });
-    box.querySelectorAll('[data-link]').forEach(b => b.onclick = async () => { const [id, pid] = b.dataset.link.split(':'); try { await link(id, { part_id: pid }); feedback('Peça ligada ao serviço e posta na reposição.'); again(); } catch { /* aviso já mostrado */ } });
-    box.querySelectorAll('[data-none]').forEach(b => b.onclick = async () => { try { await link(b.dataset.none, { none: true }); again(); } catch { /* aviso já mostrado */ } });
+    box.querySelectorAll('[data-link]').forEach(b => b.onclick = async () => { const [n, m] = b.dataset.link.split(':').map(Number), x = d.unidentified[n]; try { await link(x, { part_id: x.suggestions[m].id }); feedback('Peça ligada ao serviço e posta na reposição.'); again(); } catch { /* aviso já mostrado */ } });
+    box.querySelectorAll('[data-none]').forEach(b => b.onclick = async () => { try { await link(d.unidentified[b.dataset.none], { none: true }); again(); } catch { /* aviso já mostrado */ } });
     box.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
-      const id = b.dataset.pick, pb = box.querySelector(`[data-pickbox="${id}"]`);
+      const x = d.unidentified[b.dataset.pick], pb = box.querySelector(`[data-pickbox="${b.dataset.pick}"]`);
       pb.innerHTML = '<input type="search" placeholder="Buscar peça: tela a32, bateria…" aria-label="Buscar a peça usada"><div class="fs-results fs-drop"></div>';
       const inp = pb.querySelector('input'), list = pb.querySelector('.fs-results'); let t;
       inp.oninput = () => { clearTimeout(t); t = setTimeout(async () => { let rows = []; try { rows = await api('/store/products?kind=part&q=' + encodeURIComponent(inp.value.trim())); } catch { return; }
         list.innerHTML = rows.slice(0, 10).map((p, n) => `<button type="button" data-n="${n}"><b>${esc(partLabel(p))}</b> <small>${p.location ? esc(p.location) + ' · ' : ''}estoque ${p.stock_qty ?? '—'}</small></button>`).join('') || '<p class="nv-help">Nenhuma peça encontrada.</p>';
-        list.querySelectorAll('[data-n]').forEach(bb => bb.onclick = async () => { try { await link(id, { part_id: rows[bb.dataset.n].id }); again(); } catch { /* aviso já mostrado */ } }); }, 200); };
+        list.querySelectorAll('[data-n]').forEach(bb => bb.onclick = async () => { try { await link(x, { part_id: rows[bb.dataset.n].id }); again(); } catch { /* aviso já mostrado */ } }); }, 200); };
       inp.focus();
     });
     if ($('fsRsAll')) $('fsRsAll').onclick = async () => {
-      let ok = 0; for (const x of sure) { try { await link(x.id, { part_id: exactOf(x)[0].id }); ok++; } catch { break; } }
+      let ok = 0; for (const x of sure) { try { await link(x, { part_id: exactOf(x)[0].id }); ok++; } catch { break; } }
       feedback(`${ok} serviço(s) ligados às peças e postos na reposição.`); again();
     };
     box.querySelectorAll('[data-rs-in]').forEach(b => b.onclick = () => { const p = d.parts.find(x => x.id === b.dataset.rsIn); stockDialog({ ...p, name: partLabel(p) }, again); });
@@ -1934,7 +1950,7 @@
       w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Reposição de peças</title><style>body{font:13px Arial,sans-serif;margin:16px}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}td.n,th.n{text-align:right}.ck{width:28px}.box{display:inline-block;width:12px;height:12px;border:1.5px solid #111;border-radius:2px}</style></head><body>
         <h1>Reposição de peças · ${esc(config?.name || '')}</h1><div>${new Date().toLocaleString('pt-BR')}</div>
         <table><thead><tr><th class="ck">OK</th><th>Peça</th><th>Aparelho</th><th>Lugar</th><th>Fornecedor</th><th class="n">Repor</th><th class="n">Estoque agora</th><th class="n">Custo estimado</th></tr></thead><tbody>
-        ${d.parts.map(p => `<tr><td class="ck"><span class="box"></span></td><td>${esc(p.name)}</td><td>${esc(p.device_model || '')}</td><td>${esc(p.location || '')}</td><td>${esc(p.supplier_name || '')}</td><td class="n"><b>${p.restock_pending}</b></td><td class="n">${p.stock_qty ?? '—'}</td><td class="n">${p.cost_cents != null ? brl(p.cost_cents * p.restock_pending) : '—'}</td></tr>`).join('')}
+        ${d.parts.map(p => `<tr><td class="ck"><span class="box"></span></td><td>${esc(p.name)}</td><td>${esc(p.device_model || '')}</td><td>${esc(p.location || '')}</td><td>${esc(p.supplier_name || '')}</td><td class="n"><b>${qty(p)}</b>${p.due_count ? ` <small>(${p.due_count} a receber)</small>` : ''}</td><td class="n">${p.stock_qty ?? '—'}</td><td class="n">${p.cost_cents != null ? brl(p.cost_cents * qty(p)) : '—'}</td></tr>`).join('')}
         </tbody></table><p><b>Total estimado: ${brl(cost)}</b> (pelo custo cadastrado)</p><script>setTimeout(()=>print(),200)<\/script></body></html>`);
       w.document.close();
     };
@@ -2816,7 +2832,7 @@ ${view === 'sum' ? `
 .fs-part-loc{margin:14px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--nv-muted,#667085)}
 .fs-part-end{align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.fs-count{display:flex;flex-direction:column;font-size:11px;color:var(--nv-muted,#667085)}.fs-count input{width:74px;padding:7px 8px;font-size:16px;font-weight:600;text-align:center;border:1px solid #D0D5DD;border-radius:8px}
 .fs-more{position:relative}.fs-more summary{display:inline-block;list-style:none;cursor:pointer;padding:6px 10px;border:1px solid #D0D5DD;border-radius:8px;font-weight:700}.fs-more summary::-webkit-details-marker{display:none}.fs-more[open]>div{position:absolute;right:0;z-index:5;display:flex;flex-direction:column;gap:4px;background:#fff;border:1px solid #E4E7EC;border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(16,24,40,.12);min-width:170px}
-.fs-tag-warn{color:#B54708;font-weight:600}.fs-rs-h{margin:18px 0 4px;font-size:15px}.fs-sale-peek{margin-top:8px;padding:10px 12px;border:1px solid #E4E7EC;border-radius:10px;background:#FCFCFD;font-size:13px;display:flex;flex-direction:column;gap:4px}.fs-sale-peek[hidden]{display:none}.fs-peek-t{width:100%;border-collapse:collapse}.fs-peek-t td{padding:3px 0;border-bottom:1px solid #F2F4F7}.fs-peek-t .n{text-align:right;white-space:nowrap}.fs-peek-tot td{font-weight:700;border-bottom:0}.fs-rs-open .fs-hit-list{margin-top:6px}.fs-restock-view,.fs-part-filter{margin:8px 0}.fs-restock-view .fs-chip b{display:inline-flex;align-items:center;gap:6px}
+.fs-tag-warn{color:#B54708;font-weight:600}.fs-rs-h{margin:18px 0 4px;font-size:15px}.fs-tag-due{color:#B54708;font-weight:600}.fs-sale-peek{margin-top:8px;padding:10px 12px;border:1px solid #E4E7EC;border-radius:10px;background:#FCFCFD;font-size:13px;display:flex;flex-direction:column;gap:4px}.fs-sale-peek[hidden]{display:none}.fs-peek-t{width:100%;border-collapse:collapse}.fs-peek-t td{padding:3px 0;border-bottom:1px solid #F2F4F7}.fs-peek-t .n{text-align:right;white-space:nowrap}.fs-peek-tot td{font-weight:700;border-bottom:0}.fs-rs-open .fs-hit-list{margin-top:6px}.fs-restock-view,.fs-part-filter{margin:8px 0}.fs-restock-view .fs-chip b{display:inline-flex;align-items:center;gap:6px}
 .fs-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:start}.fs-col-report{display:flex;flex-direction:column;gap:16px;min-width:0}.fs-col-report .fs-moves{margin-top:0}
   @media(max-width:900px){.fs-grid{grid-template-columns:1fr}.fs-newsale{order:-1}}
   .fs-cashbar{position:relative}.fs-cashbar-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;margin-left:auto}.fs-cashbar:has(.fs-seller:not([hidden])) .fs-cashbar-side{padding-top:26px}

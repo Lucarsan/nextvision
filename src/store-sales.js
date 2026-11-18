@@ -766,6 +766,28 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       await c.query('COMMIT'); res.json({ ok: true });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
+  // "A receber": corrige custo, fornecedor e garantia de um serviço antes de receber (o custo vai para a venda ao receber).
+  // Custo vazio (null) = sem custo informado; ao receber, vale o custo da peça escolhida, se houver.
+  app.patch('/api/store/sales/pending/:id/items/:idx', ...guard, route(async (req, res) => {
+    const idx = Number(req.params.idx);
+    if (!uuid.safeParse(req.params.id).success || !Number.isInteger(idx) || idx < 0 || idx > 300) return bad(res, 400, 'Item inválido');
+    const v = valid(z.object({ cost_cents: cents.nullable().optional(), supplier: z.string().trim().max(80).optional(), warranty_days: z.number().int().min(0).max(3650).nullable().optional() }).strict()
+      .refine(x => Object.keys(x).length > 0, 'Nada para alterar'), req, res); if (!v) return;
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN');
+      const p = (await c.query('SELECT id,payload FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [req.params.id, tid(req)])).rows[0];
+      const it = p?.payload.items?.[idx];
+      if (!it?.service) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou mudou. Atualize a lista.'); }
+      if ('cost_cents' in v) { if (v.cost_cents == null) delete it.cost_cents; else it.cost_cents = v.cost_cents; }
+      if ('supplier' in v) { if (v.supplier) it.supplier = v.supplier; else delete it.supplier; }
+      if ('warranty_days' in v) { if (v.warranty_days == null) delete it.warranty_days; else it.warranty_days = v.warranty_days; }
+      await c.query('UPDATE pending_sales SET payload=$1 WHERE id=$2', [JSON.stringify(p.payload), p.id]);
+      await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'edit_item', 'pending_sale', p.id]);
+      await c.query('COMMIT');
+      res.json((await q(PENDING_SELECT + ' WHERE p.id=$1', [p.id])).rows[0]);
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }));
   // O que saiu do estoque (vendas e serviços, já descontando cancelamentos) num período, por item.
   // kind: part (peças), product (produtos) ou all. Sem período: últimos 30 dias.
   app.get('/api/store/stock/outflow', ...guard, route(async (req, res) => {

@@ -752,9 +752,10 @@
     card.innerHTML = `<div class="nv-heading"><h2>A receber <span class="nv-pill">${rows.length}</span></h2><b>${brl(sum)}</b></div>
       <div class="nv-list">${rows.map(p => `<div class="fs-sale fs-pend" data-pend="${p.id}"><div><b>#${p.number}</b> · ${custLink(p.customer_id, esc(p.customer_name))}${p.pet_name ? ' · ' + FPIcon('paw') + esc(p.pet_name) : ''}
         <br><span class="fs-pend-items">${(p.payload?.items || []).length > 1 ? p.payload.items.map((it, n) => `<span class="fs-pend-item">${esc(pendItemName(it))}${it.unit_price_cents != null ? ' ' + brl(it.unit_price_cents * (it.quantity || 1)) : ''}<button type="button" class="fs-full-only" data-pend-rm="${p.id}" data-pend-rm-i="${n}" aria-label="Tirar ${esc(it.service || it.name || 'item')} desta venda" title="Tirar este item">${FPIcon('x')}</button></span>`).join('') : `<small>${esc(pendingItems(p))}</small>`}</span><br><small>${ago(p.created_at)}${p.seller_name ? ' · ' + esc(p.seller_name) : ''}${p.order_number ? ` · pedido ${esc(p.order_number)} <span class="fs-tag${p.order_status === 'completed' ? ' fs-tag-ok' : ''}">${ORDER_STATUS[p.order_status] || ''}</span>` : ''}</small></div>
-        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button>${p.order_id ? '' : `<button type="button" class="nv-button secondary fs-small" data-pend-open="${p.id}" title="Abrir o pedido para iniciar o serviço (um por pet)">${FPIcon('camera') || ''} Abrir pedido</button>`}<button type="button" class="nv-button secondary fs-small" data-pend-add="${p.id}" title="Incluir serviços ou produtos nesta venda">+ Incluir</button><button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
+        <div class="fs-sale-end"><b>${brl(p.total_cents)}</b><button type="button" class="nv-button fs-small" data-pend-pay="${p.id}">Receber</button>${p.order_id ? '' : `<button type="button" class="nv-button secondary fs-small" data-pend-open="${p.id}" title="Abrir o pedido para iniciar o serviço (um por pet)">${FPIcon('camera') || ''} Abrir pedido</button>`}<button type="button" class="nv-button secondary fs-small" data-pend-add="${p.id}" title="Incluir serviços ou produtos nesta venda">+ Incluir</button>${(p.payload?.items || []).some(it => it.service) ? `<button type="button" class="nv-button secondary fs-small" data-pend-edit="${p.id}" title="Corrigir custo, fornecedor ou garantia do serviço">Editar</button>` : ''}<button type="button" class="fs-link fs-full-only" data-pend-cancel="${p.id}">Cancelar</button></div></div>`).join('')}</div>`;
     card.querySelectorAll('[data-pend-pay]').forEach(b => b.onclick = () => payPending(rows.find(x => x.id === b.dataset.pendPay), box, alive));
     card.querySelectorAll('[data-pend-add]').forEach(b => b.onclick = () => startAdd(rows.find(x => x.id === b.dataset.pendAdd)));
+    card.querySelectorAll('[data-pend-edit]').forEach(b => b.onclick = () => editPending(rows.find(x => x.id === b.dataset.pendEdit), box, alive));
     card.querySelectorAll('[data-pend-open]').forEach(b => b.onclick = () => openPendingOrder(rows.find(x => x.id === b.dataset.pendOpen), b, box, alive));
     card.querySelectorAll('[data-pend-rm]').forEach(b => b.onclick = async () => {
       const p = rows.find(x => x.id === b.dataset.pendRm), it = p.payload.items[Number(b.dataset.pendRmI)];
@@ -766,6 +767,41 @@
       const reason = prompt(`Cancelar a venda a receber #${p.number} (${p.customer_name}, ${brl(p.total_cents)})? Motivo:`); if (!reason || reason.trim().length < 3) return;
       try { await api(`/store/sales/pending/${p.id}/cancel`, 'POST', { reason: reason.trim() }); feedback('Venda a receber cancelada.'); drawPending(box, alive); } catch (err) { feedback(err.message, true); }
     });
+  }
+  // "Editar" no A receber: corrige custo (peça), fornecedor e garantia de cada serviço antes de receber.
+  // O custo vai para a venda ao receber (relatório de lucro); custo vazio = usa o da peça escolhida, se houver.
+  function editPending(p, box, alive) {
+    const svcs = (p.payload?.items || []).map((it, idx) => ({ it, idx })).filter(x => x.it.service);
+    openDialog(`${header(`Editar #${p.number}`)}
+      <p><b>${esc(p.customer_name)}</b><br><small>${esc(pendingItems(p))}</small></p>
+      <form id="fsPendEditForm" autocomplete="off">${svcs.map(({ it, idx }) => `<fieldset class="fs-pend-edit" data-idx="${idx}"><legend>${esc(pendItemName(it))} · ${brl((it.unit_price_cents ?? 0) * (it.quantity || 1))}</legend>
+        <div class="fs-row"><label class="nv-field fs-grow">Custo da peça<input name="cost" inputmode="decimal" placeholder="0,00" value="${it.cost_cents != null ? centsText(it.cost_cents) : ''}"></label>
+          <label class="nv-field fs-grow">Fornecedor<input name="supplier" maxlength="80" value="${esc(it.supplier || '')}"></label>
+          <label class="nv-field">Garantia (dias)<input name="warranty" inputmode="numeric" value="${it.warranty_days != null ? it.warranty_days : ''}"></label></div></fieldset>`).join('')}
+        <p class="nv-help">Custo zero: digite 0. Deixe vazio se ainda não sabe.</p>
+        <button class="nv-button fs-wide">Salvar</button><p class="nv-help" role="status" id="fsPendEditStatus"></p></form>`);
+    const f = $('fsPendEditForm'), st = $('fsPendEditStatus');
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const changes = [];
+      for (const fs of f.querySelectorAll('.fs-pend-edit')) {
+        const it = p.payload.items[Number(fs.dataset.idx)], body = {};
+        const c = fs.querySelector('[name=cost]').value.trim(), cost = c ? parseMoney(c) : null;
+        if (c && !(Number.isFinite(cost) && cost >= 0)) { st.textContent = 'Custo inválido em ' + it.service + '.'; return; }
+        if (cost !== (it.cost_cents ?? null)) body.cost_cents = cost;
+        const sup = fs.querySelector('[name=supplier]').value.trim(); if (sup !== (it.supplier || '')) body.supplier = sup;
+        const w = fs.querySelector('[name=warranty]').value.trim(), wd = w ? Number(w) : null;
+        if (w && !(Number.isInteger(wd) && wd >= 0 && wd <= 3650)) { st.textContent = 'Garantia inválida em ' + it.service + ' (dias).'; return; }
+        if (wd !== (it.warranty_days ?? null)) body.warranty_days = wd;
+        if (Object.keys(body).length) changes.push([fs.dataset.idx, body]);
+      }
+      if (!changes.length) { $('editorDialog').close(); return; }
+      const btn = f.querySelector('button.nv-button'); btn.disabled = true;
+      try {
+        for (const [idx, body] of changes) await api(`/store/sales/pending/${p.id}/items/${idx}`, 'PATCH', body);
+        $('editorDialog').close(); feedback(`A receber #${p.number} atualizado.`); drawPending(box, alive);
+      } catch (err) { st.textContent = err.message; btn.disabled = false; }
+    };
   }
   // "+ Incluir": o caixa passa a montar itens para a venda a receber escolhida (mesmo cliente e pet).
   // Ao confirmar, os itens entram nela e o total é refeito; nada é cobrado agora.
@@ -3063,6 +3099,7 @@ ${view === 'sum' ? `
   .fs-private .fs-costgrid b{color:transparent!important;background:var(--nv-border);border-radius:6px;user-select:none}
   .fs-cashbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.fs-kpis{display:flex;gap:24px;flex-wrap:wrap;margin-top:6px}.fs-kpis div{display:flex;flex-direction:column}.fs-kpis small{color:var(--nv-muted)}.fs-kpis b{font-size:22px}
   .fs-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.fs-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.fs-row>*{min-width:0}.fs-grow{flex:1 1 180px}.fs-small{padding:6px 10px!important;font-size:13px!important;min-height:0!important}.fs-small-row{margin-top:6px}.fs-wide{width:100%;margin-top:8px}
+  .fs-pend-edit{border:1px solid var(--nv-border);border-radius:10px;padding:8px 12px 4px;margin:0 0 10px}.fs-pend-edit legend{font-size:13px;font-weight:600;padding:0 4px}
   .fs-methods{border:0;padding:0;margin:8px 0;display:flex;gap:6px;flex-wrap:wrap}.fs-methods legend{font-size:13px;color:var(--nv-text);margin-bottom:6px}.fs-methods label{cursor:pointer}.fs-methods input{position:absolute;opacity:0;pointer-events:none}.fs-methods span{display:inline-block;padding:8px 14px;border:1px solid var(--nv-border);border-radius:999px;background:var(--nv-surface)}.fs-methods input:checked+span{background:var(--nv-blue);border-color:var(--nv-blue);color:#fff}.fs-methods input:focus-visible+span{outline:2px solid var(--nv-blue);outline-offset:2px}
   .fs-results{display:flex;flex-direction:column;gap:4px;margin-top:4px}.fs-results button{text-align:left;border:1px solid var(--nv-border);border-radius:10px;background:var(--nv-surface);padding:8px 10px;cursor:pointer}.fs-results button:hover{border-color:var(--nv-blue)}
   .fs-picked,.fs-last{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--nv-border);border-radius:12px;padding:10px 12px;background:var(--nv-blue-soft)}.fs-last{margin-top:14px}

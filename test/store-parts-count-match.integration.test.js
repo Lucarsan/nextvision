@@ -166,7 +166,7 @@ test('painel: conferir peças, tela pelo aparelho no caixa e na OS, o que saiu',
     await f.api('/store/sales', { method: 'POST', body: { new_customer: { name: 'Carla Lima', phone: '85988887777' }, payment_method: 'pix', description: 'tela do iPhone da filha', items: [{ service: 'Troca de tela', unit_price_cents: 18000 }] } }, 201);
     await f.api('/store/sales/pending', { method: 'POST', body: { new_customer: { name: 'Eliseu', phone: '85977770000' }, items: [{ service: 'OS 7 · Troca de tela', unit_price_cents: 19000, device_model: 'XIAOMI Note 8' }] } }, 201);
     await page.locator('[data-ptab=restock]').click(); await page.waitForSelector('[data-rv]');
-    assert.deepEqual(await page.locator('[data-rv]').allInnerTexts(), ['Produtos', 'Serviços']);
+    assert.deepEqual(await page.locator('[data-rv]').allInnerTexts(), ['Produtos', 'Serviços', 'Cotação']);
     await page.locator('[data-rv=part]').click();
     await page.waitForSelector('.fs-sale:has-text("a receber nº 1")');
     assert.match(await page.locator('.fs-sale', { hasText: 'Tela · Redmi Note 8' }).first().innerText(), /a receber nº 1 · Eliseu · XIAOMI Note 8[\s\S]*saiu 1 · repor[\s\S]*1 a receber/);

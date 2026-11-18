@@ -643,6 +643,50 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const rows = (await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND kind='part' AND device_model IS NOT NULL`, [tid(req)])).rows;
     res.json(matchParts(rows, model, service));
   }));
+  // Reposição → Cotação: peças zeradas ou com reposição pendente, com o preço de cada fornecedor (mais barato primeiro).
+  // A loja pode incluir ou tirar peças à mão (quote_override; volta ao automático quando o estoque sobe). in_quote=false
+  // = tirada à mão (vem na resposta para poder voltar). Quantidade a pedir: o que saiu (reposição), no mínimo 1.
+  const quoteRows = async (tenant, id = null) => (await q(`SELECT p.id,p.name,p.device_model,p.location,p.stock_qty,p.restock_pending,p.cost_cents,
+      coalesce(p.quote_qty,greatest(p.restock_pending,1)) order_qty,p.quote_qty,p.quote_override,coalesce(p.quote_override,coalesce(p.stock_qty<=0,false) OR p.restock_pending>0) in_quote,
+      coalesce((SELECT json_agg(json_build_object('supplier_id',s.id,'supplier_name',s.name,'phone',s.phone,'price_cents',x.price_cents,'updated_at',x.updated_at) ORDER BY x.price_cents,x.updated_at DESC)
+        FROM part_quotes x JOIN suppliers s ON s.id=x.supplier_id WHERE x.product_id=p.id AND x.tenant_id=p.tenant_id),'[]'::json) quotes
+    FROM products p WHERE p.tenant_id=$1 AND p.active AND p.kind='part' AND ($2::uuid IS NOT NULL AND p.id=$2 OR $2::uuid IS NULL AND (p.quote_override IS NOT NULL OR p.stock_qty<=0 OR p.restock_pending>0))
+    ORDER BY coalesce(p.location,'~'),fp_fold(coalesce(p.device_model,'')),p.name`, [tenant, id])).rows;
+  app.get('/api/store/stock/quote', ...guard, route(async (req, res) => { res.set('Cache-Control', 'no-store'); res.json(await quoteRows(tid(req))); }));
+  // Incluir (true), tirar (false) ou deixar no automático (null).
+  app.post('/api/store/stock/quote/:id/include', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Peça inválida');
+    const v = valid(z.object({ include: z.boolean().nullable() }).strict(), req, res); if (!v) return;
+    const r = await q("UPDATE products SET quote_override=$3 WHERE id=$1 AND tenant_id=$2 AND active AND kind='part' RETURNING id", [req.params.id, tid(req), v.include]);
+    if (!r.rowCount) return bad(res, 404, 'Peça não encontrada');
+    await audit(req, 'quote_include', 'product', req.params.id);
+    res.json((await quoteRows(tid(req), req.params.id))[0]);
+  }));
+  // Quantidade a pedir (null = automático: o que saiu, no mínimo 1).
+  app.post('/api/store/stock/quote/:id/qty', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Peça inválida');
+    const v = valid(z.object({ qty: z.number().int().min(1).max(9999).nullable() }).strict(), req, res); if (!v) return;
+    const r = await q("UPDATE products SET quote_qty=$3 WHERE id=$1 AND tenant_id=$2 AND active AND kind='part' RETURNING id", [req.params.id, tid(req), v.qty]);
+    if (!r.rowCount) return bad(res, 404, 'Peça não encontrada');
+    res.json((await quoteRows(tid(req), req.params.id))[0]);
+  }));
+  // Lança (ou atualiza) o preço da peça num fornecedor; price_cents null tira o preço daquele fornecedor.
+  const quoteBody = z.object({ supplier: z.string().trim().min(1).max(80), price_cents: cents.nullable() }).strict();
+  app.put('/api/store/stock/quote/:id', ...guard, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Peça inválida');
+    const v = valid(quoteBody, req, res); if (!v) return;
+    const part = (await q("SELECT id FROM products WHERE id=$1 AND tenant_id=$2 AND active AND kind='part'", [req.params.id, tid(req)])).rows[0];
+    if (!part) return bad(res, 404, 'Peça não encontrada');
+    if (v.price_cents == null) {
+      await q('DELETE FROM part_quotes WHERE product_id=$1 AND tenant_id=$2 AND supplier_id=(SELECT id FROM suppliers WHERE tenant_id=$2 AND lower(name)=lower($3))', [part.id, tid(req), cleanName(v.supplier)]);
+    } else {
+      const sup = await touchName(q, 'suppliers', tid(req), v.supplier, false);
+      await q(`INSERT INTO part_quotes(tenant_id,product_id,supplier_id,price_cents,updated_by) VALUES($1,$2,$3,$4,$5)
+        ON CONFLICT (product_id,supplier_id) DO UPDATE SET price_cents=EXCLUDED.price_cents,updated_by=EXCLUDED.updated_by,updated_at=now()`, [tid(req), part.id, sup.id, v.price_cents, req.user.id]);
+    }
+    await audit(req, 'quote', 'product', part.id);
+    res.json((await quoteRows(tid(req), part.id))[0]);
+  }));
   // Reposição → Serviços: peças que saíram em serviços (com os serviços que as usaram) e serviços feitos sem a
   // peça escolhida, com a peça sugerida pelo aparelho, para ligar com um toque (ou dizer que não usou peça).
   const SVC_SINCE = "now() - interval '120 days'";

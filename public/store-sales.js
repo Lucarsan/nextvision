@@ -1300,7 +1300,7 @@
   // "Conferido" (ou Enter, que já vai para a próxima). O estoque passa a ser o contado e a diferença vai para o log.
   let partLocations = [], partFilter = 'all';
   async function partsTab(box, term = '') {
-    box.innerHTML = `<div class="fs-row"><input id="fsPartSearch" class="fs-grow" type="search" placeholder="Buscar peça, modelo ou caixa (ex.: tela a12)" value="${esc(term)}" aria-label="Buscar peça"><button type="button" class="nv-button" id="fsPartNew">+ Nova peça</button></div>
+    box.innerHTML = `<div class="fs-row"><input id="fsPartSearch" class="fs-grow" type="search" placeholder="Buscar peça, modelo ou caixa (ex.: tela a12)" value="${esc(term)}" aria-label="Buscar peça"><button type="button" class="nv-button secondary" id="fsPartPrint">Imprimir relação</button><button type="button" class="nv-button" id="fsPartNew">+ Nova peça</button></div>
       <div class="fs-chips fs-part-filter" id="fsPartFilter"></div>
       <p class="nv-help">Para conferir: conte a peça, digite a quantidade e toque em <b>Conferido</b> (Enter confirma e vai para a próxima). Ao usar a peça num serviço, o estoque baixa sozinho e ela entra na reposição.</p><div id="fsPartList" class="nv-list"></div>`;
     const input = $('fsPartSearch'), list = $('fsPartList'); let timer, rows = [];
@@ -1352,7 +1352,35 @@
     };
     input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 200); };
     $('fsPartNew').onclick = () => partDialog({ location: partLocations.at(-1) || '' }, reopen);
+    $('fsPartPrint').onclick = () => printPartsList();
     input.focus(); draw();
+  }
+  // Relação completa das peças para imprimir: todas (ignora busca e filtro), por caixa, com a quantidade
+  // atual, inclusive as zeradas.
+  async function printPartsList() {
+    let rows, store = {};
+    try { [rows, store] = await Promise.all([api('/store/products?kind=part'), api('/store/settings').catch(() => ({}))]); } catch (err) { feedback(err.message, true); return; }
+    const now = new Date(), groups = new Map();
+    for (const p of rows) { const k = p.location || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); }
+    const qty = p => p.stock_qty ?? 0, units = list => list.reduce((t, p) => t + Math.max(0, qty(p)), 0), zeros = list => list.filter(p => qty(p) <= 0).length;
+    const sec = [...groups].map(([loc, list]) => `<h2>${loc ? esc(loc) : 'Sem lugar definido'} <span class="muted">· ${list.length} peça(s) · ${units(list)} unidade(s)${zeros(list) ? ` · ${zeros(list)} zerada(s)` : ''}</span></h2>
+      <table><thead><tr><th>Peça</th><th class="n">Qtd.</th><th>Conferido</th></tr></thead><tbody>${list.map(p => `<tr class="${qty(p) <= 0 ? 'zero' : ''}"><td>${esc(partLabel(p))}</td><td class="n"><b>${qty(p)}</b></td><td class="muted">${p.counted_at ? dmy(p.counted_at) : 'a conferir'}</td></tr>`).join('')}</tbody></table>`).join('');
+    const name = store.name || '';
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relação de peças${name ? ' · ' + esc(name) : ''} · ${now.toLocaleDateString('pt-BR')}</title><style>
+      @page{size:A4;margin:12mm}body{font:12px/1.35 system-ui,Arial,sans-serif;color:#111;margin:0}h1{font-size:18px;margin:0}h2{font-size:14px;margin:14px 0 4px;break-after:avoid}
+      .muted{color:#555;font-weight:400}.head{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:8px}
+      table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:3px 6px;border-bottom:1px solid #ddd}th{font-size:11px;color:#444}td.n,th.n{text-align:right;width:50px}td:last-child{width:90px}
+      tr{break-inside:avoid}tr.zero td{color:#b42318}tr.zero td b{color:#b42318}
+    </style></head><body>
+      <div class="head"><div><h1>Relação de peças${name ? ' · ' + esc(name) : ''}</h1><div>${rows.length} peça(s) · ${units(rows)} unidade(s) · ${zeros(rows)} zerada(s)</div></div><div class="muted" style="text-align:right">Emitida em ${now.toLocaleDateString('pt-BR')} ${hhmm(now)}</div></div>
+      ${sec || '<p>Nenhuma peça cadastrada.</p>'}
+    </body></html>`;
+    window.FPSales.lastPartsListHtml = html;
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true'); frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.append(frame);
+    frame.contentDocument.open(); frame.contentDocument.write(html); frame.contentDocument.close();
+    setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } finally { setTimeout(() => frame.remove(), 60000); } }, 250);
   }
   // Fornecedores e modelos de aparelho que aparecem nas sugestões. Excluir só tira da lista de sugestões.
   async function suppliersTab(box) {

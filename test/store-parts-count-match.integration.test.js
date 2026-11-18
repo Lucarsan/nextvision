@@ -148,6 +148,19 @@ test('painel: conferir peças, tela pelo aparelho no caixa e na OS, o que saiu',
     assert.match(await page.locator(`[data-part="${a12.id}"]`).innerText(), /conferido/);
     assert.match(await page.locator('#fsPartFilter').innerText(), /A conferir \(3\)/);
     await page.screenshot(shot('pecas-conferir'));
+    // Imprimir relação: todas as peças por caixa, com a quantidade, inclusive as zeradas (ignora busca e filtro).
+    await mk('Tela', 'LG K41S', 'Caixa 03', 6000, 15000, 0);
+    await page.locator('#fsPartSearch').fill('a14'); await page.waitForTimeout(400);
+    await page.locator('#fsPartPrint').click();
+    await page.waitForFunction(() => !!window.FPSales.lastPartsListHtml);
+    const listHtml = await page.evaluate(() => window.FPSales.lastPartsListHtml);
+    if (process.env.SHOT_DIR) { const lp = await browser.newPage(); await lp.setContent(listHtml); await lp.screenshot({ path: process.env.SHOT_DIR + '/relacao-pecas.png', fullPage: true }); await lp.close(); }
+    const all = await f.api('/store/products?kind=part');
+    for (const p of all) assert.ok(listHtml.includes(p.device_model), 'relação tem ' + p.device_model);
+    assert.match(listHtml, /Caixa 01[\s\S]*Caixa 05/);
+    assert.match(listHtml, /<tr class="zero"><td>Tela · LG K41S<\/td><td class="n"><b>0<\/b>/, 'zerada entra na relação');
+    assert.match(listHtml, /5 peça\(s\) · 7 unidade\(s\) · 1 zerada\(s\)/);
+    await page.locator('#fsPartSearch').fill('');
     // Reposição: botões Produtos e Serviços; serviço antigo sem peça aparece com a tela sugerida.
     await f.api('/store/sales', { method: 'POST', body: { anonymous: true, payment_method: 'pix', items: [{ service: 'Troca de tela', unit_price_cents: 18000, device_model: 'Galaxy A14 5G' }] } }, 201);
     await f.api('/store/sales', { method: 'POST', body: { new_customer: { name: 'Carla Lima', phone: '85988887777' }, payment_method: 'pix', description: 'tela do iPhone da filha', items: [{ service: 'Troca de tela', unit_price_cents: 18000 }] } }, 201);

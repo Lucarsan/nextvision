@@ -1123,17 +1123,20 @@
     }
     return out;
   }
+  // Lista de serviços: na janela do caixa ou na página "Serviços e preços" do menu (mesmo conteúdo).
+  let svcPage = null;
+  const svcOnPage = () => !!svcPage?.isConnected;
   async function manageServices(editId) {
     const items = await loadServiceItems(true);
     const ed = typeof editId === 'string' ? items.find(i => i.id === editId) : null;
-    openDialog(`${header('Serviços')}<p class="nv-help">Aparecem como botões no modo "Serviço" do caixa. O preço e o custo vêm preenchidos e podem ser mudados na hora. Sem preço, o botão usa o último valor cobrado.</p>
+    (html => { if (svcOnPage()) { const d = $('editorDialog'); if (d.open) d.close(); svcPage.innerHTML = html.replace(header('Serviços'), '<h2>Serviços cadastrados</h2>'); } else openDialog(html); })(`${header('Serviços')}<p class="nv-help">Aparecem como botões no modo "Serviço" do caixa. O preço e o custo vêm preenchidos e podem ser mudados na hora. Sem preço, o botão usa o último valor cobrado.</p>
       <form id="fsSvcForm" autocomplete="off"><div class="fs-row"><label class="nv-field fs-grow">Serviço<input name="name" maxlength="80" required placeholder="Ex.: ${svcEx('one')[0].toUpperCase() + svcEx('one').slice(1)}" value="${esc(ed?.name || '')}"></label>
       <label class="nv-field">Preço${isPet() ? ' base' : ''}<input name="price" inputmode="decimal" placeholder="0,00" value="${ed?.price_cents != null ? centsText(ed.price_cents) : ''}"></label>
       <label class="nv-field">Custo (opcional)<input name="cost" inputmode="decimal" placeholder="0,00" value="${ed?.cost_cents != null ? centsText(ed.cost_cents) : ''}"></label></div>
       ${isPet() ? varsEditor(ed) : ''}
       <div class="fs-row"><button class="nv-button">${ed ? 'Salvar' : 'Cadastrar'}</button>${ed ? '<button type="button" class="nv-button secondary" id="fsSvcCancelEdit">Cancelar</button>' : ''}</div></form><p role="status" class="nv-help" id="fsSvcStatus"></p>
       ${items.length > 14 ? '<input type="search" id="fsSvcListFilter" class="fs-svc-filter" placeholder="Filtrar a lista" aria-label="Filtrar a lista de serviços">' : ''}
-      <div class="nv-list" id="fsSvcList">${items.map(i => `<div class="fs-sale" data-svc-name="${esc(normName(i.name))}"><div><b>${esc(i.name)}</b>${i.addon ? ' <span class="fs-tag">adicional</span>' : ''}<br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}${i.cost_cents != null ? ' · custo ' + brl(i.cost_cents) : ''}${hasRules(i) ? ' · ' + esc(rulesSummary(i)) : ''}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-svc-edit="${i.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-svc-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum serviço cadastrado.</p>'}</div>`);
+      <div class="nv-list" id="fsSvcList">${items.map(i => `<div class="fs-sale" data-svc-name="${esc(normName(i.name))}"><div><b>${esc(i.name)}</b>${i.addon ? ' <span class="fs-tag">adicional</span>' : ''}<br><small>${i.price_cents != null ? brl(i.price_cents) : 'sem preço fixo'}${i.cost_cents != null ? ' · custo ' + brl(i.cost_cents) : ' · <span class="fs-svc-nocost">sem custo</span>'}${hasRules(i) ? ' · ' + esc(rulesSummary(i)) : ''}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-svc-edit="${i.id}">Editar</button><button type="button" class="nv-button secondary fs-small" data-svc-del="${i.id}">Excluir</button></div></div>`).join('') || '<p class="nv-help">Nenhum serviço cadastrado.</p>'}</div>`);
     const f = $('fsSvcForm'), st = $('fsSvcStatus');
     if (ed) { f.elements.price.focus(); $('fsSvcCancelEdit').onclick = () => manageServices(); }
     if ($('fsSvcListFilter')) $('fsSvcListFilter').oninput = e => { const t = normName(e.target.value); document.querySelectorAll('#fsSvcList [data-svc-name]').forEach(n => { n.hidden = !!t && !n.dataset.svcName.includes(t); }); };
@@ -3130,7 +3133,7 @@ ${view === 'sum' ? `
   .fs-cb-badge{display:inline-block;padding:1px 8px;border-radius:999px;background:#fff1cc;color:#7a4b00;font-size:12px;font-weight:700;white-space:nowrap}.fs-cb-note{color:#7a4b00}.fs-cb-all{margin-top:14px}.fs-cb-all summary{cursor:pointer;font-weight:600}
   .fs-split{border:1px solid var(--nv-border);border-radius:12px;padding:8px 10px;margin:-2px 0 10px;display:grid;gap:6px}.fs-split-row{display:flex;gap:8px;align-items:center}.fs-split-row select,.fs-split-row input{padding:8px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit;background:#fff}.fs-split-row select{flex:0 0 130px}.fs-split-row input{flex:1;min-width:0}.fs-split-rest{flex:1;font-size:15px}.fs-split .fs-link{justify-self:start}
   .fs-mix{border:1px solid var(--nv-border);border-radius:12px;margin:8px 0 12px;overflow:hidden}.fs-mix-head{font-size:13px;font-weight:700;padding:8px 10px 4px;color:var(--nv-muted)}.fs-mix-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--nv-border);font-size:14px}.fs-mix-row .fp-ic{width:16px;height:16px;flex:0 0 auto;color:var(--nv-muted)}.fs-mix-row small{color:var(--nv-muted)}.fs-svc-add{margin-top:4px}.fs-svc-tip{margin:6px 0 10px}
-  .fs-chip-group{font-size:12px;font-weight:700;color:var(--nv-muted);margin:8px 0 4px;text-transform:uppercase;letter-spacing:.03em}.fs-svc-filter{width:100%;margin:0 0 8px;padding:8px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-svc-calc{margin:-4px 0 6px;color:var(--nv-blue,#2563eb);font-weight:600}.fs-svc-pet .fs-chips{margin-top:4px}
+  .fs-chip-group{font-size:12px;font-weight:700;color:var(--nv-muted);margin:8px 0 4px;text-transform:uppercase;letter-spacing:.03em}.fs-svc-nocost{color:#b45309;font-weight:600}.fs-svc-filter{width:100%;margin:0 0 8px;padding:8px 12px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-svc-calc{margin:-4px 0 6px;color:var(--nv-blue,#2563eb);font-weight:600}.fs-svc-pet .fs-chips{margin-top:4px}
   .fs-tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nv-blue-soft,#e8f0fe);color:var(--nv-blue,#2563eb);vertical-align:middle}.fs-vars{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-vars summary{cursor:pointer;font-weight:700}.fs-vars-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:6px 0}.fs-vars-row>span{flex:0 0 100%;font-size:13px;font-weight:700;color:var(--nv-muted)}.fs-vars-row .nv-field{flex:1 1 90px;min-width:80px;margin:0}
   .fs-goal-month{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}.fs-goal-month input{padding:6px 10px;border:1px solid var(--nv-border);border-radius:10px;font:inherit}.fs-goal-store,.fs-goal-person{border:1px solid var(--nv-border);border-radius:14px;padding:12px 14px;margin:10px 0}.fs-goal-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}.fs-goal-head>b{font-size:20px}.fs-goal-head small{font-size:13px;color:var(--nv-muted);font-weight:500}.fs-goal-bar{height:10px;border-radius:999px;background:var(--nv-border,#e5e7eb);overflow:hidden;margin:8px 0}.fs-goal-bar span{display:block;height:100%;background:var(--nv-green,#16a34a);border-radius:999px}.fs-goal-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}.fs-goal-stats div{background:var(--nv-blue-soft,#f1f5f9);border-radius:10px;padding:8px 10px}.fs-goal-stats b{display:block;font-size:18px}.fs-goal-stats small{color:var(--nv-muted)}.fs-goal-comm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 0}.fs-goal-form,.fs-goal-edit{align-items:flex-end;margin-top:8px}
   .fs-mix-price{width:96px;padding:6px 8px;border:1px solid var(--nv-border);border-radius:8px;font:inherit;font-weight:700;text-align:right}.fs-mix-calc{color:var(--nv-muted)}.fs-svc-other{border:1px solid var(--nv-border);border-radius:12px;padding:8px 12px;margin:8px 0}.fs-svc-other summary{cursor:pointer;font-weight:700}
@@ -3150,7 +3153,7 @@ ${view === 'sum' ? `
   function injectNav() {
     const style = document.createElement('style'); style.textContent = css; document.head.append(style);
     const orders = document.querySelector('.nv-menu [data-view="orders"]');
-    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="dayservices">' + FPIcon('receipt') + 'Serviços do dia</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
+    if (orders) orders.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + 'Caixa</button><button data-view="stock">' + FPIcon('package') + 'Estoque</button><button data-view="dayservices">' + FPIcon('receipt') + 'Serviços do dia</button><button data-view="svcprices">' + FPIcon('edit') + 'Serviços e preços</button><button data-view="messages">' + FPIcon('message') + 'Mensagens</button><button data-view="goals">' + FPIcon('star') + 'Metas</button>');
     const phone = document.querySelector('.nv-phone-nav');
     if (phone) { phone.querySelector('[data-view="cameras"]')?.remove(); phone.querySelector('[data-view="home"]')?.insertAdjacentHTML('afterend', '<button data-view="cash">' + FPIcon('cash') + '<div>Caixa</div></button>'); }
   }
@@ -3159,14 +3162,15 @@ ${view === 'sum' ? `
     // Para service-orders.js (OS da assistência técnica) usar os mesmos utilitários.
     h: { api, esc, brl, hhmm, parseMoney, phoneBR, waLink, greetName, custLink, openDialog, header, feedback, config: () => config },
     enabled: () => !!config?.enabled,
-    titles: { cash: 'Caixa', dayservices: 'Serviços do dia', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
-    moreItems: () => config?.enabled ? [['dayservices', 'Serviços do dia'], ['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
+    titles: { cash: 'Caixa', dayservices: 'Serviços do dia', svcprices: 'Serviços e preços', stock: 'Estoque', messages: 'Mensagens', goals: 'Metas e comissões' },
+    moreItems: () => config?.enabled ? [['dayservices', 'Serviços do dia'], ['svcprices', 'Serviços e preços'], ['stock', 'Estoque'], ['messages', 'Mensagens'], ['goals', 'Metas e comissões'], ['cameras', 'Câmeras']] : [],
     async load(view, box, alive) {
       box.classList.remove('fs-private');
       if (!config?.enabled) { box.innerHTML = '<section class="nv-card">Recurso não habilitado para esta loja.</section>'; return; }
       if (view === 'cash') return loadCash(box, alive);
       // Estoque pelo menu: as mesmas abas da janela do Caixa, sem precisar abrir o caixa.
       if (view === 'stock') { box.innerHTML = '<section class="nv-card fs-stockpage" id="fsStockPage"></section>'; stockPage = $('fsStockPage'); return productsDialog('', 'list'); }
+      if (view === 'svcprices') { box.innerHTML = '<section class="nv-card" id="fsSvcPage"></section>'; svcPage = $('fsSvcPage'); return manageServices(); }
       if (view === 'goals') return loadGoals(box, alive);
       if (view === 'dayservices') return config.niche === 'electronics' && window.FPServiceOrders ? window.FPServiceOrders.mount(box, alive, b => loadDayServices(b, alive)) : loadDayServices(box, alive);
       return loadMessages(box, alive);

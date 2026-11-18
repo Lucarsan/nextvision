@@ -50,6 +50,42 @@ export function dueKinds(now = new Date()) {
   return out;
 }
 
+// Vendas para clientes vigiados (Configurações → Relatórios), ex.: o dono que pega itens do estoque para permuta
+// e o vendedor lança a venda no nome dele. Uma venda por linha, com itens, preço de tabela, cobrado e custo.
+// Compara os últimos 8 dígitos do telefone, então serve com ou sem DDD/9.
+export async function watchedSales(q, range, inRange) {
+  const t = (await q('SELECT report_watch_phones p FROM tenants WHERE id=$1', [range[0]])).rows[0];
+  const keys = [...new Set((t?.p || []).map(p => String(p).replace(/\D/g, '').slice(-8)).filter(k => k.length === 8))];
+  if (!keys.length) return [];
+  const args = [...range, keys];
+  const [sales, pending] = await Promise.all([
+    q(`SELECT right(c.phone_key,8) k,c.name customer,c.phone,x.sale_number,x.created_at,x.total_cents,x.discount_cents,x.payment_method,x.payments,x.description,
+         COALESCE(sl.name,u.name) seller,COALESCE(it.items,'[]') items
+       FROM sales x JOIN customers c ON c.id=x.customer_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
+       LEFT JOIN LATERAL (SELECT json_agg(json_build_object('name',CASE WHEN i.gift THEN 'Brinde: ' ELSE '' END || i.name || COALESCE(' ' || i.variant_name,'') || COALESCE(' · ' || i.device_model,''),
+           'qty',i.quantity,'total',i.total_cents,'list',i.list_price_cents*i.quantity,'cost',i.unit_cost_cents*i.quantity,'service',i.service) ORDER BY i.position) items
+         FROM sale_items i WHERE i.sale_id=x.id) it ON true
+       WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND right(c.phone_key,8)=ANY($5) AND ${inRange('x.created_at')} ORDER BY x.created_at`, args),
+    q(`SELECT right(c.phone_key,8) k,c.name customer,c.phone,p.number,p.created_at,p.total_cents,p.description,COALESCE(sl.name,u.name) seller
+       FROM pending_sales p JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.created_by LEFT JOIN users sl ON sl.id=p.seller_id
+       WHERE p.tenant_id=$1 AND p.paid_sale_id IS NULL AND p.canceled_at IS NULL AND right(c.phone_key,8)=ANY($5) AND ${inRange('p.created_at')} ORDER BY p.created_at`, args)
+  ]);
+  return keys.map(k => {
+    const s = sales.rows.filter(r => r.k === k), p = pending.rows.filter(r => r.k === k);
+    const items = s.flatMap(r => r.items);
+    return {
+      key: k, name: (s[0] || p[0])?.customer || null, phone: (s[0] || p[0])?.phone || null,
+      sales: s, pending: p,
+      total: s.reduce((a, r) => a + r.total_cents, 0),
+      list_total: items.reduce((a, i) => a + (i.list ?? i.total), 0),
+      cost_total: items.reduce((a, i) => a + (i.cost || 0), 0),
+      cost_unknown: items.filter(i => i.cost == null && !i.service).length,
+      qty: items.reduce((a, i) => a + i.qty, 0),
+      pending_total: p.reduce((a, r) => a + r.total_cents, 0)
+    };
+  });
+}
+
 export async function reportData(q, tenantId, kind, day) {
   const per = periodFor(kind, day);
   const range = [tenantId, per.from, per.to, TZ];
@@ -108,7 +144,9 @@ export async function reportData(q, tenantId, kind, day) {
   for (const b of buys.rows) if (b.supplier) sup(b.supplier).purchases += b.total;
   // Acompanhamento dos clientes (links abertos, vídeo assistido). Se falhar, o relatório sai sem esta parte.
   const engagement = await linkStats(q, { from: per.from, to: per.to, tenantId }).then(x => x.stores[0] || null).catch(() => null);
+  const watched = kind === 'monthly' ? await watchedSales(q, range, inRange) : [];
   return {
+    watched,
     kind, day, period: per, store: t.rows[0] || {}, timezone: TZ, engagement,
     sales: sales.rows, sales_total: salesTotal, discounts: sales.rows.reduce((a, s) => a + (s.discount_cents || 0), 0),
     by_method: byMethod, by_seller: bySeller.rows, by_day: byDay.rows, canceled: canceled.rows[0],
@@ -135,6 +173,34 @@ const h2 = t => `<h2 style="font-size:16px;margin:22px 0 4px;color:#111827">${es
 const kpi = (label, value, color = '#111827') => `<td style="padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fafafa"><div style="font-size:12px;color:#6b7280">${esc(label)}</div><div style="font-size:19px;font-weight:700;color:${color}">${value}</div></td>`;
 const hhmm = (d, tz) => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: tz });
 
+// Seção à parte, com borda, para o dono conferir tudo o que foi lançado no nome dele.
+function watchedHtml(w, tz) {
+  const who = `${w.name || 'Cliente'} · ${w.phone || w.key}`;
+  const when = x => new Date(x).toLocaleString('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const diff = (charged, cost, known) => {
+    if (!known) return '—';
+    const v = charged - cost, color = v < 0 ? '#b42318' : v === 0 ? '#b54708' : '#027a48';
+    return `<span style="color:${color}">${brl(v)}${v < 0 ? ' <small>(abaixo do custo)</small>' : v === 0 ? ' <small>(no custo)</small>' : ''}</span>`;
+  };
+  const rows = w.sales.map(s => {
+    const known = s.items.length && s.items.every(i => i.cost != null || i.service);
+    const cost = s.items.reduce((a, i) => a + (i.cost || 0), 0), list = s.items.reduce((a, i) => a + (i.list ?? i.total), 0);
+    const items = s.items.length ? s.items.map(i => `${i.qty}× ${esc(i.name)}`).join('<br>') : `<i>só valor digitado</i>${s.description ? ' — ' + esc(s.description) : ''}`;
+    return [esc(when(s.created_at)), s.sale_number, esc(s.seller || ''), items, s.items.length ? brl(list) : '—', `<b>${brl(s.total_cents)}</b><br><small>${esc(payLabel(s))}</small>`, known ? brl(cost) : '—', diff(s.total_cents, cost, known)];
+  });
+  const knownAll = !w.cost_unknown && w.sales.every(s => s.items.length);
+  const foot = w.sales.length > 1 ? `<tr><td colspan="4" style="padding:6px 4px;font-weight:700">Total (${w.qty} itens)</td><td style="text-align:right;padding:6px 4px">${brl(w.list_total)}</td><td style="text-align:right;padding:6px 4px;font-weight:700">${brl(w.total)}</td><td style="text-align:right;padding:6px 4px">${brl(w.cost_total)}</td><td style="text-align:right;padding:6px 4px">${diff(w.total, w.cost_total, knownAll)}</td></tr>` : '';
+  return `<div style="border:2px solid #f25c1f;border-radius:12px;padding:12px 14px;margin:18px 0;background:#fff7f3">
+<h2 style="font-size:16px;margin:0 0 4px;color:#111827">À parte: vendas lançadas para ${esc(who)}</h2>
+<p style="font-size:12px;color:#4b5563;margin:0 0 6px">Tudo o que os vendedores lançaram neste mês no nome deste cliente. Confira se cada item saiu mesmo para ele. Estes valores também estão somados nos totais da loja.</p>
+${w.sales.length ? `<p style="font-size:13px;margin:4px 0"><b>${w.sales.length} venda(s) · ${w.qty} item(ns)</b> · preço normal ${brl(w.list_total)} · cobrado <b>${brl(w.total)}</b> · custo ${brl(w.cost_total)}${w.list_total > w.total ? ` · desconto dado ${brl(w.list_total - w.total)}` : ''}</p>` : ''}
+${table(['Data', 'Nº', 'Vendedor', 'Itens', R('Preço normal'), R('Cobrado'), R('Custo'), R('Cobrado − custo')], rows, 'Nenhuma venda lançada para ele neste mês.', foot)}
+${w.cost_unknown ? `<p style="font-size:12px;color:#6b7280;margin:0">${w.cost_unknown} item(ns) sem preço de custo cadastrado ficaram fora do custo.</p>` : ''}
+${w.pending.length ? `<p style="font-size:13px;margin:8px 0 2px"><b>A receber no nome dele (ainda não pago): ${brl(w.pending_total)}</b></p>` + table(['Data', 'Nº', 'Vendedor', 'Descrição', R('Valor')], w.pending.map(p => [esc(when(p.created_at)), p.number, esc(p.seller || ''), esc(p.description || '—'), brl(p.total_cents)]), '') : ''}
+<p style="font-size:11px;color:#6b7280;margin:6px 0 0">Só aparecem vendas em que o cliente foi escolhido no caixa. Venda sem cliente não entra aqui.</p>
+</div>`;
+}
+
 export function reportHtml(d) {
   const long = d.kind !== 'daily';
   // Lucro bruto só dos itens com custo cadastrado (xerox, avulsos e produtos sem custo ficam de fora).
@@ -159,6 +225,7 @@ ${kpi(services.length ? 'Lucro bruto (produtos e serviços)' : 'Lucro bruto dos 
 </tr></table>
 <p style="font-size:12px;color:#6b7280;margin:0 0 6px">Custos = preço de custo do que saiu (mercadorias ${brl(d.goods_cost || 0)} · peças dos serviços ${brl(d.parts_cost || 0)}).${d.costs_unknown ? ` ${d.costs_unknown} item(ns) sem preço de custo ficaram fora.` : ''}</p>
 ${noCost.length && all.length ? `<p style="font-size:12px;color:#6b7280">Lucro bruto sem: ${noCost.map(i => esc(i.name)).join(', ')} (sem preço de custo).</p>` : ''}
+${(d.watched || []).map(w => watchedHtml(w, d.timezone)).join('')}
 
 ${d.engagement && (d.engagement.links || d.engagement.opens) ? h2('Acompanhamento dos clientes') + `<table style="width:100%;border-collapse:separate;border-spacing:6px;margin:4px -6px 4px"><tr>
 ${kpi('Pedidos com link', d.engagement.links)}${kpi('Aberturas do link', d.engagement.opens, '#c2410c')}${kpi('Pessoas acompanhando', d.engagement.people)}
@@ -253,14 +320,16 @@ export function registerReports(app, { q, auth, roles, route, bad, valid, audit 
   const today = () => ymd(localNow());
 
   app.get('/api/store/reports/settings', ...owner, route(async (req, res) => {
-    const t = (await q('SELECT report_email,report_daily,report_weekly,report_monthly FROM tenants WHERE id=$1', [req.user.tenant_id])).rows[0] || {};
+    const t = (await q('SELECT report_email,report_daily,report_weekly,report_monthly,report_watch_phones FROM tenants WHERE id=$1', [req.user.tenant_id])).rows[0] || {};
     const runs = await q('SELECT kind,period_key,status,error,updated_at FROM report_runs WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT 10', [req.user.tenant_id]);
     res.json({ ...t, email_configured: emailConfigured(), timezone: TZ, last_runs: runs.rows });
   }));
   app.patch('/api/store/reports/settings', ...owner, route(async (req, res) => {
-    const v = valid(z.object({ report_email: z.union([z.literal(''), z.string().trim().email().max(200)]), report_daily: z.boolean(), report_weekly: z.boolean(), report_monthly: z.boolean() }).strict(), req, res); if (!v) return;
-    const r = await q('UPDATE tenants SET report_email=NULLIF($1,\'\'),report_daily=$2,report_weekly=$3,report_monthly=$4 WHERE id=$5 RETURNING report_email,report_daily,report_weekly,report_monthly',
-      [v.report_email.toLowerCase(), v.report_daily, v.report_weekly, v.report_monthly, req.user.tenant_id]);
+    const v = valid(z.object({ report_email: z.union([z.literal(''), z.string().trim().email().max(200)]), report_daily: z.boolean(), report_weekly: z.boolean(), report_monthly: z.boolean(),
+      report_watch_phones: z.array(z.string().trim().regex(/^[\d\s()+.-]{8,25}$/, 'Telefone inválido').refine(x => x.replace(/\D/g, '').length >= 8, 'Telefone com pelo menos 8 dígitos')).max(5).optional() }).strict(), req, res); if (!v) return;
+    const phones = v.report_watch_phones ? [...new Set(v.report_watch_phones.map(x => x.replace(/\D/g, '')))] : null;
+    const r = await q('UPDATE tenants SET report_email=NULLIF($1,\'\'),report_daily=$2,report_weekly=$3,report_monthly=$4,report_watch_phones=COALESCE($6,report_watch_phones) WHERE id=$5 RETURNING report_email,report_daily,report_weekly,report_monthly,report_watch_phones',
+      [v.report_email.toLowerCase(), v.report_daily, v.report_weekly, v.report_monthly, req.user.tenant_id, phones]);
     await audit(req, 'update', 'report_settings', req.user.tenant_id); res.json(r.rows[0]);
   }));
   // Prévia em HTML (o mesmo conteúdo do e-mail). date = último dia do período (padrão: hoje).

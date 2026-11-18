@@ -2065,12 +2065,99 @@
       w.document.close();
     };
   }
+  // Cotação: peças zeradas + peças que saíram (reposição) numa lista só. Escolhe o fornecedor no topo e digita o preço de
+  // cada peça nele (Enter vai para a próxima). Cada peça vai para o pedido do fornecedor mais barato.
+  let quoteSupplier = '';
+  async function quoteTab(box) {
+    let all = [], rows = [], out = [], sups = [], parts = [];
+    try { [all, sups, parts] = await Promise.all([api('/store/stock/quote'), api('/store/suppliers').catch(() => []), api('/store/products?kind=part').catch(() => [])]); } catch (err) { box.textContent = err.message; return; }
+    if (!box.isConnected) return;
+    const split = () => { rows = all.filter(r => r.in_quote); out = all.filter(r => !r.in_quote); };
+    split();
+    box.innerHTML = `<div class="fs-row"><label class="nv-field fs-grow">Lançar preços do fornecedor<input id="fsQSup" list="fsQSupList" maxlength="80" placeholder="Ex.: Chen" autocomplete="off" value="${esc(quoteSupplier)}"></label></div>
+      <datalist id="fsQSupList">${sups.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
+      <p class="nv-help">Escolha o fornecedor e digite o preço de cada peça nele (Enter salva e vai para a próxima; apagar o preço tira esse fornecedor da peça). Depois troque o fornecedor e repita. Cada peça entra no pedido do fornecedor mais barato.</p>
+      <div id="fsQOrders"></div><h4 class="fs-rs-h" id="fsQHead"></h4><div id="fsQList" class="nv-list"></div>
+      <div class="fs-row" style="margin-top:12px"><label class="nv-field fs-grow">Incluir outra peça na cotação<input id="fsQAdd" list="fsQAddList" placeholder="Digite o modelo (ex.: Redmi 13C)" autocomplete="off"></label></div><datalist id="fsQAddList"></datalist>
+      <div id="fsQOut"></div>`;
+    const supIn = $('fsQSup'), list = $('fsQList');
+    const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    const label = r => r.name + (r.device_model ? ' · ' + r.device_model : '');
+    const priceIn = r => { const x = r.quotes.find(x => same(x.supplier_name, quoteSupplier)); return x ? (x.price_cents / 100).toFixed(2).replace('.', ',') : ''; };
+    const drawOrders = () => {
+      const by = new Map(), none = [];
+      for (const r of rows) { const b = r.quotes[0]; if (!b) { none.push(r); continue; } if (!by.has(b.supplier_id)) by.set(b.supplier_id, { name: b.supplier_name, phone: b.phone, items: [] }); by.get(b.supplier_id).items.push({ r, price: b.price_cents }); }
+      const groups = [...by.values()].sort((a, b) => b.items.length - a.items.length);
+      const msg = g => `Pedido ${config?.name || ''}:\n` + g.items.map(({ r }) => `${r.order_qty}x ${label(r)}`).join('\n');
+      $('fsQOrders').innerHTML = groups.length ? `<h4 class="fs-rs-h">Pedir em cada fornecedor (o mais barato)</h4><div class="nv-list">${groups.map((g, i) => `<div class="fs-sale fs-q-order"><div><b>${esc(g.name)}</b> · ${g.items.length} peça(s) · ${brl(g.items.reduce((t, x) => t + x.price * x.r.order_qty, 0))}<br>
+        <small>${g.items.map(({ r, price }) => `${r.order_qty}× ${esc(label(r))} (${brl(price)})`).join('<br>')}</small></div>
+        <div class="fs-sale-end">${waPhone(g.phone) ? `<a class="nv-button fs-small" target="_blank" rel="noopener" href="${esc(waLink(g.phone, msg(g)))}">WhatsApp</a>` : ''}<button type="button" class="nv-button secondary fs-small" data-q-copy="${i}">Copiar pedido</button></div></div>`).join('')}</div>
+        ${none.length ? `<p class="nv-help">${none.length} peça(s) ainda sem preço em nenhum fornecedor.</p>` : ''}` : '';
+      $('fsQOrders').querySelectorAll('[data-q-copy]').forEach(b => b.onclick = async () => feedback(await copyText(msg(groups[b.dataset.qCopy])) ? 'Pedido copiado: cole no WhatsApp do fornecedor.' : 'Não deu para copiar.', false));
+    };
+    const rowHtml = r => {
+      const best = r.quotes[0]?.price_cents;
+      const chips = r.quotes.map(x => `<span class="fs-q-chip${x.price_cents === best ? ' fs-q-best' : ''}">${esc(x.supplier_name)} ${brl(x.price_cents)}${x.price_cents === best ? ' · mais barato' : ''}</span>`).join('') || '<span class="fs-tag-warn">sem preço ainda</span>';
+      return `<div class="fs-sale fs-q" data-q="${r.id}"><div><b>${esc(label(r))}</b><br><small>${r.location ? esc(r.location) + ' · ' : ''}estoque ${r.stock_qty ?? '—'}${r.restock_pending ? ` · <span class="fs-neg">saíram ${r.restock_pending} (repor)</span>` : ''}</small><div class="fs-q-prices">${chips}</div></div>
+        <div class="fs-sale-end"><label class="fs-count">Pedir<input type="number" min="1" max="9999" inputmode="numeric" class="fs-q-qty" data-q-qty="${r.id}" value="${r.order_qty}" aria-label="Quantidade a pedir de ${esc(label(r))}"></label><button type="button" class="nv-button secondary fs-small" data-q-out="${r.id}" title="Tirar da cotação">Tirar</button>${quoteSupplier ? `<label class="fs-count">Preço na ${esc(quoteSupplier)}<input data-q-price="${r.id}" inputmode="decimal" placeholder="R$" value="${priceIn(r)}" aria-label="Preço de ${esc(label(r))} na ${esc(quoteSupplier)}"></label>` : '<small class="nv-help">Escolha o fornecedor acima</small>'}</div></div>`;
+    };
+    const paint = () => {
+      drawOrders();
+      $('fsQHead').textContent = `Peças para cotar (${rows.length})`;
+      list.innerHTML = rows.map(rowHtml).join('') || '<p class="nv-help">Nenhuma peça zerada ou para repor.</p>';
+      const inIds = new Set(rows.map(r => r.id));
+      $('fsQAddList').innerHTML = parts.filter(p => !inIds.has(p.id)).map(p => `<option value="${esc(label(p))}">`).join('');
+      $('fsQOut').innerHTML = out.length ? `<h4 class="fs-rs-h">Tiradas da cotação (${out.length})</h4><div class="nv-list">${out.map(r => `<div class="fs-sale"><div><b>${esc(label(r))}</b><br><small>${r.location ? esc(r.location) + ' · ' : ''}estoque ${r.stock_qty ?? '—'}</small></div><div class="fs-sale-end"><button type="button" class="nv-button secondary fs-small" data-q-in="${r.id}">Voltar para a cotação</button></div></div>`).join('')}</div>` : '';
+      box.querySelectorAll('[data-q-out]').forEach(b => b.onclick = () => include(b.dataset.qOut, false));
+      box.querySelectorAll('[data-q-in]').forEach(b => b.onclick = () => include(b.dataset.qIn, true));
+      list.querySelectorAll('[data-q-qty]').forEach(inp => {
+        const go = async () => {
+          const id = inp.dataset.qQty, r = all.find(x => x.id === id), n = Number(inp.value);
+          if (!Number.isInteger(n) || n < 1) { feedback('Quantidade a pedir: 1 ou mais.', true); inp.value = r.order_qty; return; }
+          if (n === r.order_qty) return;
+          try { const upd = await api(`/store/stock/quote/${id}/qty`, 'POST', { qty: n }); all[all.indexOf(r)] = upd; split(); feedback(`${label(upd)}: pedir ${n}.`); drawOrders(); } catch (err) { feedback(err.message, true); }
+        };
+        inp.onchange = go; inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+      });
+      list.querySelectorAll('[data-q-price]').forEach(inp => {
+        inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(inp, true); } };
+        inp.onchange = () => save(inp, false);
+      });
+    };
+    const save = async (inp, next) => {
+      const id = inp.dataset.qPrice, r = rows.find(x => x.id === id), raw = inp.value.trim(), cents = raw ? parseMoney(raw) : null;
+      const nextId = next ? rows[rows.indexOf(r) + 1]?.id : null;
+      const go = () => { if (!nextId) return; const ni = list.querySelector(`[data-q-price="${nextId}"]`); ni?.focus(); ni?.select(); };
+      if (raw && (!Number.isFinite(cents) || cents < 0)) { feedback('Preço inválido. Ex.: 50 ou 52,90', true); inp.focus(); return; }
+      if ((priceIn(r) || '') === (cents == null ? '' : (cents / 100).toFixed(2).replace('.', ','))) { go(); return; }
+      if (inp.dataset.saving) return; inp.dataset.saving = '1';
+      try {
+        const upd = await api('/store/stock/quote/' + id, 'PUT', { supplier: quoteSupplier, price_cents: cents });
+        all[all.findIndex(x => x.id === id)] = upd; split(); feedback(cents == null ? `${label(r)}: preço da ${quoteSupplier} removido.` : `${label(r)}: ${brl(cents)} na ${quoteSupplier}.`);
+        if (!sups.some(x => same(x.name, quoteSupplier))) { sups.push({ name: quoteSupplier }); $('fsQSupList').insertAdjacentHTML('beforeend', `<option value="${esc(quoteSupplier)}">`); }
+        paint(); go();
+      } catch (err) { delete inp.dataset.saving; feedback(err.message, true); }
+    };
+    const include = async (id, inc) => {
+      try {
+        const upd = await api(`/store/stock/quote/${id}/include`, 'POST', { include: inc }), i = all.findIndex(x => x.id === id);
+        if (i >= 0) all[i] = upd; else all.push(upd);
+        split(); feedback(`${label(upd)}: ${inc ? 'na cotação' : 'tirada da cotação'}.`); paint();
+      } catch (err) { feedback(err.message, true); }
+    };
+    $('fsQAdd').onchange = () => { const v = $('fsQAdd').value.trim(), p = parts.find(x => same(label(x), v)); if (!p) return; $('fsQAdd').value = ''; include(p.id, true); };
+    let timer;
+    supIn.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { const v = supIn.value.trim().replace(/\s+/g, ' '); const known = sups.find(x => same(x.name, v)); quoteSupplier = known ? known.name : v; paint(); }, 250); };
+    paint();
+    if (!quoteSupplier) supIn.focus();
+  }
   // Reposição em duas listas: Produtos (vendidos no caixa) e Serviços (peças que saíram nos serviços feitos).
   let restockView = 'product';
   async function restockTab(box) {
-    const seg = `<div class="fs-chips fs-restock-view">${[['product', FPIcon('cart') + 'Produtos'], ['part', FPIcon('wrench') + 'Serviços']].map(([k, t]) => `<button type="button" class="fs-chip${restockView === k ? ' fs-chip-on' : ''}" data-rv="${k}" aria-pressed="${restockView === k}"><b>${t}</b></button>`).join('')}</div>`;
+    const seg = `<div class="fs-chips fs-restock-view">${[['product', FPIcon('cart') + 'Produtos'], ['part', FPIcon('wrench') + 'Serviços'], ['quote', FPIcon('tag') + 'Cotação']].map(([k, t]) => `<button type="button" class="fs-chip${restockView === k ? ' fs-chip-on' : ''}" data-rv="${k}" aria-pressed="${restockView === k}"><b>${t}</b></button>`).join('')}</div>`;
     const bindSeg = () => box.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { restockView = b.dataset.rv; restockTab(box); });
     if (restockView === 'part') { box.innerHTML = seg + '<div id="fsRsSvc"><p class="nv-help">Carregando…</p></div>'; bindSeg(); return restockServices($('fsRsSvc'), () => restockTab(box)); }
+    if (restockView === 'quote') { box.innerHTML = seg + '<div id="fsQuote"><p class="nv-help">Carregando…</p></div>'; bindSeg(); return quoteTab($('fsQuote')); }
     let rows = []; try { rows = await api('/store/stock/restock?kind=product'); } catch (err) { box.textContent = err.message; return; }
     box.innerHTML = `${seg}<div class="fs-row"><p class="nv-help fs-grow">Produtos vendidos e ainda não repostos. Somem quando você dá entrada no estoque.</p><button type="button" class="nv-button" id="fsRestockPrint"${rows.length ? '' : ' disabled'}>${FPIcon('printer')}Imprimir lista de reposição</button></div>
       <div class="nv-list">${rows.map(r => `<div class="fs-sale"><div><b>${esc(r.name)}${r.variant ? ' · ' + esc(r.variant) : ''}</b><br><small>Estoque atual: ${r.stock_qty ?? '—'}${r.cost_cents != null ? ' · custo ' + brl(r.cost_cents) : ''}${r.supplier_name ? ' · fornecedor ' + esc(r.supplier_name) : ''}</small></div><div class="fs-sale-end"><b class="fs-neg">saiu ${r.pending} · repor</b></div></div>`).join('') || '<p class="nv-help">Nada para repor.</p>'}</div>`;
@@ -2939,6 +3026,7 @@ ${view === 'sum' ? `
 
   // ---------------- Integração com o painel ----------------
   const css = `.fs-model-hit:empty{display:none}.fs-model-hit{margin:-4px 0 10px}.fs-hit-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}.fs-hit-list .fs-chip{text-align:left}
+.fs-q-prices{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.fs-q-chip{font-size:12px;padding:2px 8px;border:1px solid #D0D5DD;border-radius:999px;background:#fff}.fs-q-best{border-color:#12B76A;background:#ECFDF3;color:#05603A;font-weight:700}.fs-q input{width:96px}.fs-q input.fs-q-qty{width:64px}.fs-q .fs-sale-end{gap:8px;align-items:flex-end}
 .fs-part-loc{margin:14px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--nv-muted,#667085)}
 .fs-part-end{align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.fs-count{display:flex;flex-direction:column;font-size:11px;color:var(--nv-muted,#667085)}.fs-count input{width:74px;padding:7px 8px;font-size:16px;font-weight:600;text-align:center;border:1px solid #D0D5DD;border-radius:8px}
 .fs-more{position:relative}.fs-more summary{display:inline-block;list-style:none;cursor:pointer;padding:6px 10px;border:1px solid #D0D5DD;border-radius:8px;font-weight:700}.fs-more summary::-webkit-details-marker{display:none}.fs-more[open]>div{position:absolute;right:0;z-index:5;display:flex;flex-direction:column;gap:4px;background:#fff;border:1px solid #E4E7EC;border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(16,24,40,.12);min-width:170px}

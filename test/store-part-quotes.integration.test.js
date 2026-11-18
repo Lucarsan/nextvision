@@ -88,16 +88,24 @@ test('painel: Reposição → Cotação, preços por fornecedor e pedido no mais
     // Fornecedor Chen: digita os preços com Enter (vai para a próxima).
     await page.locator('#fsQSup').fill('chen');
     await page.waitForSelector(`[data-q-price="${a01.id}"]`);
-    await page.locator(`[data-q-price="${a01.id}"]`).fill('50'); await page.locator(`[data-q-price="${a01.id}"]`).press('Enter');
-    await page.waitForFunction(id => document.activeElement?.dataset?.qPrice === id, a02.id);
-    await page.locator(`[data-q-price="${a02.id}"]`).fill('70'); await page.locator(`[data-q-price="${a02.id}"]`).press('Enter');
-    await page.waitForFunction(id => document.activeElement?.dataset?.qPrice === id, k41.id);
+    // Digita e Tab, sem esperar salvar: o foco já está no preço da próxima peça.
+    await page.locator(`[data-q-price="${a01.id}"]`).click();
+    await page.keyboard.type('50'); await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.qPrice), a02.id);
+    await page.keyboard.type('70'); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.qPrice), k41.id);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.qPrice), a02.id, 'Shift+Tab volta na mesma coluna');
+    await page.waitForSelector(`[data-q="${a02.id}"] .fs-q-chip:has-text("Chen")`);
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.qPrice), a02.id, 'salvar não tira o foco');
     // Fornecedor novo ZL: mais barato no A02, mais caro no A01.
     await page.locator('#fsQSup').fill('ZL');
     await page.waitForSelector('label:has-text("Preço na ZL")');
-    await page.locator(`[data-q-price="${a01.id}"]`).fill('60'); await page.locator(`[data-q-price="${a01.id}"]`).press('Enter');
-    await page.waitForFunction(id => document.activeElement?.dataset?.qPrice === id, a02.id);
-    await page.locator(`[data-q-price="${a02.id}"]`).fill('65,50'); await page.locator(`[data-q-price="${a02.id}"]`).press('Enter');
+    await page.locator(`[data-q-price="${a01.id}"]`).click();
+    await page.keyboard.type('60'); await page.keyboard.press('Tab'); await page.keyboard.type('65,50'); await page.keyboard.press('Tab');
+    // Coluna Pedir: Tab vai para o Pedir da próxima peça.
+    await page.locator(`[data-q-qty="${a01.id}"]`).click(); await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.qQty), a02.id);
     await page.waitForSelector('.fs-q-order:has-text("ZL")');
     assert.match(await page.locator(`[data-q="${a01.id}"]`).innerText(), /Chen R\$\s?50,00 · mais barato[\s\S]*ZL R\$\s?60,00/);
     const orders = await page.locator('#fsQOrders').innerText();

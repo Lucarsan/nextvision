@@ -2,6 +2,7 @@
 // - Central (master): cria a rede, liga e desliga unidades, define CNPJ e rótulo de cada unidade e cria o login do dono da rede.
 // - Dono da rede (role 'network'): vê as unidades e o faturamento por unidade. Não opera caixa nem vê dados de clientes.
 // - Público: /api/public/brand devolve nome, logo e cor da rede pelo endereço (ex.: audace.ficoupronto.com), para a tela de login.
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import { STORE_TZ } from './auto-close.js';
 
@@ -101,12 +102,83 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     res.json(r.rows[0]);
   }));
 
-  // ---- Dono da rede ----
+  // ---- Pessoas da rede (central) ----
+  // Uma lista só com donos, supervisores e o pessoal de cada unidade. "Função" vira papel no sistema:
+  //   dono → rede, vê tudo · supervisor → rede, só as unidades marcadas
+  //   gerente → dono da loja na unidade · responsavel → operador livre · consultora → operador novato (não cancela nem dá desconto)
+  const FUNCS = {
+    dono: { role: 'network', access: 'owner' }, supervisor: { role: 'network', access: 'supervisor' },
+    gerente: { role: 'owner', level: 'full' }, responsavel: { role: 'operator', level: 'full' }, consultora: { role: 'operator', level: 'basic' }
+  };
+  const funcOf = u => u.role === 'network' ? (u.network_access === 'supervisor' ? 'supervisor' : 'dono') : u.role === 'owner' ? 'gerente' : u.access_level === 'basic' ? 'consultora' : 'responsavel';
+  const tempPassword = () => 'Fp-' + crypto.randomBytes(9).toString('base64url');
+  const personSchema = z.object({
+    name: z.string().trim().min(2).max(120), email: z.string().trim().toLowerCase().email().max(200),
+    function: z.enum(Object.keys(FUNCS)), unit_id: uuid.nullable().optional(), unit_ids: z.array(uuid).max(50).optional(),
+    active: z.boolean().optional(), password: z.string().min(12).max(200).optional()
+  }).strict();
+  async function networkUnits(networkId) { return new Set((await q('SELECT id FROM tenants WHERE network_id = $1', [networkId])).rows.map(r => r.id)); }
+  // Converte função + unidade(s) nas colunas do usuário; null = combinação inválida.
+  function placement(v, networkId, units) {
+    const f = FUNCS[v.function];
+    if (f.role === 'network') {
+      const ids = f.access === 'supervisor' ? [...new Set(v.unit_ids || [])] : [];
+      if (ids.some(id => !units.has(id))) return null;
+      return { role: 'network', tenant_id: null, network_id: networkId, network_access: f.access, network_unit_ids: ids, access_level: 'full' };
+    }
+    if (!v.unit_id || !units.has(v.unit_id)) return null;
+    return { role: f.role, tenant_id: v.unit_id, network_id: null, network_access: 'owner', network_unit_ids: [], access_level: f.level };
+  }
+  const personOut = u => ({ id: u.id, name: u.name, email: u.email, active: u.active, function: funcOf(u), unit_id: u.tenant_id || null, unit_ids: u.role === 'network' ? (u.network_unit_ids || []) : [], created_at: u.created_at });
+
+  app.get('/api/master/networks/:id/people', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const r = await q(`SELECT u.id, u.name, u.email, u.active, u.role, u.tenant_id, u.network_access, u.network_unit_ids, u.access_level, u.created_at
+      FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.network_id = $1 OR (t.network_id = $1 AND u.role IN ('owner', 'operator'))
+      ORDER BY CASE WHEN u.role = 'network' THEN 0 ELSE 1 END, lower(coalesce(t.unit_label, t.name, '')), lower(u.name)`, [req.params.id]);
+    res.set('Cache-Control', 'no-store').json(r.rows.map(personOut));
+  }));
+
+  app.post('/api/master/networks/:id/people', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const v = valid(personSchema, req, res); if (!v) return;
+    if (!(await q('SELECT 1 FROM store_networks WHERE id = $1', [req.params.id])).rowCount) return bad(res, 404, 'Rede não encontrada');
+    const p = placement(v, req.params.id, await networkUnits(req.params.id)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor) desta rede');
+    const password = v.password || tempPassword();
+    try {
+      const r = await q(`INSERT INTO users(name, email, password_hash, role, tenant_id, network_id, network_access, network_unit_ids, access_level, active)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [v.name, v.email, await bcrypt.hash(password, 12), p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level, v.active ?? true]);
+      await audit(req, 'create', 'user', r.rows[0].id, p.tenant_id);
+      res.status(201).json({ ...personOut(r.rows[0]), ...(v.password ? {} : { temporary_password: password }) });
+    } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
+  }));
+
+  app.patch('/api/master/network-people/:id', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const v = valid(personSchema.omit({ password: true }).partial(), req, res); if (!v) return;
+    const cur = (await q(`SELECT u.*, coalesce(u.network_id, t.network_id) net FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.id = $1 AND u.role IN ('network', 'owner', 'operator')`, [req.params.id])).rows[0];
+    if (!cur?.net) return bad(res, 404, 'Pessoa não encontrada nesta rede');
+    const merged = { function: v.function ?? funcOf(cur), unit_id: v.unit_id !== undefined ? v.unit_id : cur.tenant_id, unit_ids: v.unit_ids ?? cur.network_unit_ids };
+    const p = placement(merged, cur.net, await networkUnits(cur.net)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor) desta rede');
+    try {
+      const r = await q(`UPDATE users SET name = coalesce($2, name), email = coalesce($3, email), active = coalesce($4, active),
+        role = $5, tenant_id = $6, network_id = $7, network_access = $8, network_unit_ids = $9, access_level = $10 WHERE id = $1 RETURNING *`,
+        [cur.id, v.name ?? null, v.email ?? null, v.active ?? null, p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level]);
+      await audit(req, 'update', 'user', cur.id, p.tenant_id);
+      res.json(personOut(r.rows[0]));
+    } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
+  }));
+
+  // ---- Dono da rede e supervisores ----
+  // Dono vê todas as unidades; supervisor só as que acompanha (lista vazia = nenhuma).
+  const scope = req => req.user.network_access === 'supervisor' ? (req.user.network_unit_ids || []) : null;
   app.get('/api/network/me', ...network, route(async (req, res) => {
     const n = await q('SELECT * FROM store_networks WHERE id = $1', [req.user.network_id]);
-    const units = await q('SELECT id, name, unit_label, cnpj, city, status, sales_enabled FROM tenants WHERE network_id = $1 ORDER BY lower(coalesce(unit_label, name))', [req.user.network_id]);
+    const units = await q('SELECT id, name, unit_label, cnpj, city, status, sales_enabled FROM tenants WHERE network_id = $1 AND ($2::uuid[] IS NULL OR id = ANY($2)) ORDER BY lower(coalesce(unit_label, name))', [req.user.network_id, scope(req)]);
     const me = await q('SELECT name FROM users WHERE id = $1', [req.user.id]);
-    res.set('Cache-Control', 'no-store').json({ network: networkOut(n.rows[0]), units: units.rows, user: { name: me.rows[0]?.name || '' } });
+    res.set('Cache-Control', 'no-store').json({ network: networkOut(n.rows[0]), units: units.rows, user: { name: me.rows[0]?.name || '', access: req.user.network_access || 'owner' } });
   }));
 
   // Faturamento por unidade num período (dias no fuso da loja). Padrão: hoje.
@@ -118,7 +190,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     const span = (await q('SELECT ($2::date - $1::date) days', [from, to])).rows[0].days;
     if (span < 0 || span >= MAX_RANGE_DAYS) return bad(res, 400, 'Período inválido (máximo de ' + MAX_RANGE_DAYS + ' dias)');
     const r = await q(`
-      WITH units AS (SELECT id, name, unit_label, status FROM tenants WHERE network_id = $1),
+      WITH units AS (SELECT id, name, unit_label, status FROM tenants WHERE network_id = $1 AND ($5::uuid[] IS NULL OR id = ANY($5))),
       s AS (
         SELECT s.* FROM sales s JOIN units u ON u.id = s.tenant_id
         WHERE (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
@@ -139,7 +211,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
         -- Meta do mês da loja (store_goals sem vendedora; 0 = sem meta) e o vendido no mês até agora.
         (SELECT nullif(g.target_cents, 0) FROM store_goals g WHERE g.tenant_id = u.id AND g.user_id IS NULL AND g.month <= date_trunc('month', (now() AT TIME ZONE $4))::date ORDER BY g.month DESC LIMIT 1) month_goal_cents,
         (SELECT coalesce(sum(x.total_cents), 0)::bigint FROM sales x WHERE x.tenant_id = u.id AND x.canceled_at IS NULL AND x.created_at >= (date_trunc('month', now() AT TIME ZONE $4) AT TIME ZONE $4)) month_total_cents
-      FROM units u ORDER BY lower(coalesce(u.unit_label, u.name))`, [req.user.network_id, from, to, STORE_TZ]);
+      FROM units u ORDER BY lower(coalesce(u.unit_label, u.name))`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Alertas do período: cobrança repetida (mesmo valor e forma na mesma unidade em até 2 minutos), cancelamentos e estoque baixo.
     const dup = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, b.total_cents, b.payment_method, to_char(b.created_at AT TIME ZONE $4, 'HH24:MI') at,
@@ -148,23 +220,23 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
         AND b.payment_method = a.payment_method AND b.payments IS NOT DISTINCT FROM a.payments
         AND b.created_at > a.created_at AND b.created_at <= a.created_at + interval '2 minutes'
       JOIN tenants t ON t.id = a.tenant_id
-      WHERE t.network_id = $1 AND a.canceled_at IS NULL AND b.canceled_at IS NULL
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND a.canceled_at IS NULL AND b.canceled_at IS NULL
         AND (b.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
-      ORDER BY b.created_at DESC LIMIT 20`, [req.user.network_id, from, to, STORE_TZ]);
+      ORDER BY b.created_at DESC LIMIT 20`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     const canceled = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, s.total_cents, coalesce(s.cancel_reason, '') reason, cu.name canceled_by,
              to_char(s.canceled_at AT TIME ZONE $4, 'DD/MM HH24:MI') at
       FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by
-      WHERE t.network_id = $1 AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
-      ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ]);
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Estoque baixo: peças com estoque controlado, 1 unidade ou menos, que venderam nos últimos 30 dias.
     const low = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
       FROM products p JOIN tenants t ON t.id = p.tenant_id
       JOIN sale_items i ON i.product_id = p.id AND i.tenant_id = p.tenant_id
       JOIN sales s ON s.id = i.sale_id AND s.canceled_at IS NULL AND s.created_at >= now() - interval '30 days'
-      WHERE t.network_id = $1 AND p.active AND p.stock_qty IS NOT NULL AND p.stock_qty <= 1
-      GROUP BY t.unit_label, t.name, p.id ORDER BY sold DESC LIMIT 30`, [req.user.network_id]);
+      WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND p.active AND p.stock_qty IS NOT NULL AND p.stock_qty <= 1
+      GROUP BY t.unit_label, t.name, p.id ORDER BY sold DESC LIMIT 30`, [req.user.network_id, scope(req)]);
     const lowByUnit = [];
     for (const row of low.rows) { let u = lowByUnit.find(x => x.unit === row.unit); if (!u) lowByUnit.push(u = { unit: row.unit, products: [] }); u.products.push({ name: row.name, stock_qty: row.stock_qty, sold_30d: row.sold }); }
     const units = r.rows.map(u => {

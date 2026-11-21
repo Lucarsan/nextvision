@@ -25,6 +25,8 @@
       <label>Senha<input id="password" name="password" type="password" autocomplete="current-password" required></label>
       <button type="submit" class="en-btn" id="loginBtn">Entrar</button>
       <p id="loginError" class="en-error" role="alert"></p>
+      <a class="en-link" id="forgotLink" href="#">Esqueci a senha</a>
+      <p class="en-muted" id="forgotMsg" role="status" style="margin:0"></p>
       <a class="en-link" id="ctaWhats" href="/fale-conosco">Ainda não usa? Fale com a gente</a>
     </form>
 </main>
@@ -39,6 +41,17 @@
   // Sessão já aberta neste navegador: mostra o atalho para o painel.
   const saved = sessionStorage.getItem('nv_token');
   if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('openPanel').href = panelFor(u.role); $('session').classList.add('on'); } }).catch(() => {});
+  $('forgotLink').onclick = async e => {
+    e.preventDefault();
+    const email = $('email').value.trim();
+    if (!email || !$('email').checkValidity()) { $('forgotMsg').textContent = 'Digite o seu e-mail acima e clique de novo em "Esqueci a senha".'; $('email').focus(); return; }
+    $('forgotMsg').textContent = 'Enviando…';
+    try {
+      const r = await fetch('/api/auth/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const d = await r.json().catch(() => ({}));
+      $('forgotMsg').textContent = r.ok ? d.message : (d.error || 'Não foi possível enviar agora. Tente de novo em alguns minutos.');
+    } catch { $('forgotMsg').textContent = 'Sem conexão. Tente de novo.'; }
+  };
   $('loginForm').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';

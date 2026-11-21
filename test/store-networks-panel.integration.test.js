@@ -30,8 +30,18 @@ test('central monta a rede e o dono da rede vê o painel', {
     await cp.waitForSelector('.unLabel');
     await cp.fill('.unLabel', 'Maracanaú'); await cp.fill('.unCnpj', '11.222.333/0001-81'); await cp.click('.unSave');
     await cp.waitForFunction(() => document.getElementById('feedback').textContent.includes('Unidade salva')).catch(async e => { console.error('FEEDBACK', await cp.textContent('#feedback'), await cp.inputValue('.unCnpj')); throw e; });
-    await cp.fill('#nuName', 'Gabriel Mota'); await cp.fill('#nuEmail', 'gabriel@audace.test'); await cp.fill('#nuPass', 'senha-forte-da-rede-123'); await cp.click('#nuCreate');
-    await cp.waitForFunction(() => document.body.textContent.includes('gabriel@audace.test')).catch(async e => { console.error('GAB', await cp.textContent('#feedback'), await cp.evaluate(() => [...document.querySelectorAll('#nuName,#nuEmail,#nuPass')].map(i => i.id + '=' + i.value).join('|'))); throw e; });
+    // Pessoas: o dono (senha temporária mostrada uma vez) e uma consultora da unidade.
+    await cp.fill('.pNew .pName', 'Gabriel Mota'); await cp.fill('.pNew .pEmail', 'gabriel@audace.test'); await cp.selectOption('.pNew .pFunc', 'dono');
+    assert.equal(await cp.isVisible('.pNew .pUnit'), false);
+    await cp.click('.pNew .pAdd');
+    await cp.waitForFunction(() => document.getElementById('feedback').textContent.includes('Senha temporária'));
+    const gabrielPass = /Senha temporária \(aparece só agora\): (\S+)/.exec(await cp.textContent('#feedback'))[1];
+    await cp.fill('.pNew .pName', 'Consultora Maracanaú 1'); await cp.fill('.pNew .pEmail', 'c1@audace.test'); await cp.selectOption('.pNew .pFunc', 'consultora');
+    await cp.selectOption('.pNew .pUnit', tenant); await cp.click('.pNew .pAdd');
+    await cp.waitForFunction(() => document.body.innerHTML.includes('c1@audace.test') && document.getElementById('feedback').textContent.includes('Senha temporária'));
+    // Supervisor: as unidades aparecem como caixas de marcar.
+    await cp.selectOption('.pNew .pFunc', 'supervisor');
+    assert.equal(await cp.isVisible('.pNew .pUnits'), true); assert.equal(await cp.isVisible('.pNew .pUnit'), false);
     await cp.screenshot(shot('central-redes'));
     assert.deepEqual(errors, []);
     const net = (await api('/master/networks', { token: masterToken }))[0];
@@ -68,7 +78,7 @@ test('central monta a rede e o dono da rede vê o painel', {
     await rp.waitForFunction(() => document.getElementById('wmName').textContent === 'AUDACE');
     assert.equal(await rp.textContent('#wmSub'), 'JOIAS');
     await rp.screenshot(shot('acesso-rede'));
-    await rp.fill('#email', 'gabriel@audace.test'); await rp.fill('#password', 'senha-forte-da-rede-123'); await rp.click('#loginBtn');
+    await rp.fill('#email', 'gabriel@audace.test'); await rp.fill('#password', gabrielPass); await rp.click('#loginBtn');
     await rp.waitForURL(/\/rede\.html$/);
     await rp.waitForFunction(() => document.getElementById('rows').textContent.includes('Solares'));
     await rp.waitForFunction(() => document.getElementById('who').textContent.includes('Gabriel'));

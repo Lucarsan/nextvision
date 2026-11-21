@@ -178,7 +178,7 @@
     if (/^https:\/\//.test(network.logo_url || '')) { const img = document.createElement('img'); img.src = network.logo_url; img.alt = network.name; $('wm').replaceChildren(img); }
     else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
     if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
-    $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + 'gestão';
+    $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
   }).catch(e => { $('feedback').textContent = e.message; });
   $('unitSel').onchange = draw;
   $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });

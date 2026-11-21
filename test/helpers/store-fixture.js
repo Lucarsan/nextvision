@@ -49,7 +49,7 @@ export async function createStoreFixture({ env: extraEnv = {} } = {}) {
     const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const { port } = listener.address(); await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
-    server = spawn(process.execPath, ['src/server.js'], { env: { ...env, JWT_SECRET: secret, PORT: String(port), RESEND_API_KEY: '', EMAIL_FROM: '' }, stdio: ['ignore', 'ignore', 'pipe'] }); if (process.env.FP_DEBUG) server.stderr.pipe(process.stderr); else server.stderr.resume();
+    server = spawn(process.execPath, ['src/server.js'], { env: { ...env, JWT_SECRET: secret, PORT: String(port), RESEND_API_KEY: '', EMAIL_FROM: '', ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] }); if (process.env.FP_DEBUG) server.stderr.pipe(process.stderr); else server.stderr.resume();
     // admin: true → manda a liberação da senha do admin (pede uma por usuário e guarda).
     const adminTokens = new Map();
     const request = async (path, { method = 'GET', body, token = ownerToken, admin = false } = {}) => {

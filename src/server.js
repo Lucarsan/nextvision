@@ -14,6 +14,7 @@ import {registerMonitoring,startMonitoring,recordServerError} from './monitoring
 import {meterMiddleware,hookShutdown} from './usage-meter.js';
 import {registerCosts} from './costs.js';
 import {registerStoreNetworks} from './store-networks.js';
+import {registerPasswordReset} from './password-reset.js';
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(meterMiddleware);hookShutdown();app.use(express.json({limit:'400kb'}));
 // Uso humano (loja, central, técnico, cliente) acorda as rotinas fora do expediente. Agentes e agendador não contam.
 app.use('/api',(req,_res,next)=>{if(!/^\/(connect|internal)\//.test(req.path))markHumanActivity();next();});
@@ -25,10 +26,13 @@ const uuid=z.string().uuid();
 const auth=(req,res,next)=>{
  try{const token=/^Bearer (.+)$/i.exec(req.get('authorization')||'')?.[1];if(!token)return bad(res,401,'Não autenticado');req.user=jwt.verify(token,secret,{algorithms:['HS256']});}
  catch{return bad(res,401,'Sessão inválida');}
- q('SELECT u.active,u.role,u.tenant_id,u.network_id,u.access_level,u.admin_password_free,t.status,n.status network_status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1',[req.user.id]).then(({rows})=>{
+ q('SELECT u.active,u.role,u.tenant_id,u.network_id,u.network_access,u.network_unit_ids,u.password_changed_at,u.access_level,u.admin_password_free,t.status,n.status network_status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1',[req.user.id]).then(({rows})=>{
   const user=rows[0];if(!user?.active||user.role!==req.user.role||user.tenant_id!==req.user.tenant_id||(user.network_id||null)!==(req.user.network_id||null))return bad(res,403,'Conta sem autorização');
   // Dono da rede (role network): vê as unidades da sua rede; bloqueado se a rede for suspensa.
   if(user.role==='network'&&user.network_status!=='active')return bad(res,403,'Acesso da rede bloqueado. Entre em contato com a central.');
+  // Senha trocada depois do login: a sessão antiga deixa de valer.
+  if(user.password_changed_at&&(!req.user.iat||req.user.iat<Math.floor(new Date(user.password_changed_at).getTime()/1000)))return bad(res,401,'Sessão encerrada: a senha foi trocada. Entre de novo.');
+  if(user.role==='network'){req.user.network_access=user.network_access;req.user.network_unit_ids=user.network_unit_ids||[];}
   // Nível lido a cada requisição: mudar na central vale na hora, sem novo login.
   req.user.access_level=user.role==='operator'?user.access_level:'full';
   // Dono liberado da senha do admin (users.admin_password_free).
@@ -829,7 +833,7 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
  if(!r.rowCount)return res.status(404).sendFile('tracking.html',{root:'public'});
  res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
 }));
-registerMonitoring(app,{q,auth,roles,route,bad,valid,z});registerCosts(app,{q,auth,roles,route,bad,valid,z,uuid});registerStoreNetworks(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});
+registerMonitoring(app,{q,auth,roles,route,bad,valid,z});registerCosts(app,{q,auth,roles,route,bad,valid,z,uuid});registerStoreNetworks(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});registerPasswordReset(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});
 app.get('/como-funciona',(_req,res)=>res.redirect(301,'/o-que-e'));// endereço antigo da página
 app.use(express.static('public',{extensions:['html']}));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');recordServerError(err);return bad(res,500,'Erro interno');});

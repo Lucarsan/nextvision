@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Nova senha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#17181d;--text:#2e2f35;--muted:#6b6b70;--bg:#f5f4f0;--line:#e3e1da;--gold:#b8923a}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font:14px/1.5 Inter,system-ui,Arial,sans-serif;color:var(--text);padding:24px}
+  .box{width:100%;max-width:400px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:30px 28px}
+  .wm b{display:block;font:600 26px/1 "Cormorant Garamond",Georgia,serif;letter-spacing:.2em;color:var(--ink)}
+  .wm i{display:block;font-style:normal;font-size:10px;font-weight:600;letter-spacing:.32em;color:var(--gold);margin-top:6px}
+  .wm{margin-bottom:22px}
+  h1{margin:0;font-size:21px;color:var(--ink)}
+  .muted{color:var(--muted);margin:6px 0 20px}
+  label{display:block;font-size:13px;font-weight:600;color:var(--ink);margin-bottom:14px}
+  input{display:block;width:100%;height:44px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font:inherit}
+  input:focus{outline:2px solid var(--gold);outline-offset:1px;border-color:transparent}
+  button{width:100%;height:46px;border:0;border-radius:8px;background:var(--ink);color:#fff;font:600 15px Inter,sans-serif;cursor:pointer}
+  button:disabled{opacity:.6}
+  .msg{min-height:20px;margin:12px 0 0;font-weight:600}.msg.err{color:#8f3f30}.msg.ok{color:#2f6b45}
+  a{color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<main class="box">
+  <div class="wm"><b id="wmName"></b><i id="wmSub"></i></div>
+  <form id="form">
+    <h1>Criar nova senha</h1>
+    <p class="muted">Use pelo menos 12 caracteres. Uma frase curta é fácil de lembrar e difícil de adivinhar.</p>
+    <label>Nova senha<input id="p1" type="password" autocomplete="new-password" minlength="12" required></label>
+    <label>Repita a nova senha<input id="p2" type="password" autocomplete="new-password" minlength="12" required></label>
+    <button type="submit" id="btn">Salvar nova senha</button>
+    <p class="msg" id="msg" role="status"></p>
+  </form>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  // O código vem no fragmento (#t=...): sai da barra de endereço logo ao abrir.
+  const token = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  const done = (text, ok) => { $('msg').textContent = text; $('msg').className = 'msg ' + (ok ? 'ok' : 'err'); };
+  fetch('/api/public/brand').then(r => r.ok ? r.json() : null).then(b => {
+    const name = b?.network ? b.name : 'Ficou Pronto';
+    const [first, ...rest] = name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase();
+    document.title = 'Nova senha | ' + name;
+  }).catch(() => {});
+  if (!token) { done('Link incompleto. Abra o link do e-mail de novo ou peça outro em "Esqueci a senha".', false); $('btn').disabled = true; }
+  $('form').addEventListener('submit', async e => {
+    e.preventDefault();
+    if ($('p1').value !== $('p2').value) return done('As duas senhas não são iguais.', false);
+    $('btn').disabled = true; done('', true);
+    try {
+      const r = await fetch('/api/auth/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password: $('p1').value }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw Error(d.error || 'Não foi possível salvar');
+      $('form').innerHTML = '<h1>Senha criada</h1><p class="muted">Pronto. Use a nova senha para entrar.</p><p><a href="/entrar">Ir para a tela de entrada</a></p>';
+    } catch (err) { done(err.message, false); $('btn').disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

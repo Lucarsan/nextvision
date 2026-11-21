@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Painel da rede | Ficou Pronto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/central.css?v=1">
+<style>
+  .rd-brand{display:flex;align-items:center;gap:12px}
+  .rd-logo{width:44px;height:44px;border-radius:12px;object-fit:contain;background:#fff}
+  .rd-mark{width:44px;height:44px;border-radius:12px;background:var(--brand,#111827);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .rd-range{display:flex;gap:6px;flex-wrap:wrap}
+  .rd-range button{height:38px;padding:0 14px;border-radius:10px;border:1px solid #E5E7EB;background:#fff;font:inherit;font-weight:600;cursor:pointer}
+  .rd-range button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .rd-card{background:#fff;border-radius:16px;padding:22px 24px;margin-bottom:18px}
+  .rd-num{text-align:right;white-space:nowrap}
+  .rd-bad{color:#B91C1C;font-weight:600}
+  .rd-foot td{font-weight:700;border-top:2px solid var(--line)}
+  .rd-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+  .rd-top h1{margin:0;font-size:24px}
+  @media (max-width:700px){.ct-main{padding:18px 14px 40px}}
+</style>
+</head>
+<body>
+<main class="ct-main" style="margin:0 auto">
+  <div class="rd-top">
+    <div class="rd-brand" id="brand"><div class="rd-mark" id="mark">R</div><div><h1 id="netName">Painel da rede</h1><p class="ct-muted" id="updated" style="margin:2px 0 0">Carregando…</p></div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="rd-range" id="range">
+        <button type="button" data-r="today" class="on">Hoje</button><button type="button" data-r="yesterday">Ontem</button><button type="button" data-r="7d">7 dias</button><button type="button" data-r="month">Este mês</button>
+      </div>
+      <button type="button" class="ct-btn ghost" id="logout" style="height:38px">Sair</button>
+    </div>
+  </div>
+  <p id="feedback" class="ct-feedback" role="status"></p>
+  <div class="rd-card"><div class="ct-kpis" id="kpis"></div></div>
+  <div class="rd-card"><h2 style="margin:0 0 12px;font-size:18px">Por unidade</h2><div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Unidade</th><th class="rd-num">Faturamento</th><th class="rd-num">Vendas</th><th class="rd-num">Ticket médio</th><th class="rd-num">Canceladas</th><th class="rd-num">Dinheiro</th><th class="rd-num">Pix</th><th class="rd-num">Débito</th><th class="rd-num">Crédito</th><th class="rd-num">Outros</th></tr></thead><tbody id="rows"></tbody><tfoot id="foot"></tfoot></table></div></div>
+</main>
+<script>
+(() => {
+  const token = sessionStorage.getItem('nv_token');
+  if (!token) { location.replace('/entrar'); return; }
+  const $ = id => document.getElementById(id);
+  const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const api = async path => {
+    const r = await fetch('/api' + path, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); throw Error('Sessão expirada'); }
+    if (!r.ok) throw Error(j.error || 'Erro ao carregar');
+    return j;
+  };
+  // Datas no fuso de Fortaleza (UTC-3, sem horário de verão).
+  const day = (offset = 0) => new Date(Date.now() - 3 * 3600000 + offset * 86400000).toISOString().slice(0, 10);
+  const ranges = { today: () => [day(), day()], yesterday: () => [day(-1), day(-1)], '7d': () => [day(-6), day()], month: () => [day().slice(0, 8) + '01', day()] };
+  let range = 'today';
+  const kpi = (label, value, note = '', bad = false) => '<div class="ct-kpi"><span>' + safe(label) + '</span><strong style="font-size:30px">' + safe(value) + '</strong><em' + (bad ? ' class="bad"' : '') + '>' + safe(note) + '</em></div>';
+  const methods = ['cash', 'pix', 'debit', 'credit', 'other'];
+  const row = (u, name) => '<td>' + name + '</td><td class="rd-num"><strong>' + brl(u.total_cents) + '</strong></td><td class="rd-num">' + u.sales_count + '</td><td class="rd-num">' + brl(u.average_ticket_cents) + '</td><td class="rd-num' + (u.canceled_count ? ' rd-bad' : '') + '">' + u.canceled_count + '</td>' + methods.map(m => '<td class="rd-num">' + brl(u.by_method[m]) + '</td>').join('');
+
+  async function load() {
+    const [from, to] = ranges[range]();
+    const d = await api('/network/overview?from=' + from + '&to=' + to);
+    const t = d.totals;
+    $('kpis').innerHTML = kpi('Faturamento', brl(t.total_cents), d.units.length + (d.units.length === 1 ? ' unidade' : ' unidades')) + kpi('Vendas', String(t.sales_count)) + kpi('Ticket médio', brl(t.average_ticket_cents)) + kpi('Canceladas', String(t.canceled_count), t.canceled_count ? 'confira o motivo em cada loja' : 'nenhuma', t.canceled_count > 0);
+    $('rows').innerHTML = d.units.map(u => '<tr>' + row(u, '<strong>' + safe(u.name) + '</strong>' + (u.status === 'active' || u.status === 'trial' ? '' : ' <span class="ct-muted">(' + safe(u.status) + ')</span>')) + '</tr>').join('') || '<tr><td colspan="10" class="ct-muted">Nenhuma unidade ligada à rede ainda.</td></tr>';
+    $('foot').innerHTML = d.units.length > 1 ? '<tr class="rd-foot">' + row(t, 'Rede') + '</tr>' : '';
+    const label = from === to ? new Date(from + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : new Date(from + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) + ' a ' + new Date(to + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+    $('updated').textContent = label + ' · atualizado às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    $('feedback').textContent = '';
+  }
+  const refresh = () => load().catch(e => { $('feedback').textContent = e.message; });
+
+  api('/network/me').then(({ network }) => {
+    $('netName').textContent = network.name; document.title = network.name + ' | Painel da rede';
+    if (network.brand_color) document.documentElement.style.setProperty('--brand', network.brand_color);
+    if (network.logo_url) { const img = document.createElement('img'); img.className = 'rd-logo'; img.alt = ''; img.src = network.logo_url; $('mark').replaceWith(img); }
+    else $('mark').textContent = network.name.slice(0, 1).toUpperCase();
+  }).catch(e => { $('feedback').textContent = e.message; });
+  $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });
+  $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); };
+  refresh();
+  setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
+})();
+</script>
+</body>
+</html>

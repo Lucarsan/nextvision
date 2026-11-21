@@ -34,7 +34,7 @@
   const $ = id => document.getElementById(id);
   $('year').textContent = new Date().getFullYear();
   setTimeout(() => $('email').focus(), 30);
-  const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : '/loja.html';
+  const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : role === 'network' ? '/rede.html' : '/loja.html';
   const go = role => location.replace(panelFor(role));
   // Sessão já aberta neste navegador: mostra o atalho para o painel.
   const saved = sessionStorage.getItem('nv_token');

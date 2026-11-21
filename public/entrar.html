@@ -35,16 +35,6 @@
   $('year').textContent = new Date().getFullYear();
   setTimeout(() => $('email').focus(), 30);
   const panelFor = role => role === 'master' ? '/central.html' : role === 'technician' ? '/tecnico.html' : role === 'network' ? '/rede.html' : '/loja.html';
-  // Endereço próprio de uma rede (ex.: audace.ficoupronto.com): tela de login com o nome e a logo da rede.
-  fetch('/api/public/brand').then(r => r.ok ? r.json() : null).then(b => {
-    if (!b?.network) return;
-    document.title = 'Entrar | ' + b.name;
-    $('loginTitle').textContent = b.name;
-    document.querySelector('.en-form .en-muted').textContent = 'Entre com o seu e-mail e senha.';
-    document.querySelector('.st-nav')?.remove(); $('ctaWhats').remove();
-    if (/^https:\/\//.test(b.logo_url || '')) { const img = document.createElement('img'); img.src = b.logo_url; img.alt = b.name; img.style.cssText = 'max-height:64px;max-width:200px;display:block;margin-bottom:12px'; $('loginTitle').before(img); }
-    if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) $('loginBtn').style.background = b.brand_color;
-  }).catch(() => {});
   const go = role => location.replace(panelFor(role));
   // Sessão já aberta neste navegador: mostra o atalho para o painel.
   const saved = sessionStorage.getItem('nv_token');

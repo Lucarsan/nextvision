@@ -105,7 +105,8 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
   app.get('/api/network/me', ...network, route(async (req, res) => {
     const n = await q('SELECT * FROM store_networks WHERE id = $1', [req.user.network_id]);
     const units = await q('SELECT id, name, unit_label, cnpj, city, status, sales_enabled FROM tenants WHERE network_id = $1 ORDER BY lower(coalesce(unit_label, name))', [req.user.network_id]);
-    res.set('Cache-Control', 'no-store').json({ network: networkOut(n.rows[0]), units: units.rows });
+    const me = await q('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    res.set('Cache-Control', 'no-store').json({ network: networkOut(n.rows[0]), units: units.rows, user: { name: me.rows[0]?.name || '' } });
   }));
 
   // Faturamento por unidade num período (dias no fuso da loja). Padrão: hoje.
@@ -132,16 +133,55 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
         (SELECT count(*)::int FROM s WHERE s.tenant_id = u.id AND s.canceled_at IS NULL) sales_count,
         (SELECT coalesce(sum(total_cents), 0)::bigint FROM s WHERE s.tenant_id = u.id AND s.canceled_at IS NULL) total_cents,
         (SELECT count(*)::int FROM s WHERE s.tenant_id = u.id AND s.canceled_at IS NOT NULL) canceled_count,
-        (SELECT coalesce(jsonb_object_agg(method, amount), '{}'::jsonb) FROM (SELECT method, sum(amount)::bigint amount FROM pay WHERE pay.tenant_id = u.id GROUP BY method) m) by_method
+        (SELECT coalesce(jsonb_object_agg(method, amount), '{}'::jsonb) FROM (SELECT method, sum(amount)::bigint amount FROM pay WHERE pay.tenant_id = u.id GROUP BY method) m) by_method,
+        (SELECT coalesce(sum(cashback_used_cents), 0)::bigint FROM s WHERE s.tenant_id = u.id AND s.canceled_at IS NULL) cashback_used_cents,
+        EXISTS (SELECT 1 FROM cash_sessions c WHERE c.tenant_id = u.id AND c.status = 'open') cash_open,
+        -- Meta do mês da loja (store_goals sem vendedora; 0 = sem meta) e o vendido no mês até agora.
+        (SELECT nullif(g.target_cents, 0) FROM store_goals g WHERE g.tenant_id = u.id AND g.user_id IS NULL AND g.month <= date_trunc('month', (now() AT TIME ZONE $4))::date ORDER BY g.month DESC LIMIT 1) month_goal_cents,
+        (SELECT coalesce(sum(x.total_cents), 0)::bigint FROM sales x WHERE x.tenant_id = u.id AND x.canceled_at IS NULL AND x.created_at >= (date_trunc('month', now() AT TIME ZONE $4) AT TIME ZONE $4)) month_total_cents
       FROM units u ORDER BY lower(coalesce(u.unit_label, u.name))`, [req.user.network_id, from, to, STORE_TZ]);
+    // Alertas do período: cobrança repetida (mesmo valor e forma na mesma unidade em até 2 minutos), cancelamentos e estoque baixo.
+    const dup = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, b.total_cents, b.payment_method, to_char(b.created_at AT TIME ZONE $4, 'HH24:MI') at,
+             extract(epoch FROM b.created_at - a.created_at)::int seconds
+      FROM sales a JOIN sales b ON b.tenant_id = a.tenant_id AND b.id <> a.id AND b.total_cents = a.total_cents
+        AND b.payment_method = a.payment_method AND b.payments IS NOT DISTINCT FROM a.payments
+        AND b.created_at > a.created_at AND b.created_at <= a.created_at + interval '2 minutes'
+      JOIN tenants t ON t.id = a.tenant_id
+      WHERE t.network_id = $1 AND a.canceled_at IS NULL AND b.canceled_at IS NULL
+        AND (b.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY b.created_at DESC LIMIT 20`, [req.user.network_id, from, to, STORE_TZ]);
+    const canceled = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, s.total_cents, coalesce(s.cancel_reason, '') reason, cu.name canceled_by,
+             to_char(s.canceled_at AT TIME ZONE $4, 'DD/MM HH24:MI') at
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by
+      WHERE t.network_id = $1 AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ]);
+    // Estoque baixo: peças com estoque controlado, 1 unidade ou menos, que venderam nos últimos 30 dias.
+    const low = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
+      FROM products p JOIN tenants t ON t.id = p.tenant_id
+      JOIN sale_items i ON i.product_id = p.id AND i.tenant_id = p.tenant_id
+      JOIN sales s ON s.id = i.sale_id AND s.canceled_at IS NULL AND s.created_at >= now() - interval '30 days'
+      WHERE t.network_id = $1 AND p.active AND p.stock_qty IS NOT NULL AND p.stock_qty <= 1
+      GROUP BY t.unit_label, t.name, p.id ORDER BY sold DESC LIMIT 30`, [req.user.network_id]);
+    const lowByUnit = [];
+    for (const row of low.rows) { let u = lowByUnit.find(x => x.unit === row.unit); if (!u) lowByUnit.push(u = { unit: row.unit, products: [] }); u.products.push({ name: row.name, stock_qty: row.stock_qty, sold_30d: row.sold }); }
     const units = r.rows.map(u => {
       const total = Number(u.total_cents), by = {};
       for (const k of METHODS) by[k] = Number(u.by_method[k] || 0);
-      return { id: u.id, name: u.unit_label || u.name, status: u.status, sales_count: u.sales_count, total_cents: total, canceled_count: u.canceled_count, average_ticket_cents: u.sales_count ? Math.round(total / u.sales_count) : 0, by_method: by };
+      const goal = u.month_goal_cents == null ? null : Number(u.month_goal_cents), month = Number(u.month_total_cents);
+      return { id: u.id, name: u.unit_label || u.name, status: u.status, sales_count: u.sales_count, total_cents: total, canceled_count: u.canceled_count, average_ticket_cents: u.sales_count ? Math.round(total / u.sales_count) : 0, by_method: by,
+        cashback_used_cents: Number(u.cashback_used_cents), cash_open: u.cash_open, month_total_cents: month, month_goal_cents: goal, month_goal_percent: goal ? Math.round(month * 100 / goal) : null };
     });
-    const totals = units.reduce((a, u) => { a.sales_count += u.sales_count; a.total_cents += u.total_cents; a.canceled_count += u.canceled_count; for (const k of METHODS) a.by_method[k] += u.by_method[k]; return a; }, { sales_count: 0, total_cents: 0, canceled_count: 0, by_method: Object.fromEntries(METHODS.map(k => [k, 0])) });
+    const totals = units.reduce((a, u) => { a.sales_count += u.sales_count; a.total_cents += u.total_cents; a.canceled_count += u.canceled_count; a.cashback_used_cents += u.cashback_used_cents; for (const k of METHODS) a.by_method[k] += u.by_method[k]; return a; }, { sales_count: 0, total_cents: 0, canceled_count: 0, cashback_used_cents: 0, by_method: Object.fromEntries(METHODS.map(k => [k, 0])) });
     totals.average_ticket_cents = totals.sales_count ? Math.round(totals.total_cents / totals.sales_count) : 0;
-    res.set('Cache-Control', 'no-store').json({ from, to, units, totals });
+    const alerts = {
+      duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
+      canceled: canceled.rows.map(c => ({ unit: c.unit, total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
+      low_stock: lowByUnit
+    };
+    res.set('Cache-Control', 'no-store').json({ from, to, units, totals, alerts });
   }));
 
   // ---- Público: marca da rede pelo endereço ----
@@ -161,6 +201,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
   app.get('/api/public/brand', rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), route(async (req, res) => {
     res.set('Cache-Control', 'public, max-age=60').json(await brandFor(req));
   }));
-  // No endereço próprio da rede, a página inicial é a tela de login (não o site do Ficou Pronto).
-  app.get('/', route(async (req, res, next) => { if ((await brandFor(req)).network) return res.redirect(302, '/entrar'); next(); }));
+  // No endereço próprio da rede, a página inicial e a de entrada viram a tela de acesso com a marca da rede
+  // (não o site do Ficou Pronto).
+  app.get(['/', '/entrar', '/entrar.html'], route(async (req, res, next) => { if ((await brandFor(req)).network) return res.redirect(302, '/acesso'); next(); }));
 }

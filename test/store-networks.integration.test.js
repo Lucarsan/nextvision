@@ -70,6 +70,23 @@ test('rede de lojas: central monta a rede, dono da rede vê o faturamento por un
     assert.deepEqual(maracanau.by_method, { cash: 2000, pix: 3000, debit: 0, credit: 10000, other: 0 });
     assert.equal(solares.sales_count, 0); assert.equal(solares.total_cents, 0);
     assert.equal(ov.totals.total_cents, 15000); assert.equal(ov.totals.sales_count, 2);
+    assert.equal(maracanau.cash_open, true); assert.equal(solares.cash_open, false);
+    assert.equal(maracanau.month_goal_cents, null); assert.equal(maracanau.cashback_used_cents, 0);
+    assert.equal(ov.alerts.canceled.length, 1); assert.equal(ov.alerts.canceled[0].unit, 'Maracanaú');
+    assert.equal(ov.alerts.canceled[0].reason, 'Lançada em dobro'); assert.equal(ov.alerts.canceled[0].canceled_by, 'Owner');
+    assert.deepEqual(ov.alerts.duplicates, []); assert.deepEqual(ov.alerts.low_stock, []);
+
+    // Meta do mês da loja, cobrança repetida e estoque baixo.
+    await db.query("INSERT INTO store_goals(tenant_id, month, target_cents) VALUES($1, date_trunc('month', now() AT TIME ZONE 'America/Fortaleza')::date, 50000)", [tenant]);
+    const again = await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 10000, payment_method: 'credit' } }, 201);
+    const prod = (await db.query("INSERT INTO products(tenant_id, name, price_cents, stock_qty) VALUES($1, 'Brinco argola prata', 10000, 1) RETURNING id", [tenant])).rows[0].id;
+    await db.query("INSERT INTO sale_items(tenant_id, sale_id, product_id, name, quantity, unit_price_cents, total_cents) VALUES($1, $2, $3, 'Brinco argola prata', 1, 10000, 10000)", [tenant, again.sale.id, prod]);
+    const ov2 = await api('/network/overview', { token: netToken });
+    assert.equal(ov2.units[0].month_goal_cents, 50000); assert.equal(ov2.units[0].month_total_cents, 25000); assert.equal(ov2.units[0].month_goal_percent, 50);
+    assert.equal(ov2.alerts.duplicates.length, 1);
+    assert.equal(ov2.alerts.duplicates[0].unit, 'Maracanaú'); assert.equal(ov2.alerts.duplicates[0].total_cents, 10000); assert.equal(ov2.alerts.duplicates[0].payment_method, 'credit');
+    assert.deepEqual(ov2.alerts.low_stock, [{ unit: 'Maracanaú', products: [{ name: 'Brinco argola prata', stock_qty: 1, sold_30d: 1 }] }]);
+    assert.equal((await api('/network/me', { token: netToken })).user.name, 'Gabriel Mota');
     assert.equal((await request('/network/overview?from=2026-01-01&to=2026-12-31', { token: netToken })).status, 400);
     assert.equal((await request('/network/overview?from=2026-02-01&to=2026-01-01', { token: netToken })).status, 400);
     const past = await api('/network/overview?from=2020-01-01&to=2020-01-31', { token: netToken });
@@ -89,7 +106,9 @@ test('rede de lojas: central monta a rede, dono da rede vê o faturamento por un
     assert.deepEqual((await getWithHost(base, '/api/public/brand', 'app.ficoupronto.com')).data, { network: false });
     assert.deepEqual((await getWithHost(base, '/api/public/brand', 'outra.ficoupronto.com')).data, { network: false });
     const root = await getWithHost(base, '/', 'audace.ficoupronto.com');
-    assert.equal(root.status, 302); assert.equal(root.location, '/entrar');
+    assert.equal(root.status, 302); assert.equal(root.location, '/acesso');
+    assert.equal((await getWithHost(base, '/entrar', 'audace.ficoupronto.com')).location, '/acesso');
+    assert.equal((await getWithHost(base, '/entrar', 'app.ficoupronto.com')).status, 200);
     assert.equal((await getWithHost(base, '/', 'app.ficoupronto.com')).status, 200);
     assert.equal((await getWithHost(base, '/rede.html', 'audace.ficoupronto.com')).status, 200);
 

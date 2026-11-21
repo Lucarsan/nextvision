@@ -12,7 +12,8 @@ test('central monta a rede e o dono da rede vê o painel', {
   try {
     const require = createRequire(import.meta.url);
     let pw; try { pw = require('playwright'); } catch { pw = require('playwright-core'); }
-    browser = await pw.chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox'] });
+    // O endereço próprio da rede aponta para o servidor de teste.
+    browser = await pw.chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP audace.ficoupronto.com 127.0.0.1'] });
     const { api, tenant, masterToken, base } = f;
     await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
 
@@ -36,23 +37,53 @@ test('central monta a rede e o dono da rede vê o painel', {
     const net = (await api('/master/networks', { token: masterToken }))[0];
     assert.equal(net.units_count, 1);
 
-    // Vendas na unidade.
+    // Mais duas unidades, meta do mês, vendas (uma repetida e uma cancelada) e uma peça acabando.
+    const { db } = f;
+    const solares = await api('/master/tenants', { method: 'POST', token: masterToken, body: { name: 'Audace Solares', slug: 'audace-solares-' + Date.now() } }, 201);
+    const benfica = await api('/master/tenants', { method: 'POST', token: masterToken, body: { name: 'Audace Benfica', slug: 'audace-benfica-' + Date.now() } }, 201);
+    for (const [id, label] of [[solares.id, 'Solares'], [benfica.id, 'Benfica']]) {
+      await api('/master/tenants/' + id, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+      await api(`/master/tenants/${id}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: label } });
+    }
+    const solaresOwner = await f.addOwner(solares.id);
+    for (const [id, cents] of [[tenant, 80000], [solares.id, 120000]]) await db.query("INSERT INTO store_goals(tenant_id, month, target_cents) VALUES($1, date_trunc('month', now() AT TIME ZONE 'America/Fortaleza')::date, $2)", [id, cents]);
     await api('/store/cash/open', { method: 'POST', body: { opening_cents: 0 } }, 201);
     await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 18990, payment_method: 'credit' } }, 201);
     await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 7990, payments: [{ method: 'cash', amount_cents: 2990 }, { method: 'pix', amount_cents: 5000 }] } }, 201);
+    const rep = await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 21900, payment_method: 'credit' } }, 201);
+    await api('/store/sales', { method: 'POST', body: { anonymous: true, total_cents: 21900, payment_method: 'credit' } }, 201);
+    const prod = (await db.query("INSERT INTO products(tenant_id, name, price_cents, stock_qty) VALUES($1, 'Argola prata 925 média', 21900, 1) RETURNING id", [tenant])).rows[0].id;
+    await db.query("INSERT INTO sale_items(tenant_id, sale_id, product_id, name, quantity, unit_price_cents, total_cents) VALUES($1, $2, $3, 'Argola prata 925 média', 1, 21900, 21900)", [tenant, rep.sale.id, prod]);
+    await api('/store/cash/open', { method: 'POST', token: solaresOwner, body: { opening_cents: 0 } }, 201);
+    for (const c of [14990, 12900, 9900]) await api('/store/sales', { method: 'POST', token: solaresOwner, body: { anonymous: true, total_cents: c, payment_method: 'pix' } }, 201);
+    const can = await api('/store/sales', { method: 'POST', token: solaresOwner, body: { anonymous: true, total_cents: 12900, payment_method: 'debit' } }, 201);
+    await api(`/store/sales/${can.sale.id}/cancel`, { method: 'POST', token: solaresOwner, body: { reason: 'Cliente desistiu da troca' } });
 
-    // Dono da rede: login pela tela de entrada e painel.
-    const rede = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    // Dono da rede: entra pelo endereço da Audace (tela de acesso com a marca) e vê o painel.
+    const origin = base.replace('127.0.0.1', 'audace.ficoupronto.com');
+    const rede = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const rp = await rede.newPage(); rp.on('pageerror', e => errors.push(e.message));
-    await rp.goto(base + '/entrar');
+    await rp.goto(origin + '/');
+    await rp.waitForURL(/\/acesso$/);
+    await rp.waitForFunction(() => document.getElementById('wmName').textContent === 'AUDACE');
+    assert.equal(await rp.textContent('#wmSub'), 'JOIAS');
+    await rp.screenshot(shot('acesso-rede'));
     await rp.fill('#email', 'gabriel@audace.test'); await rp.fill('#password', 'senha-forte-da-rede-123'); await rp.click('#loginBtn');
     await rp.waitForURL(/\/rede\.html$/);
-    await rp.waitForFunction(() => document.getElementById('rows').textContent.includes('Maracanaú')).catch(async e => { console.error('ROWS', await rp.textContent('body')); throw e; });
-    assert.equal(await rp.textContent('#netName'), 'Audace Joias');
+    await rp.waitForFunction(() => document.getElementById('rows').textContent.includes('Solares'));
+    await rp.waitForFunction(() => document.getElementById('who').textContent.includes('Gabriel'));
     const kpis = await rp.textContent('#kpis');
-    assert.match(kpis, /R\$\s?269,80/); assert.match(kpis, /Vendas\s*2/);
-    assert.match(await rp.textContent('#rows'), /R\$\s?189,90/);
+    assert.match(kpis, /Faturamento hoje/); assert.match(kpis, /R\$\s?1\.085,70/); assert.match(kpis, /Vendas\s*7/); assert.match(kpis, /1 cancelada/);
+    const rows = await rp.textContent('#rows');
+    assert.match(rows, /Maracanaú/); assert.match(rows, /88%/); assert.match(rows, /Aberto/); assert.match(rows, /Fechado/); assert.match(rows, /sem meta/);
+    const alerts = await rp.textContent('#alerts');
+    assert.match(alerts, /Possível venda duplicada/); assert.match(alerts, /1 venda cancelada hoje/); assert.match(alerts, /Estoque baixo em Maracanaú/);
     await rp.screenshot(shot('painel-rede'));
+    // Filtro por unidade.
+    await rp.selectOption('#unitSel', { label: 'Solares' });
+    assert.match(await rp.textContent('#sub'), /Solares/);
+    assert.doesNotMatch(await rp.textContent('#alerts'), /Maracanaú/);
+    await rp.selectOption('#unitSel', '');
     await rp.setViewportSize({ width: 390, height: 844 }); await rp.screenshot(shot('painel-rede-celular'));
     assert.deepEqual(errors, []);
   } finally { await browser?.close(); await f.cleanup(); }

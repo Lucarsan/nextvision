@@ -5,39 +5,98 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Painel da rede | Ficou Pronto</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/central.css?v=1">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  .rd-brand{display:flex;align-items:center;gap:12px}
-  .rd-logo{width:44px;height:44px;border-radius:12px;object-fit:contain;background:#fff}
-  .rd-mark{width:44px;height:44px;border-radius:12px;background:var(--brand,#111827);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
-  .rd-range{display:flex;gap:6px;flex-wrap:wrap}
-  .rd-range button{height:38px;padding:0 14px;border-radius:10px;border:1px solid #E5E7EB;background:#fff;font:inherit;font-weight:600;cursor:pointer}
-  .rd-range button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-  .rd-card{background:#fff;border-radius:16px;padding:22px 24px;margin-bottom:18px}
-  .rd-num{text-align:right;white-space:nowrap}
-  .rd-bad{color:#B91C1C;font-weight:600}
-  .rd-foot td{font-weight:700;border-top:2px solid var(--line)}
-  .rd-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px}
-  .rd-top h1{margin:0;font-size:24px}
-  @media (max-width:700px){.ct-main{padding:18px 14px 40px}}
+  :root{--ink:#17181d;--text:#2e2f35;--muted:#6b6b70;--bg:#f5f4f0;--card:#fff;--line:#ebe9e3;--gold:#b8923a;--gold-soft:#f6efdc;--brand:#17181d;
+    --red-bg:#fbe9e5;--red:#8f3f30;--yellow-bg:#fbf3e0;--yellow:#7a5a12;--green-bg:#e4f1e7;--green:#2f6b45}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Arial,sans-serif}
+  .shell{display:flex;min-height:100vh}
+  .side{position:sticky;top:0;height:100vh;width:232px;flex:0 0 232px;background:var(--ink);color:#e8e6e1;display:flex;flex-direction:column;padding:28px 18px 22px}
+  .wm{display:block;margin:0 6px 26px;color:#fff;text-decoration:none}
+  .wm b{display:block;font:600 30px/1 "Cormorant Garamond",Georgia,serif;letter-spacing:.2em}
+  .wm i{display:block;font-style:normal;font-size:10px;font-weight:600;letter-spacing:.32em;color:var(--gold);margin-top:6px}
+  .wm img{max-width:170px;max-height:56px;display:block}
+  .unit{display:block;border:1px solid #34353b;border-radius:10px;padding:8px 12px;margin-bottom:22px}
+  .unit span{display:block;font-size:11px;color:#a3a2a0}
+  .unit select{width:100%;margin-top:2px;background:transparent;border:0;color:#fff;font:600 14px Inter,sans-serif;padding:0;cursor:pointer}
+  .unit select option{color:#17181d}
+  .nav a{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;color:#d8d6d1;text-decoration:none;font-weight:500}
+  .nav a.on{background:#2b2820;color:#fff;box-shadow:inset 3px 0 0 var(--gold)}
+  .nav svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .who{margin-top:auto;font-size:12px;color:#a3a2a0}.who strong{display:block;color:#fff;font-weight:600}
+  .who button{margin-top:10px;background:none;border:1px solid #34353b;color:#d8d6d1;border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer}
+  main{flex:1;min-width:0;padding:30px 36px 48px;max-width:1440px}
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+  h1{margin:0;font-size:26px;font-weight:600;color:var(--ink);letter-spacing:-.3px}
+  .sub{margin:4px 0 0;color:var(--muted)}
+  .range{display:flex;gap:6px;flex-wrap:wrap}
+  .range button{height:34px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:#fff;font:500 13px Inter,sans-serif;color:var(--text);cursor:pointer}
+  .range button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:18px}
+  .kpi{padding:18px 20px}.kpi span{font-size:13px;color:var(--muted)}.kpi strong{display:block;font-size:28px;font-weight:700;color:var(--ink);letter-spacing:-.6px;margin:6px 0 4px}.kpi em{font-style:normal;font-size:12px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;align-items:start}
+  .units{padding:20px 22px}
+  .units-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  h2{margin:0;font-size:16px;font-weight:600;color:var(--ink)}
+  .units-head span{font-size:12px;color:var(--muted)}
+  .wrap{overflow-x:auto}
+  table{width:100%;min-width:640px;border-collapse:collapse}
+  th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 8px;border-bottom:1px solid var(--line)}
+  td{padding:13px 8px;border-bottom:1px solid var(--line);color:var(--ink)}
+  tr:last-child td{border-bottom:0}
+  .n{text-align:right;white-space:nowrap}.soft{color:var(--muted)}
+  .goal{display:flex;align-items:center;gap:10px;min-width:150px}
+  .bar{flex:1;height:6px;border-radius:6px;background:#ece9e1;overflow:hidden}.bar i{display:block;height:100%;background:var(--ink);border-radius:6px}
+  .goal small{width:36px;text-align:right;color:var(--muted)}
+  .pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .pill.open{background:var(--green-bg);color:var(--green)}.pill.closed{background:#efede8;color:var(--muted)}
+  tfoot td{font-weight:700;border-top:2px solid var(--line)}
+  .attn{padding:20px 22px}
+  .alert{border-radius:10px;padding:12px 14px;margin-top:12px}
+  .alert b{display:flex;gap:8px;align-items:center;font-weight:600}
+  .alert p{margin:4px 0 0;color:var(--text);font-size:13px}
+  .alert.red{background:var(--red-bg)}.alert.red b{color:var(--red)}
+  .alert.yellow{background:var(--yellow-bg)}.alert.yellow b{color:var(--yellow)}
+  .alert.ok{background:#f3f2ee}.alert.ok b{color:var(--muted)}
+  .alert details summary{cursor:pointer;color:#1d4ed8;text-decoration:underline;font-size:13px;margin-top:6px}
+  .alert ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+  .feedback{color:var(--red);font-weight:600;margin:0 0 12px}.feedback:empty{display:none}
+  .note{margin:10px 0 0;font-size:12px;color:var(--muted)}
+  @media (max-width:1180px){.grid{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:760px){
+    .shell{display:block}.side{position:static;height:auto;width:auto;padding:18px 16px;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px}
+    .wm{margin:0;flex:1}.wm b{font-size:24px}.unit{margin:0;width:100%;order:3}.nav{display:none}.who{margin:0}.who strong{display:none}.who button{margin:0}
+    main{padding:20px 14px 40px}.kpis{gap:10px}.kpi{padding:14px}.kpi strong{font-size:22px}
+  }
 </style>
 </head>
 <body>
-<main class="ct-main" style="margin:0 auto">
-  <div class="rd-top">
-    <div class="rd-brand" id="brand"><div class="rd-mark" id="mark">R</div><div><h1 id="netName">Painel da rede</h1><p class="ct-muted" id="updated" style="margin:2px 0 0">Carregando…</p></div></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <div class="rd-range" id="range">
-        <button type="button" data-r="today" class="on">Hoje</button><button type="button" data-r="yesterday">Ontem</button><button type="button" data-r="7d">7 dias</button><button type="button" data-r="month">Este mês</button>
-      </div>
-      <button type="button" class="ct-btn ghost" id="logout" style="height:38px">Sair</button>
+<div class="shell">
+  <aside class="side" aria-label="Menu da rede">
+    <a class="wm" href="/rede.html" id="wm"><b id="wmName">REDE</b><i id="wmSub"></i></a>
+    <label class="unit"><span>Unidade</span><select id="unitSel"><option value="">Todas as unidades</option></select></label>
+    <nav class="nav"><a class="on" href="/rede.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>Painel da rede</a></nav>
+    <div class="who"><strong id="who">—</strong>Sistema FicouPronto<br><button type="button" id="logout">Sair</button></div>
+  </aside>
+  <main>
+    <div class="top">
+      <div><h1>Painel da rede</h1><p class="sub" id="sub">Carregando…</p></div>
+      <div class="range" id="range"><button type="button" data-r="today" class="on">Hoje</button><button type="button" data-r="yesterday">Ontem</button><button type="button" data-r="7d">7 dias</button><button type="button" data-r="month">Este mês</button></div>
     </div>
-  </div>
-  <p id="feedback" class="ct-feedback" role="status"></p>
-  <div class="rd-card"><div class="ct-kpis" id="kpis"></div></div>
-  <div class="rd-card"><h2 style="margin:0 0 12px;font-size:18px">Por unidade</h2><div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Unidade</th><th class="rd-num">Faturamento</th><th class="rd-num">Vendas</th><th class="rd-num">Ticket médio</th><th class="rd-num">Canceladas</th><th class="rd-num">Dinheiro</th><th class="rd-num">Pix</th><th class="rd-num">Débito</th><th class="rd-num">Crédito</th><th class="rd-num">Outros</th></tr></thead><tbody id="rows"></tbody><tfoot id="foot"></tfoot></table></div></div>
-</main>
+    <p class="feedback" id="feedback" role="status"></p>
+    <div class="kpis" id="kpis"></div>
+    <div class="grid">
+      <section class="card units">
+        <div class="units-head"><h2 id="unitsTitle">Unidades hoje</h2><span>Atualiza sozinho</span></div>
+        <div class="wrap"><table><thead><tr><th>Unidade</th><th class="n">Vendas</th><th class="n">Faturamento</th><th class="n">Ticket</th><th>Meta do mês</th><th>Caixa</th></tr></thead><tbody id="rows"></tbody><tfoot id="foot"></tfoot></table></div>
+        <div class="wrap" style="margin-top:18px"><table><thead><tr><th>Formas de pagamento</th><th class="n">Dinheiro</th><th class="n">Pix</th><th class="n">Débito</th><th class="n">Crédito</th><th class="n">Outros</th></tr></thead><tbody id="pay"></tbody></table></div>
+      </section>
+      <section class="card attn"><h2>Precisa de atenção</h2><div id="alerts"></div></section>
+    </div>
+  </main>
+</div>
 <script>
 (() => {
   const token = sessionStorage.getItem('nv_token');
@@ -45,6 +104,7 @@
   const $ = id => document.getElementById(id);
   const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const METHOD = { cash: 'dinheiro', pix: 'Pix', debit: 'débito', credit: 'crédito', other: 'outros', mixed: 'pagamento dividido' };
   const api = async path => {
     const r = await fetch('/api' + path, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
@@ -54,31 +114,73 @@
   };
   // Datas no fuso de Fortaleza (UTC-3, sem horário de verão).
   const day = (offset = 0) => new Date(Date.now() - 3 * 3600000 + offset * 86400000).toISOString().slice(0, 10);
-  const ranges = { today: () => [day(), day()], yesterday: () => [day(-1), day(-1)], '7d': () => [day(-6), day()], month: () => [day().slice(0, 8) + '01', day()] };
-  let range = 'today';
-  const kpi = (label, value, note = '', bad = false) => '<div class="ct-kpi"><span>' + safe(label) + '</span><strong style="font-size:30px">' + safe(value) + '</strong><em' + (bad ? ' class="bad"' : '') + '>' + safe(note) + '</em></div>';
-  const methods = ['cash', 'pix', 'debit', 'credit', 'other'];
-  const row = (u, name) => '<td>' + name + '</td><td class="rd-num"><strong>' + brl(u.total_cents) + '</strong></td><td class="rd-num">' + u.sales_count + '</td><td class="rd-num">' + brl(u.average_ticket_cents) + '</td><td class="rd-num' + (u.canceled_count ? ' rd-bad' : '') + '">' + u.canceled_count + '</td>' + methods.map(m => '<td class="rd-num">' + brl(u.by_method[m]) + '</td>').join('');
+  const RANGES = {
+    today: { get: () => [day(), day()], word: 'hoje' }, yesterday: { get: () => [day(-1), day(-1)], word: 'ontem' },
+    '7d': { get: () => [day(-6), day()], word: 'em 7 dias' }, month: { get: () => [day().slice(0, 8) + '01', day()], word: 'no mês' }
+  };
+  let range = 'today', data = null;
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  const dateLabel = iso => new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+  const weekday = iso => { const w = new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-BR', { weekday: 'long', timeZone: 'UTC' }); return w.charAt(0).toUpperCase() + w.slice(1); };
+  const kpi = (label, value, note) => '<div class="card kpi"><span>' + safe(label) + '</span><strong>' + safe(value) + '</strong><em>' + safe(note) + '</em></div>';
+  const unitRow = u => '<tr><td><strong>' + safe(u.name) + '</strong></td><td class="n">' + u.sales_count + '</td><td class="n"><strong>' + brl(u.total_cents) + '</strong></td><td class="n soft">' + brl(u.average_ticket_cents) + '</td>'
+    + '<td>' + (u.month_goal_percent == null ? '<span class="soft">sem meta</span>' : '<div class="goal"><div class="bar"><i style="width:' + Math.min(100, u.month_goal_percent) + '%"></i></div><small>' + u.month_goal_percent + '%</small></div>') + '</td>'
+    + '<td><span class="pill ' + (u.cash_open ? 'open">Aberto' : 'closed">Fechado') + '</span></td></tr>';
+  const payRow = (name, by) => '<tr><td>' + name + '</td>' + ['cash', 'pix', 'debit', 'credit', 'other'].map(m => '<td class="n">' + brl(by[m]) + '</td>').join('') + '</tr>';
+
+  function draw() {
+    if (!data) return;
+    const sel = $('unitSel').value, word = RANGES[range].word;
+    const units = sel ? data.units.filter(u => u.id === sel) : data.units;
+    const unitName = sel ? units[0]?.name : null;
+    const t = units.reduce((a, u) => { a.sales_count += u.sales_count; a.total_cents += u.total_cents; a.canceled_count += u.canceled_count; a.cashback_used_cents += u.cashback_used_cents; for (const k in u.by_method) a.by_method[k] = (a.by_method[k] || 0) + u.by_method[k]; return a; }, { sales_count: 0, total_cents: 0, canceled_count: 0, cashback_used_cents: 0, by_method: {} });
+    t.average_ticket_cents = t.sales_count ? Math.round(t.total_cents / t.sales_count) : 0;
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }).replace(':', 'h');
+    const until = data.to === day() ? ' · até ' + now : '';
+    $('sub').textContent = (data.from === data.to ? weekday(data.from) + ', ' + dateLabel(data.from) : dateLabel(data.from) + ' a ' + dateLabel(data.to)) + ' · ' + (unitName || 'todas as unidades');
+    $('kpis').innerHTML = kpi('Faturamento ' + word, brl(t.total_cents), (sel ? unitName : plural(data.units.length, 'unidade', 'unidades')) + until)
+      + kpi('Vendas', String(t.sales_count), plural(t.canceled_count, 'cancelada', 'canceladas'))
+      + kpi('Ticket médio', brl(t.average_ticket_cents), sel ? unitName : 'Todas as unidades')
+      + kpi('Cashback usado em compras', brl(t.cashback_used_cents), 'Clientes que voltaram');
+    $('unitsTitle').textContent = 'Unidades ' + word;
+    $('rows').innerHTML = units.map(unitRow).join('') || '<tr><td colspan="6" class="soft">Nenhuma unidade ligada à rede ainda.</td></tr>';
+    $('foot').innerHTML = !sel && units.length > 1 ? '<tr><td>Rede</td><td class="n">' + t.sales_count + '</td><td class="n">' + brl(t.total_cents) + '</td><td class="n">' + brl(t.average_ticket_cents) + '</td><td></td><td></td></tr>' : '';
+    $('pay').innerHTML = (sel ? '' : units.map(u => payRow(safe(u.name), u.by_method)).join('')) + payRow('<strong>' + (sel ? safe(unitName) : 'Rede') + '</strong>', Object.assign({ cash: 0, pix: 0, debit: 0, credit: 0, other: 0 }, t.by_method));
+
+    const only = list => sel ? list.filter(x => x.unit === unitName) : list;
+    const dup = only(data.alerts.duplicates), can = only(data.alerts.canceled), low = only(data.alerts.low_stock);
+    const warn = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
+    let h = '';
+    if (dup.length) h += '<div class="alert red"><b>' + warn + (dup.length === 1 ? 'Possível venda duplicada' : dup.length + ' possíveis vendas duplicadas') + '</b>'
+      + '<p>' + dup.slice(0, 3).map(d => safe(d.unit) + ' · ' + safe(d.at.replace(':', 'h')) + ' · 2 vendas de ' + brl(d.total_cents) + ' no ' + safe(METHOD[d.payment_method] || d.payment_method) + (d.seconds < 5 ? ', quase ao mesmo tempo' : ', com ' + d.seconds + ' segundos de diferença')).join('<br>') + '</p>'
+      + '<p class="soft" style="font-size:12px">Confira no caixa da unidade e cancele a repetida, se for o caso.</p></div>';
+    if (can.length) {
+      const total = can.reduce((a, c) => a + c.total_cents, 0);
+      h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>'
+        + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + ' · ' + brl(c.total_cents) + ' · ' + safe(c.at) + (c.canceled_by ? ' · ' + safe(c.canceled_by) : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
+    }
+    for (const u of low) h += '<div class="alert yellow"><b>' + warn + 'Estoque baixo em ' + safe(u.unit) + '</b><p>' + plural(u.products.length, 'peça que vende', 'peças que vendem') + ' com 1 unidade ou menos</p>'
+      + '<details><summary>Ver peças</summary><ul>' + u.products.map(p => '<li>' + safe(p.name) + ' · estoque ' + p.stock_qty + ' · ' + p.sold_30d + ' vendida(s) em 30 dias</li>').join('') + '</ul></details></div>';
+    $('alerts').innerHTML = h || '<div class="alert ok"><b>Nada para conferir agora.</b><p>Sem vendas repetidas, cancelamentos ou falta de peças no período.</p></div>';
+  }
 
   async function load() {
-    const [from, to] = ranges[range]();
-    const d = await api('/network/overview?from=' + from + '&to=' + to);
-    const t = d.totals;
-    $('kpis').innerHTML = kpi('Faturamento', brl(t.total_cents), d.units.length + (d.units.length === 1 ? ' unidade' : ' unidades')) + kpi('Vendas', String(t.sales_count)) + kpi('Ticket médio', brl(t.average_ticket_cents)) + kpi('Canceladas', String(t.canceled_count), t.canceled_count ? 'confira o motivo em cada loja' : 'nenhuma', t.canceled_count > 0);
-    $('rows').innerHTML = d.units.map(u => '<tr>' + row(u, '<strong>' + safe(u.name) + '</strong>' + (u.status === 'active' || u.status === 'trial' ? '' : ' <span class="ct-muted">(' + safe(u.status) + ')</span>')) + '</tr>').join('') || '<tr><td colspan="10" class="ct-muted">Nenhuma unidade ligada à rede ainda.</td></tr>';
-    $('foot').innerHTML = d.units.length > 1 ? '<tr class="rd-foot">' + row(t, 'Rede') + '</tr>' : '';
-    const label = from === to ? new Date(from + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : new Date(from + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) + ' a ' + new Date(to + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' });
-    $('updated').textContent = label + ' · atualizado às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    $('feedback').textContent = '';
+    const [from, to] = RANGES[range].get();
+    data = await api('/network/overview?from=' + from + '&to=' + to);
+    const cur = $('unitSel').value;
+    $('unitSel').innerHTML = '<option value="">Todas as unidades</option>' + data.units.map(u => '<option value="' + safe(u.id) + '"' + (u.id === cur ? ' selected' : '') + '>' + safe(u.name) + '</option>').join('');
+    draw(); $('feedback').textContent = '';
   }
   const refresh = () => load().catch(e => { $('feedback').textContent = e.message; });
 
-  api('/network/me').then(({ network }) => {
-    $('netName').textContent = network.name; document.title = network.name + ' | Painel da rede';
-    if (network.brand_color) document.documentElement.style.setProperty('--brand', network.brand_color);
-    if (network.logo_url) { const img = document.createElement('img'); img.className = 'rd-logo'; img.alt = ''; img.src = network.logo_url; $('mark').replaceWith(img); }
-    else $('mark').textContent = network.name.slice(0, 1).toUpperCase();
+  api('/network/me').then(({ network, user }) => {
+    document.title = network.name + ' | Painel da rede';
+    if (/^https:\/\//.test(network.logo_url || '')) { const img = document.createElement('img'); img.src = network.logo_url; img.alt = network.name; $('wm').replaceChildren(img); }
+    else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
+    if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
+    $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + 'gestão';
   }).catch(e => { $('feedback').textContent = e.message; });
+  $('unitSel').onchange = draw;
   $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });
   $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); };
   refresh();

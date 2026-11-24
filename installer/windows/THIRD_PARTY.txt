@@ -1,7 +1,8 @@
 Programas de terceiros incluidos no Ficou Pronto (sem modificacoes):
 
-- FFmpeg 9.0 (build win64-gpl de BtbN/FFmpeg-Builds), licenca GPL v3 (FFmpeg-GPL-LICENSE.txt).
-  Codigo-fonte: https://github.com/BtbN/FFmpeg-Builds e https://ffmpeg.org/download.html
+- FFmpeg 9.0.2 (build essentials de GyanD/codexffmpeg, com libx264), licenca GPL v3 (FFmpeg-GPL-LICENSE.txt).
+  Codigo-fonte: https://github.com/GyanD/codexffmpeg e https://ffmpeg.org/download.html
+  No instalador leve o FFmpeg, o MediaMTX e o cloudflared sao baixados desses enderecos so quando o plano tem cameras.
 - MediaMTX 1.21.3 (bluenviron), licenca MIT (MediaMTX-LICENSE.txt). https://github.com/bluenviron/mediamtx
 - cloudflared 2026.10.7 (Cloudflare), licenca Apache 2.0. https://github.com/cloudflare/cloudflared
 - WinSW 2.12.0, licenca MIT. https://github.com/winsw/winsw

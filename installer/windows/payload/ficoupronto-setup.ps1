@@ -1,6 +1,8 @@
 # Ficou Pronto - assistente de instalacao e manutencao (Windows PowerShell 5.1).
 # O tecnico so digita: codigo de ativacao (gerado na central) e usuario/senha da camera.
 # Tunel, endereco de video e senha do MediaMTX vem da central.
+# O plano da loja decide o que instala: com cameras (video + agente; baixa FFmpeg/MediaMTX/cloudflared
+# se o instalador for o leve) ou so gestao (so o agente: sinal de vida, backup e arquivos a distancia).
 param(
   [ValidateSet('auto', 'install', 'maintenance', 'uninstall')][string]$Mode = 'auto',
   [string]$ApiBase = '',
@@ -41,7 +43,7 @@ if ($Mode -eq 'uninstall') {
   $restore = $false
   if ((Test-Path -LiteralPath $paths.PilotState) -and -not $Quiet) { $restore = Ask 'Reativar a instalacao anterior (piloto) que este instalador desativou?' }
   if ($restore) { try { Restore-FpPilot } catch { } }
-  foreach ($item in @('secrets', 'services', 'config.json', 'status.json', 'agent.lock')) {
+  foreach ($item in @('secrets', 'services', 'config.json', 'status.json', 'agent.lock', 'remote.lock', 'downloads')) {
     $p = Join-Path $paths.Data $item; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
   }
   exit 0
@@ -73,7 +75,7 @@ function Add-Button($Text, $X, $Y, $W = 160) {
 function Clear-Panel { $panel.Controls.Clear(); $back.Visible = $true; $next.Enabled = $true; $next.Text = 'Avancar' }
 
 # Estado da instalacao em andamento (segredos so em memoria ate serem gravados protegidos).
-$S = @{ Token = $null; DeviceName = $env:COMPUTERNAME; Provision = $null; Cameras = @{}; Found = @(); Pilot = (Get-FpPilotInstall); PilotCamera = $null; Step = '' }
+$S = @{ Token = $null; DeviceName = $env:COMPUTERNAME; Provision = $null; Mode = 'cameras'; Cameras = @{}; Found = @(); Pilot = (Get-FpPilotInstall); PilotCamera = $null; Step = '' }
 if ($S.Pilot.SourceFile) { try { $S.PilotCamera = Read-FpPilotCamera $S.Pilot.SourceFile } catch { $S.PilotCamera = $null } }
 $existingConfig = Read-FpConfig
 $existingSecrets = $null
@@ -83,7 +85,22 @@ function Invoke-Provision {
   $r = Invoke-FpApi -Base $ApiBase -Method POST -Path '/api/connect/provision' -Token $S.Token -TimeoutSec 60
   if (-not $r.Ok) { throw ('A central nao entregou a configuracao: ' + $r.Error) }
   $S.Provision = $r.Data
-  if (@($S.Provision.cameras).Count -eq 0) { throw ('A loja "' + $S.Provision.store.name + '" ainda nao tem camera cadastrada. Cadastre a camera na central e clique em Avancar de novo.') }
+  $S.Mode = $(if ($S.Provision.PSObject.Properties['plan'] -and [string]$S.Provision.plan.mode -eq 'management') { 'management' } else { 'cameras' })
+  if ($S.Mode -eq 'cameras' -and @($S.Provision.cameras).Count -eq 0) { throw ('A loja "' + $S.Provision.store.name + '" ainda nao tem camera cadastrada. Cadastre a camera na central e clique em Avancar de novo.') }
+}
+
+# Instalador leve: os programas das cameras so vem se o plano tiver cameras.
+function Ensure-CameraComponents([scriptblock]$Say) {
+  if (Test-FpCameraComponents) { return }
+  & $Say 'Plano com cameras: baixando os programas de video (cerca de 90 MB). Nao feche a janela...'
+  Install-FpCameraComponents -Base $ApiBase -Token $S.Token -Progress { param($t) & $Say $t }
+}
+
+# Proximo passo depois de falar com a central: so gestao vai direto instalar; cameras passa pela configuracao delas.
+function Continue-AfterProvision([scriptblock]$Say) {
+  if ($S.Mode -eq 'management') { Show-Install; return }
+  Ensure-CameraComponents $Say
+  Show-Cameras
 }
 
 # ---------------- Passo 1: ativacao ----------------
@@ -121,7 +138,7 @@ function Next-Activation {
       $S.Token = [string]$r.Data.device_token
     }
     Invoke-Provision
-    Show-Cameras
+    Continue-AfterProvision { param($t) $script:statusLabel.Text = $t; Pump }
   } catch { $script:statusLabel.Text = $_.Exception.Message } finally { $form.Cursor = 'Default' }
 }
 
@@ -247,6 +264,7 @@ function Next-Cameras {
 
 # ---------------- Passo 3: instalar e testar ----------------
 function Show-Install {
+  if ($S.Mode -eq 'management') { Show-InstallManagement; return }
   Clear-Panel; $S.Step = 'install'; $back.Visible = $false; $next.Enabled = $false
   $title.Text = 'Instalando e testando'
   $subtitle.Text = 'Leva de 1 a 3 minutos. Nao feche esta janela.'
@@ -273,7 +291,7 @@ function Show-Install {
         if ($c.Source -ne 'test') { $camSecrets[$cam.id] = @{ user = $c.User; password = $c.Password } }
       }
       Save-FpSecrets @{ device_token = $S.Token; media_password = $P.media.password; cameras = $camSecrets }
-      Save-FpConfig ([ordered]@{ api_base = $ApiBase; device = @{ id = $P.device.id; name = $P.device.name }; store = @{ id = $P.store.id; name = $P.store.name }
+      Save-FpConfig ([ordered]@{ api_base = $ApiBase; mode = 'cameras'; device = @{ id = $P.device.id; name = $P.device.name }; store = @{ id = $P.store.id; name = $P.store.name }
           media = @{ hostname = $P.media.hostname; username = $P.media.username }; tunnel = @{ id = $P.tunnel.id; name = $P.tunnel.name }
           cameras = $camList; installed_at = [datetime]::UtcNow.ToString('o'); version = $paths.Version })
       Write-FpMediaMtxConfig $P.media.username $P.media.password (Get-FpRetentionDays $P)
@@ -282,7 +300,7 @@ function Show-Install {
     }) -and $ok
   $ok = (& $step 'Liberar a camera no Firewall do Windows (UDP)' { Set-FpFirewall }) -and $ok
   if ($S.Pilot.Found) { $ok = (& $step 'Desativar a instalacao anterior (sem apagar)' { $st = Disable-FpPilot $S.Pilot; ([string]@($st.tasks).Count + ' tarefa(s)' + $(if ($st.cloudflared_service) { ', servico Cloudflared' } else { '' })) }) -and $ok }
-  $ok = (& $step 'Instalar os servicos (iniciam antes do login)' { Install-FpServices; Start-FpServices; ((Get-FpServiceStates | ForEach-Object { $_.Status }) -join ', ') }) -and $ok
+  $ok = (& $step 'Instalar os servicos (iniciam antes do login)' { Install-FpServices 'cameras'; Start-FpServices 'cameras'; ((Get-FpServiceStates 'cameras' | ForEach-Object { $_.Status }) -join ', ') }) -and $ok
 
   $localOk = $true
   foreach ($cam in $configured) {
@@ -333,10 +351,53 @@ function Show-Install {
   Show-Done
 }
 
+# ---------------- Passo 3 (plano so gestao): so o agente ----------------
+function Show-InstallManagement {
+  Clear-Panel; $S.Step = 'install'; $back.Visible = $false; $next.Enabled = $false
+  $title.Text = 'Instalando (plano so gestao)'
+  $subtitle.Text = 'Esta loja nao tem cameras no plano: instala so o agente (sinal de vida, backup e acesso da central aos arquivos).'
+  $list = New-Object Windows.Forms.ListBox; $list.Location = '16,16'; $list.Size = '724,400'; $list.Font = $Font; $panel.Controls.Add($list)
+  $form.Cursor = 'WaitCursor'
+  $report = New-Object Collections.Generic.List[string]
+  $P = $S.Provision
+  $step = {
+    param($Name, [scriptblock]$Action)
+    [void]$list.Items.Add('...  ' + $Name); Pump
+    try { $detail = & $Action; $list.Items[$list.Items.Count - 1] = 'OK   ' + $Name + $(if ($detail) { ' - ' + $detail } else { '' }); $report.Add('[OK] ' + $Name + $(if ($detail) { ' - ' + $detail } else { '' })); Pump; return $true }
+    catch { $list.Items[$list.Items.Count - 1] = 'FALHA ' + $Name + ' - ' + $_.Exception.Message; $report.Add('[FALHA] ' + $Name + ' - ' + $_.Exception.Message); Pump; return $false }
+  }
+  $ok = (& $step 'Gravar configuracao protegida' {
+      Initialize-FpDirectories
+      Save-FpSecrets @{ device_token = $S.Token; cameras = @{} }
+      Save-FpConfig ([ordered]@{ api_base = $ApiBase; mode = 'management'; device = @{ id = $P.device.id; name = $P.device.name }; store = @{ id = $P.store.id; name = $P.store.name }
+          cameras = @(); installed_at = [datetime]::UtcNow.ToString('o'); version = $paths.Version })
+      'so gestao'
+    })
+  $ok = (& $step 'Instalar o servico do agente (inicia antes do login)' { Install-FpServices 'management'; Start-FpServices 'management'; ((Get-FpServiceStates 'management' | ForEach-Object { $_.Status }) -join ', ') }) -and $ok
+  $ok = (& $step 'Sinal de vida na central' {
+      $deadline = [datetime]::UtcNow.AddSeconds(45)
+      while ([datetime]::UtcNow -lt $deadline) {
+        try { $st = Get-Content -LiteralPath $paths.Status -Raw | ConvertFrom-Json; if ($st.central -eq 'ok') { return 'central recebendo' } } catch { }
+        for ($i = 0; $i -lt 4; $i++) { Start-Sleep -Milliseconds 500; Pump }
+      }
+      throw 'o agente ainda nao falou com a central'
+    }) -and $ok
+  $form.Cursor = 'Default'
+  $net = Get-FpLocalNetwork
+  $header = @('Ficou Pronto - relatorio de instalacao (so gestao)', ('Data: ' + [datetime]::Now.ToString('dd/MM/yyyy HH:mm')), ('Loja: ' + $P.store.name), ('Computador: ' + $env:COMPUTERNAME + ' (' + $P.device.name + ')'),
+    ('Windows: ' + (Get-CimInstance Win32_OperatingSystem).Caption + ' ' + [Environment]::OSVersion.Version), ('Rede: ' + $(if ($net) { $net.Interface + ' ' + $net.IP + ' gateway ' + $net.Gateway } else { '?' })),
+    ('Agente: ' + $paths.Version), 'Plano: so gestao (sem cameras). Se a loja contratar cameras: Manutencao > Conferir plano na central.', '')
+  $text = ($header + $report) -join "`r`n"
+  [IO.File]::WriteAllText($paths.Report, $text, [Text.UTF8Encoding]::new($true))
+  $S.Result = @{ Ok = $ok; Text = $text }
+  Show-Done
+}
+
 function Show-Done {
   Clear-Panel; $S.Step = 'done'; $back.Visible = $false; $next.Text = 'Concluir'
   $title.Text = $(if ($S.Result.Ok) { 'Instalacao concluida' } else { 'Instalacao concluida com pendencias' })
-  $subtitle.Text = $(if ($S.Result.Ok) { 'Crie um pedido de teste na loja e confira o video no celular (4G). O video volta sozinho se o PC reiniciar, mesmo sem login.' }
+  $subtitle.Text = $(if ($S.Result.Ok -and $S.Mode -eq 'management') { 'O agente ja fala com a central: backup diario e arquivos a distancia ligados. Ele volta sozinho se o PC reiniciar, mesmo sem login.' }
+    elseif ($S.Result.Ok) { 'Crie um pedido de teste na loja e confira o video no celular (4G). O video volta sozinho se o PC reiniciar, mesmo sem login.' }
     else { 'Veja os itens com FALHA abaixo. Os servicos continuam tentando sozinhos; use "Ficou Pronto - Manutencao" para conferir depois.' })
   $box = New-Object Windows.Forms.TextBox; $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Vertical'; $box.Location = '16,16'; $box.Size = '724,370'; $box.Font = New-Object Drawing.Font('Consolas', 9); $box.Text = $S.Result.Text
   $panel.Controls.Add($box)
@@ -346,8 +407,9 @@ function Show-Done {
 # ---------------- Manutencao ----------------
 function Show-Maintenance {
   Clear-Panel; $S.Step = 'maintenance'; $back.Visible = $false; $next.Text = 'Fechar'
+  $script:isMgmt = (Get-FpInstallMode $existingConfig) -eq 'management'
   $title.Text = 'Manutencao - ' + $existingConfig.store.name
-  $subtitle.Text = 'Endereco de video: ' + $existingConfig.media.hostname + ' | agente ' + $paths.Version
+  $subtitle.Text = $(if ($script:isMgmt) { 'Plano so gestao (sem cameras) | agente ' + $paths.Version } else { 'Endereco de video: ' + $existingConfig.media.hostname + ' | agente ' + $paths.Version })
   $script:grid = New-Object Windows.Forms.ListView; $script:grid.View = 'Details'; $script:grid.FullRowSelect = $true; $script:grid.Location = '16,16'; $script:grid.Size = '724,250'
   [void]$script:grid.Columns.Add('Item', 230); [void]$script:grid.Columns.Add('Estado', 470); $panel.Controls.Add($script:grid)
   $script:refresh = {
@@ -364,27 +426,34 @@ function Show-Maintenance {
   }
   & $script:refresh
   $script:timer = New-Object Windows.Forms.Timer; $script:timer.Interval = 3000; $script:timer.Add_Tick($script:refresh); $script:timer.Start(); $form.Add_FormClosed({ $script:timer.Stop() })
-  $b1 = Add-Button 'Reconfigurar cameras' 16 284 220
+  $b1 = Add-Button $(if ($script:isMgmt) { 'Conferir plano na central' } else { 'Reconfigurar cameras' }) 16 284 220
   $b2 = Add-Button 'Reparar (reinstalar servicos)' 252 284 230
   $b3 = Add-Button 'Abrir relatorio e registros' 498 284 242
   $b4 = Add-Button 'Voltar ao piloto antigo' 16 324 220; $b4.Enabled = (Test-Path -LiteralPath $paths.PilotState)
-  $b5 = Add-Button 'Testar video pela internet' 252 324 230
+  $b5 = Add-Button 'Testar video pela internet' 252 324 230; $b5.Enabled = -not $script:isMgmt
   $note = Add-Label 'Para desinstalar: Configuracoes do Windows > Aplicativos > Ficou Pronto. Os videos sao preservados.' 16 372 724 44
 
   $b1.Add_Click({
     $script:timer.Stop()
     try {
       if (-not $existingSecrets) { throw 'Segredos locais ilegiveis; reinstale com um novo codigo de ativacao.' }
-      $S.Token = [string]$existingSecrets.device_token; $form.Cursor = 'WaitCursor'; Invoke-Provision; $S.Pilot = Get-FpPilotInstall; Show-Cameras
+      $S.Token = [string]$existingSecrets.device_token; $form.Cursor = 'WaitCursor'; Invoke-Provision; $S.Pilot = Get-FpPilotInstall
+      if ($S.Mode -eq 'management' -and $script:isMgmt) { Msg 'O plano desta loja continua so gestao (sem cameras). Nada a mudar.'; $script:timer.Start(); return }
+      # Plano mudou (ganhou cameras ou passou a so gestao): segue o caminho do plano novo.
+      Continue-AfterProvision { param($t) $subtitle.Text = $t; Pump }
     } catch { Msg $_.Exception.Message 'Warning'; $script:timer.Start() } finally { $form.Cursor = 'Default' }
   })
   $b2.Add_Click({
     $form.Cursor = 'WaitCursor'
     try {
-      $S.Token = [string]$existingSecrets.device_token; Invoke-Provision
+      $S.Token = [string]$existingSecrets.device_token
+      if ($script:isMgmt) { Install-FpServices 'management'; Start-FpServices 'management'; Msg 'Servico do agente reinstalado e iniciado.'; return }
+      Invoke-Provision
+      if ($S.Mode -eq 'management') { throw 'O plano da loja agora e so gestao. Use "Reconfigurar cameras" para trocar a instalacao.' }
+      Ensure-CameraComponents { param($t) $subtitle.Text = $t; Pump }
       Write-FpMediaMtxConfig $S.Provision.media.username $S.Provision.media.password (Get-FpRetentionDays $S.Provision)
       Write-FpTunnelToken $S.Provision.tunnel.token
-      Set-FpFirewall; Install-FpServices; Start-FpServices; Msg 'Servicos reinstalados e iniciados.'
+      Set-FpFirewall; Install-FpServices 'cameras'; Start-FpServices 'cameras'; Msg 'Servicos reinstalados e iniciados.'
     } catch { Msg $_.Exception.Message 'Warning' } finally { $form.Cursor = 'Default'; & $script:refresh }
   })
   $b3.Add_Click({ Start-Process explorer.exe $paths.Data })

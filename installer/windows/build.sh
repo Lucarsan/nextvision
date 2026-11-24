@@ -14,9 +14,12 @@ grep -v '^#' "$here/vendor.lock" | while IFS='|' read -r name url sum; do
 done
 cp "$cache/cloudflared.exe" "$cache/WinSW-x64.exe" "$stage/bin/"
 unzip -q -o -j "$cache/mediamtx.zip" mediamtx.exe -d "$stage/bin"; unzip -q -o -j "$cache/mediamtx.zip" LICENSE -d "$stage/licenses" && mv "$stage/licenses/LICENSE" "$stage/licenses/MediaMTX-LICENSE.txt"
-unzip -q -o -j "$cache/ffmpeg.zip" '*/bin/ffmpeg.exe' -d "$stage/bin"; unzip -q -o -j "$cache/ffmpeg.zip" '*/LICENSE.txt' -d "$stage/licenses" && mv "$stage/licenses/LICENSE.txt" "$stage/licenses/FFmpeg-GPL-LICENSE.txt"
+unzip -q -o -j "$cache/ffmpeg.zip" '*/bin/ffmpeg.exe' -d "$stage/bin"; unzip -q -o -j "$cache/ffmpeg.zip" '*/LICENSE' -d "$stage/licenses" && mv "$stage/licenses/LICENSE" "$stage/licenses/FFmpeg-GPL-LICENSE.txt"
 cp "$here/payload/"*.ps1 "$here/payload/"*.psm1 "$repo/connect/windows/NextVision.Core.psm1" "$stage/agent/"
 cp "$here/THIRD_PARTY.txt" "$stage/licenses/"
+# Completo (offline, com os programas das cameras) e leve (baixa os programas so se o plano tiver cameras).
 makensis -V2 -DVERSION="$version" -DSTAGE="$stage" -DOUTFILE="$dist/FicouPronto-Setup-$version.exe" "$here/FicouPronto.nsi"
-out="$dist/FicouPronto-Setup-$version.exe"
-echo "$out $(stat -c %s "$out") bytes sha256 $(sha256sum "$out" | cut -d' ' -f1)"
+makensis -V2 -DVERSION="$version" -DSTAGE="$stage" -DLITE -DOUTFILE="$dist/FicouPronto-Instalador-$version.exe" "$here/FicouPronto.nsi"
+for out in "$dist/FicouPronto-Setup-$version.exe" "$dist/FicouPronto-Instalador-$version.exe"; do
+  echo "$out $(stat -c %s "$out") bytes sha256 $(sha256sum "$out" | cut -d' ' -f1)"
+done

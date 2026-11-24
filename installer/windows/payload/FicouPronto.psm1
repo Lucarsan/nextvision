@@ -4,31 +4,40 @@
 Set-StrictMode -Version 2.0
 
 $script:InstallDir = Split-Path -Parent $PSScriptRoot
-$script:BinDir = Join-Path $script:InstallDir 'bin'
-$script:DataDir = Join-Path $env:ProgramData 'FicouPronto'
-$script:SecretDir = Join-Path $script:DataDir 'secrets'
-$script:ServiceDir = Join-Path $script:DataDir 'services'
-$script:LogDir = Join-Path $script:DataDir 'logs'
-$script:ConfigFile = Join-Path $script:DataDir 'config.json'
-$script:SecretFile = Join-Path $script:SecretDir 'agent.dat'
-$script:TunnelTokenFile = Join-Path $script:SecretDir 'tunnel.token'
-$script:MediaMtxConfig = Join-Path $script:SecretDir 'mediamtx.yml'
-$script:StatusFile = Join-Path $script:DataDir 'status.json'
-$script:PilotStateFile = Join-Path $script:DataDir 'piloto-desativado.json'
-$script:ReportFile = Join-Path $script:DataDir 'relatorio-instalacao.txt'
-$script:RecordingsDir = Join-Path $script:DataDir 'gravacoes'
+$script:BinDir = [IO.Path]::Combine($script:InstallDir, 'bin')
+$script:DataDir = [IO.Path]::Combine($env:ProgramData, 'FicouPronto')
+$script:SecretDir = [IO.Path]::Combine($script:DataDir, 'secrets')
+$script:ServiceDir = [IO.Path]::Combine($script:DataDir, 'services')
+$script:LogDir = [IO.Path]::Combine($script:DataDir, 'logs')
+$script:ConfigFile = [IO.Path]::Combine($script:DataDir, 'config.json')
+$script:SecretFile = [IO.Path]::Combine($script:SecretDir, 'agent.dat')
+$script:TunnelTokenFile = [IO.Path]::Combine($script:SecretDir, 'tunnel.token')
+$script:MediaMtxConfig = [IO.Path]::Combine($script:SecretDir, 'mediamtx.yml')
+$script:StatusFile = [IO.Path]::Combine($script:DataDir, 'status.json')
+$script:PilotStateFile = [IO.Path]::Combine($script:DataDir, 'piloto-desativado.json')
+$script:ReportFile = [IO.Path]::Combine($script:DataDir, 'relatorio-instalacao.txt')
+$script:RecordingsDir = [IO.Path]::Combine($script:DataDir, 'gravacoes')
 # Backups da loja: arquivos .fpbak cifrados pela central (so a central abre). Ficam ao desinstalar.
-$script:BackupDir = Join-Path $script:DataDir 'backups'
+$script:BackupDir = [IO.Path]::Combine($script:DataDir, 'backups')
 $script:BackupKeep = 30
 $script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
-$script:AgentVersion = '0.5.1'
+$script:AgentVersion = '0.6.0'
 $script:DefaultApi = 'https://app.ficoupronto.com'
 # Atualizacao remota: so pacotes assinados por esta chave (a privada fica fora do repositorio e do instalador).
-$script:UpdateDir = Join-Path $script:DataDir 'atualizacoes'
-$script:UpdateStateFile = Join-Path $script:UpdateDir 'estado.json'
+$script:UpdateDir = [IO.Path]::Combine($script:DataDir, 'atualizacoes')
+$script:UpdateStateFile = [IO.Path]::Combine($script:UpdateDir, 'estado.json')
 $script:AgentUpdateKeyId = 'a15f3432592dba3c'
 $script:AgentUpdateKeyXml = '<RSAKeyValue><Modulus>xNV1H1mjBZI9vcoGrf+9KUPVQu6hFZj2AsFd8Qmyvycl5BXtxiWXdVqh+uVM/eGXregV1pW1JXVF7i1cR3OTJO2xyz2wxBnitbyqvq4BObKKIeUOkrVtMHVuV8BrCvfRA2cpww4MA4Vn663Hl5xzQhAl8bm1RsMerICHZTTUlzm33/0RIUM/iJXgp9dR7vaoaPZTLuz6PNNxIlTMUKqdaIMhkfEbTOwUGJNUOY1F7vx80hsgJxPWr+GtdgVRUUiUp/4Bfhu4NGtYUgo4vMUOwk7giyZISpWJNOsf9qO908fjzoTOXlJUjbAiqHKgU3O+zEVVHZHbgeQ/qEZv4CoOu8fuTRvhAbaBmaNKFHjU7dELH2ysFfEVWr+jbqhRHzOBKfCV6Dm0K7CK2NkrBxLhcleKbPpq9VTGAquCVxmnZE03gtISCzf83uRG3AbEx87zaFIomQS53lRsCsJjXjpeBOZKMHbBmn6710WnkcRg4XOwEGXSnzeHNDEJIJMFNIEl</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+# Arquivos enviados pela central sem pasta definida.
+$script:ReceivedDir = [IO.Path]::Combine($script:DataDir, 'recebidos')
+$script:DownloadDir = [IO.Path]::Combine($script:DataDir, 'downloads')
+# Componentes das cameras baixados pelo instalador leve: so destes enderecos oficiais (e com o SHA-256 fixado).
+$script:ComponentSources = @{
+  'cloudflared.exe' = 'https://github.com/cloudflare/cloudflared/releases/download/'
+  'mediamtx.zip' = 'https://github.com/bluenviron/mediamtx/releases/download/'
+  'ffmpeg.zip' = 'https://github.com/GyanD/codexffmpeg/releases/download/'
+}
 $script:Services = @(
   @{ Id = 'FicouPronto.MediaMTX'; Name = 'Ficou Pronto - Video local (MediaMTX)' },
   @{ Id = 'FicouPronto.Tunel'; Name = 'Ficou Pronto - Tunel de video' },
@@ -426,17 +435,35 @@ function Install-FpService([string]$Id, [string]$DisplayName) {
   & sc.exe failureflag $Id 1 | Out-Null
 }
 
-function Start-FpServices { foreach ($s in $script:Services) { Start-Service -Name $s.Id -ErrorAction Stop } }
+# Modo da instalacao: 'cameras' (video + agente) ou 'management' (so o agente: sinal de vida, backup, arquivos a distancia).
+function Get-FpInstallMode($Config = (Read-FpConfig)) {
+  if ($null -ne $Config -and $Config.PSObject.Properties['mode'] -and [string]$Config.mode -eq 'management') { return 'management' }
+  return 'cameras'
+}
+function Get-FpModeServices([string]$Mode = (Get-FpInstallMode)) {
+  if ($Mode -eq 'management') { return @($script:Services | Where-Object { $_.Id -eq 'FicouPronto.Agente' }) }
+  return @($script:Services)
+}
+function Start-FpServices([string]$Mode = (Get-FpInstallMode)) { foreach ($s in (Get-FpModeServices $Mode)) { Start-Service -Name $s.Id -ErrorAction Stop } }
 function Stop-FpServices { foreach ($s in [array]$script:Services | Sort-Object { $_.Id } -Descending) { Stop-Service -Name $s.Id -Force -ErrorAction SilentlyContinue } }
-function Install-FpServices { foreach ($s in $script:Services) { Install-FpService $s.Id $s.Name } }
+function Install-FpServices([string]$Mode = (Get-FpInstallMode)) {
+  # Plano passou a ser so gestao: tira os servicos de video que ficaram de antes.
+  if ($Mode -eq 'management') {
+    foreach ($s in @($script:Services | Where-Object { $_.Id -ne 'FicouPronto.Agente' })) {
+      $exe = Join-Path $script:ServiceDir ($s.Id + '.exe')
+      if (Get-Service -Name $s.Id -ErrorAction SilentlyContinue) { Stop-Service -Name $s.Id -Force -ErrorAction SilentlyContinue; if ([IO.File]::Exists($exe)) { & $exe uninstall | Out-Null } else { & sc.exe delete $s.Id | Out-Null } }
+    }
+  }
+  foreach ($s in (Get-FpModeServices $Mode)) { Install-FpService $s.Id $s.Name }
+}
 function Uninstall-FpServices {
   foreach ($s in $script:Services) {
     $exe = Join-Path $script:ServiceDir ($s.Id + '.exe')
     if (Get-Service -Name $s.Id -ErrorAction SilentlyContinue) { Stop-Service -Name $s.Id -Force -ErrorAction SilentlyContinue; if ([IO.File]::Exists($exe)) { & $exe uninstall | Out-Null } else { & sc.exe delete $s.Id | Out-Null } }
   }
 }
-function Get-FpServiceStates {
-  return @($script:Services | ForEach-Object { $svc = Get-Service -Name $_.Id -ErrorAction SilentlyContinue
+function Get-FpServiceStates([string]$Mode = (Get-FpInstallMode)) {
+  return @((Get-FpModeServices $Mode) | ForEach-Object { $svc = Get-Service -Name $_.Id -ErrorAction SilentlyContinue
     [pscustomobject]@{ Id = $_.Id; Name = $_.Name; Status = $(if ($svc) { [string]$svc.Status } else { 'Ausente' }) } })
 }
 
@@ -608,6 +635,171 @@ function Start-FpAgentUpdater([string]$Version, [string]$RequestId) {
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
   Register-ScheduledTask -TaskName 'FicouPronto.Atualizacao' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
   Start-ScheduledTask -TaskName 'FicouPronto.Atualizacao'
+}
+
+
+# ---------- Componentes das cameras (instalador leve) ----------
+function Test-FpCameraComponents([string]$BinDir = $script:BinDir) {
+  return @(@('ffmpeg.exe', 'mediamtx.exe', 'cloudflared.exe') | Where-Object { -not [IO.File]::Exists([IO.Path]::Combine($BinDir, $_)) }).Count -eq 0
+}
+
+# Baixa FFmpeg, MediaMTX e cloudflared dos enderecos oficiais, conferindo o SHA-256 que a central informa
+# (o mesmo do instalador completo). Endereco fora da lista ou hash diferente: recusa.
+function Install-FpCameraComponents {
+  param([string]$Base, [string]$Token, [scriptblock]$Progress, [string]$BinDir = $script:BinDir)
+  $ProgressPreference = 'SilentlyContinue'
+  $say = { param($t) if ($Progress) { & $Progress $t } }
+  $r = Invoke-FpApi -Base $Base -Method GET -Path '/api/connect/components' -Token $Token -TimeoutSec 30
+  if (-not $r.Ok) { throw ('A central nao informou os componentes: ' + $r.Error) }
+  $list = @($r.Data.components)
+  foreach ($need in $script:ComponentSources.Keys) { if (-not ($list | Where-Object { $_.name -eq $need })) { throw ('Componente ausente na lista da central: ' + $need) } }
+  [void][IO.Directory]::CreateDirectory($script:DownloadDir); [void][IO.Directory]::CreateDirectory($BinDir)
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  foreach ($c in $list) {
+    $name = [string]$c.name
+    if (-not $script:ComponentSources.ContainsKey($name)) { continue }
+    if (-not ([string]$c.url).StartsWith($script:ComponentSources[$name]) -or [string]$c.url -match '[\s"]') { throw ('Endereco nao permitido para ' + $name) }
+    if ([string]$c.sha256 -notmatch '^[a-f0-9]{64}$') { throw ('SHA-256 invalido para ' + $name) }
+    $file = Join-Path $script:DownloadDir $name
+    $have = [IO.File]::Exists($file) -and ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -eq [string]$c.sha256)
+    if (-not $have) {
+      & $say ('Baixando ' + $name + '...')
+      $part = $file + '.part'
+      try { Invoke-WebRequest -Uri ([string]$c.url) -OutFile $part -UseBasicParsing -TimeoutSec 900 -Headers @{ 'User-Agent' = 'FicouPronto-Agent/' + $script:AgentVersion } }
+      catch { if ([IO.File]::Exists($part)) { [IO.File]::Delete($part) }; throw ('Falha ao baixar ' + $name + ': ' + $_.Exception.Message) }
+      $got = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($got -ne [string]$c.sha256) { [IO.File]::Delete($part); throw ('Arquivo ' + $name + ' diferente do esperado (SHA-256 ' + $got + '). Nada foi instalado; avise a central.') }
+      if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) }
+      [IO.File]::Move($part, $file)
+    }
+    & $say ('Instalando ' + $name + '...')
+    if ($name -eq 'cloudflared.exe') { Copy-Item -LiteralPath $file -Destination (Join-Path $BinDir 'cloudflared.exe') -Force; continue }
+    $want = $(if ($name -eq 'mediamtx.zip') { '^mediamtx\.exe$' } else { '^[^/]+/bin/ffmpeg\.exe$' })
+    $zip = [IO.Compression.ZipFile]::OpenRead($file)
+    try {
+      $entry = $zip.Entries | Where-Object { $_.FullName -match $want } | Select-Object -First 1
+      if (-not $entry) { throw ('Programa nao encontrado dentro de ' + $name) }
+      [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $BinDir $entry.Name), $true)
+    } finally { $zip.Dispose() }
+  }
+  foreach ($f in @(Get-ChildItem -LiteralPath $script:DownloadDir -File -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+  if (-not (Test-FpCameraComponents $BinDir)) { throw 'Componentes das cameras incompletos depois do download.' }
+}
+
+# ---------- Arquivos a distancia (pedidos da central) ----------
+# Caminho do Windows vindo da central: absoluto, sem "..", sem nome curto (~), sem ':' extra.
+# Leitura nunca entrega a pasta de segredos. Escrita nunca mexe nos programas do Ficou Pronto
+# (isso furaria a atualizacao assinada), nos servicos, nos segredos nem no Windows.
+function Test-FpRemotePath([string]$Path, [ValidateSet('read', 'write')][string]$Access) {
+  if (-not $Path -or $Path.Length -lt 3 -or $Path.Length -gt 400 -or $Path -notmatch '^[A-Za-z]:\\') { throw 'Caminho invalido.' }
+  $rest = $Path.Substring(3)
+  if ($rest -match '[<>:"|?*/~]' -or $rest -match '[\x00-\x1f]') { throw 'Caminho invalido.' }
+  $segs = $rest.Split('\')
+  for ($i = 0; $i -lt $segs.Count; $i++) {
+    $g = $segs[$i]
+    if ($g -eq '' -and $i -lt $segs.Count - 1) { throw 'Caminho invalido.' }
+    if ($g -eq '.' -or $g -eq '..' -or $g -match '[ .]$') { throw 'Caminho invalido.' }
+  }
+  $norm = $Path.TrimEnd('\').ToLowerInvariant() + '\'
+  $deny = @($script:SecretDir)
+  if ($Access -eq 'write') {
+    $deny += @($script:InstallDir, $script:ServiceDir, $script:UpdateDir, $script:ConfigFile, $env:SystemRoot)
+  }
+  foreach ($d in $deny) {
+    if (-not $d) { continue }
+    $dn = ([string]$d).Replace('/', '\').TrimEnd('\').ToLowerInvariant() + '\'
+    if ($norm.StartsWith($dn)) { throw 'Pasta protegida: a central nao pode ' + $(if ($Access -eq 'write') { 'gravar' } else { 'ler' }) + ' aqui.' }
+  }
+  return $Path
+}
+
+function Invoke-FpApiTransfer {
+  param([string]$Base, [string]$Method = 'GET', [string]$Path, [string]$Token, [string]$InFile, [string]$OutFile, [int]$TimeoutSec = 900)
+  $ProgressPreference = 'SilentlyContinue'
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  $params = @{ Uri = ($Base.TrimEnd('/') + $Path); Method = $Method; TimeoutSec = $TimeoutSec; UseBasicParsing = $true
+    Headers = @{ 'User-Agent' = 'FicouPronto-Agent/' + $script:AgentVersion; 'Authorization' = 'Bearer ' + $Token } }
+  if ($InFile) { $params['InFile'] = $InFile; $params['ContentType'] = 'application/octet-stream' }
+  if ($OutFile) { $params['OutFile'] = $OutFile }
+  try { [void](Invoke-WebRequest @params); return [pscustomobject]@{ Ok = $true; Error = '' } }
+  catch {
+    $message = 'Sem conexao com a central'; $resp = $_.Exception.Response
+    if ($null -ne $resp) { $message = 'Erro ' + [int]$resp.StatusCode }
+    return [pscustomobject]@{ Ok = $false; Error = $message }
+  }
+}
+
+# Executa um pedido (list/push/pull). $MapPath existe so para testes fora do Windows.
+function Invoke-FpRemoteJob {
+  param([string]$Base, [string]$Token, $Job, [scriptblock]$MapPath)
+  $local = { param($p) if ($MapPath) { & $MapPath $p } else { $p } }
+  $report = { param($b) Invoke-FpApi -Base $Base -Method POST -Path ('/api/connect/remote/jobs/' + [string]$Job.id + '/result') -Body $b -Token $Token -TimeoutSec 60 }
+  if ([string]$Job.id -notmatch '^[0-9a-fA-F-]{36}$') { throw 'Pedido invalido.' }
+  try {
+    switch ([string]$Job.kind) {
+      'list' {
+        $dir = & $local (Test-FpRemotePath ([string]$Job.path) 'read')
+        if (-not [IO.Directory]::Exists($dir)) { throw 'Pasta nao encontrada no computador.' }
+        $entries = New-Object Collections.Generic.List[object]; $truncated = $false
+        foreach ($i in ([IO.DirectoryInfo]::new($dir)).EnumerateFileSystemInfos()) {
+          if ($entries.Count -ge 1000) { $truncated = $true; break }
+          $isDir = ($i.Attributes -band [IO.FileAttributes]::Directory) -ne 0
+          $e = [ordered]@{ name = $i.Name; type = $(if ($isDir) { 'dir' } else { 'file' }); modified = $i.LastWriteTimeUtc.ToString('o') }
+          if (-not $isDir) { $e['size'] = [double]$i.Length }
+          $entries.Add($e)
+        }
+        $r = & $report @{ ok = $true; entries = $entries.ToArray(); truncated = $truncated }
+        return 'listou ' + $entries.Count + ' item(ns) em ' + [string]$Job.path
+      }
+      'push' {
+        $name = [string]$Job.file_name
+        if ($name -notmatch '^[^<>:"/\\|?*\x00-\x1f]{1,200}$' -or $name -match '^\.{1,2}$' -or $name -match '[ .]$') { throw 'Nome de arquivo invalido.' }
+        $winDir = Test-FpRemotePath ([string]$Job.path) 'write'
+        $target = Test-FpRemotePath ($winDir.TrimEnd('\') + '\' + $name) 'write'
+        $dir = & $local $winDir
+        [void][IO.Directory]::CreateDirectory($dir)
+        $part = Join-Path $dir ('.' + [string]$Job.id + '.fp-part')
+        try {
+          $d = Invoke-FpApiTransfer -Base $Base -Method GET -Path ('/api/connect/remote/jobs/' + [string]$Job.id + '/file') -Token $Token -OutFile $part
+          if (-not $d.Ok) { throw ('Falha ao baixar da central: ' + $d.Error) }
+          $len = ([IO.FileInfo]::new($part)).Length
+          if ($null -ne $Job.bytes -and $len -ne [int64]$Job.bytes) { throw ('Arquivo incompleto (' + $len + ' de ' + $Job.bytes + ' bytes).') }
+          $hash = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Job.sha256 -and $hash -ne [string]$Job.sha256) { throw 'Arquivo corrompido no caminho (SHA-256 diferente).' }
+          $final = $target; $dest = Join-Path $dir $name
+          if ([IO.File]::Exists($dest) -and -not $Job.overwrite) {
+            $stem = [IO.Path]::GetFileNameWithoutExtension($name); $ext = [IO.Path]::GetExtension($name); $n = 2
+            do { $alt = $stem + ' (' + $n + ')' + $ext; $dest = Join-Path $dir $alt; $n++ } while ([IO.File]::Exists($dest) -and $n -lt 1000)
+            $final = $winDir.TrimEnd('\') + '\' + $alt
+          }
+          if ([IO.File]::Exists($dest)) { [IO.File]::Delete($dest) }
+          [IO.File]::Move($part, $dest)
+        } finally { if ([IO.File]::Exists($part)) { [IO.File]::Delete($part) } }
+        $r = & $report @{ ok = $true; saved_path = $final }
+        return 'recebeu ' + $final
+      }
+      'pull' {
+        $file = & $local (Test-FpRemotePath ([string]$Job.path) 'read')
+        if (-not [IO.File]::Exists($file)) { throw 'Arquivo nao encontrado no computador.' }
+        $len = ([IO.FileInfo]::new($file)).Length
+        if ($Job.max_bytes -and $len -gt [int64]$Job.max_bytes) { throw ('Arquivo grande demais (' + [math]::Round($len / 1MB, 1) + ' MB; limite ' + [math]::Round([int64]$Job.max_bytes / 1MB) + ' MB).') }
+        # Copia antes de enviar: arquivo em uso (log aberto) tambem sai.
+        $copy = Join-Path ([IO.Path]::GetTempPath()) ('fp-' + [string]$Job.id + '.tmp')
+        try {
+          $src = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite')
+          try { $dst = [IO.File]::Create($copy); try { $src.CopyTo($dst) } finally { $dst.Dispose() } } finally { $src.Dispose() }
+          $u = Invoke-FpApiTransfer -Base $Base -Method POST -Path ('/api/connect/remote/jobs/' + [string]$Job.id + '/upload') -Token $Token -InFile $copy
+          if (-not $u.Ok) { throw ('Falha ao enviar para a central: ' + $u.Error) }
+        } finally { if ([IO.File]::Exists($copy)) { [IO.File]::Delete($copy) } }
+        return 'enviou ' + [string]$Job.path + ' (' + $len + ' bytes)'
+      }
+      default { throw 'Tipo de pedido desconhecido.' }
+    }
+  } catch {
+    $m = $_.Exception.Message; if ($m.Length -gt 480) { $m = $m.Substring(0, 480) }
+    [void](& $report @{ ok = $false; error = $m })
+    return 'falhou: ' + $m
+  }
 }
 
 

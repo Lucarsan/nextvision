@@ -1,4 +1,6 @@
 ; Ficou Pronto - instalador Windows (NSIS 3, Unicode). Gerado por build.sh.
+; -DLITE: instalador leve, sem FFmpeg/MediaMTX/cloudflared. O assistente consulta o plano da loja na central
+; e so baixa esses programas (enderecos oficiais + SHA-256 fixado) se a loja tiver cameras.
 Unicode true
 SetCompressor /SOLID lzma
 SetCompressorDictSize 64
@@ -17,7 +19,7 @@ RequestExecutionLevel admin
 BrandingText "Ficou Pronto ${VERSION}"
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "Ficou Pronto"
-VIAddVersionKey "FileDescription" "Instalador do Ficou Pronto (cameras da loja)"
+VIAddVersionKey "FileDescription" "Instalador do Ficou Pronto (gestao e cameras da loja)"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "Ficou Pronto"
@@ -28,7 +30,7 @@ VIAddVersionKey "LegalCopyright" "Ficou Pronto"
 
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Instalar o Ficou Pronto"
-!define MUI_WELCOMEPAGE_TEXT "Este assistente instala o transmissor de video das cameras da loja.$\r$\n$\r$\nTenha em maos:$\r$\n  - o codigo de ativacao gerado na central;$\r$\n  - usuario e senha da camera.$\r$\n$\r$\nO video passa a iniciar sozinho com o Windows, antes do login."
+!define MUI_WELCOMEPAGE_TEXT "Este assistente instala o agente do Ficou Pronto neste computador da loja.$\r$\n$\r$\nO plano da loja decide o que entra:$\r$\n  - so gestao: agente (backup e acesso da central aos arquivos);$\r$\n  - com cameras: tambem o transmissor de video.$\r$\n$\r$\nTenha em maos o codigo de ativacao gerado na central (e, se houver cameras, usuario e senha da camera).$\r$\n$\r$\nTudo inicia sozinho com o Windows, antes do login."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TITLE "Arquivos instalados"
@@ -65,9 +67,11 @@ Section "Ficou Pronto" Main
   nsExec::Exec 'sc.exe stop FicouPronto.Tunel'
   Sleep 3000
   SetOutPath "$INSTDIR\bin"
+!ifndef LITE
   File "${STAGE}\bin\ffmpeg.exe"
   File "${STAGE}\bin\mediamtx.exe"
   File "${STAGE}\bin\cloudflared.exe"
+!endif
   File "${STAGE}\bin\WinSW-x64.exe"
   SetOutPath "$INSTDIR\agent"
   File "${STAGE}\agent\*.ps1"
@@ -78,8 +82,8 @@ Section "Ficou Pronto" Main
   nsExec::Exec '${PS} -NoProfile -Command "Get-ChildItem -LiteralPath $\'$INSTDIR\agent$\' | Unblock-File"'
   WriteUninstaller "$INSTDIR\Desinstalar.exe"
   CreateDirectory "$SMPROGRAMS\Ficou Pronto"
-  CreateShortcut "$SMPROGRAMS\Ficou Pronto\Ficou Pronto - Manutencao.lnk" ${PS} '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\agent\ficoupronto-setup.ps1"' "$INSTDIR\bin\mediamtx.exe" 0
-  CreateShortcut "$DESKTOP\Ficou Pronto - Manutencao.lnk" ${PS} '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\agent\ficoupronto-setup.ps1"' "$INSTDIR\bin\mediamtx.exe" 0
+  CreateShortcut "$SMPROGRAMS\Ficou Pronto\Ficou Pronto - Manutencao.lnk" ${PS} '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\agent\ficoupronto-setup.ps1"' "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" 0
+  CreateShortcut "$DESKTOP\Ficou Pronto - Manutencao.lnk" ${PS} '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\agent\ficoupronto-setup.ps1"' "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" 0
   CreateShortcut "$SMPROGRAMS\Ficou Pronto\Desinstalar.lnk" "$INSTDIR\Desinstalar.exe"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "Ficou Pronto"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"

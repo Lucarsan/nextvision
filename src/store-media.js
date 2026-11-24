@@ -95,7 +95,9 @@ const heartbeatSchema = z.object({
   clock: z.string().datetime({ offset: true }).optional(),
   recording: z.object({ state: componentState, detail: z.string().max(200).optional() }).optional(),
   // Andamento da atualização remota do agente (0.5.1+).
-  update: heartbeatUpdateSchema
+  update: heartbeatUpdateSchema,
+  // Como o PC foi instalado (0.6.0+): com câmeras ou só gestão.
+  mode: z.enum(['cameras', 'management']).optional()
 });
 
 export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, deviceAuthQuiet = deviceAuth, route, bad, valid, audit, rateLimit, uuid }) {
@@ -108,7 +110,7 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, device
   app.get('/api/master/tenants/:id/media', auth, roles('master'), route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Loja inválida');
     const media = await q('SELECT * FROM store_media WHERE tenant_id=$1', [req.params.id]);
-    const devices = await q(`SELECT id,name,enabled,last_seen_at,agent_version,health,health_at,provisioned_at,
+    const devices = await q(`SELECT id,name,enabled,last_seen_at,agent_version,health,health_at,provisioned_at,install_mode,
       agent_update_target,agent_update_requested_at,agent_update_status,agent_update_status_at FROM shop_devices
       WHERE tenant_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC`, [req.params.id]);
     res.set('Cache-Control', 'no-store').json({ ...publicMedia(media.rows[0], cf.cloudflareConfigured()), devices: devices.rows });
@@ -150,6 +152,14 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, device
   app.post('/api/connect/provision', rateLimit({ windowMs: 10 * 60000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false }), deviceAuth, route(async (req, res) => {
     let media;
     try {
+      // Plano só gestão (camera_limit 0): nada de túnel nem câmeras; o instalador põe só o agente
+      // (sinal de vida, backup e arquivos à distância).
+      const plan = await q('SELECT id,name,slug,camera_limit,retention_days FROM tenants WHERE id=$1', [req.device.tenant_id]);
+      if (plan.rows[0]?.camera_limit === 0) {
+        await q('UPDATE shop_devices SET provisioned_at=now(),last_seen_at=now() WHERE id=$1', [req.device.id]);
+        await q("INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,NULL,'device_provisioned','shop_device',$2)", [req.device.tenant_id, req.device.id]);
+        return res.set('Cache-Control', 'no-store').json({ store: plan.rows[0], device: { id: req.device.id, name: req.device.name }, plan: { mode: 'management', camera_limit: 0 }, cameras: [], heartbeat_seconds: 30 });
+      }
       media = await ensureStoreMedia(db, req.device.tenant_id, null);
       if (!media.tunnel_id) throw new MediaError(409, 'Loja sem túnel registrado');
       const token = await cf.tunnelToken(media.tunnel_id);
@@ -169,6 +179,7 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, device
       res.set('Cache-Control', 'no-store').json({
         store: store.rows[0],
         device: { id: req.device.id, name: req.device.name },
+        plan: { mode: 'cameras', camera_limit: store.rows[0].camera_limit },
         media: { origin: media.origin, hostname: new URL(media.origin).hostname, username: media.media_username, password: open(media.media_password_enc), rtsp_port: 8554, hls_port: 8888 },
         tunnel: { id: media.tunnel_id, name: media.tunnel_name, token },
         cameras: cameras.rows.map(({ device_id, ...c }) => ({ ...c, stream_path: streamPathFor(c, legacy), bound: device_id === req.device.id })),
@@ -189,9 +200,13 @@ export function registerStoreMedia(app, { q, db, auth, roles, deviceAuth, device
     if (v.clock) { const skew = Date.parse(v.clock) - Date.now(); if (Math.abs(skew) < 86400000) health.clock_skew_ms = Math.round(skew); }
     const dev = await q(`UPDATE shop_devices SET agent_version=$2,health=$3,health_at=now(),last_seen_at=now(),
         agent_update_status=CASE WHEN $4::jsonb IS NULL THEN agent_update_status ELSE $4::jsonb END,
-        agent_update_status_at=CASE WHEN $4::jsonb IS NULL THEN agent_update_status_at ELSE now() END
-      WHERE id=$1 RETURNING agent_update_target,agent_update_request`, [req.device.id, v.agent_version, health, v.update ? JSON.stringify(v.update) : null]);
+        agent_update_status_at=CASE WHEN $4::jsonb IS NULL THEN agent_update_status_at ELSE now() END,
+        install_mode=COALESCE($5,install_mode)
+      WHERE id=$1 RETURNING agent_update_target,agent_update_request,
+        (SELECT count(*)::int FROM device_remote_jobs j WHERE j.device_id=$1 AND j.status='pending' AND j.expires_at>now()) remote_pending`,
+      [req.device.id, v.agent_version, health, v.update ? JSON.stringify(v.update) : null, v.mode || null]);
     const update = pendingUpdate(dev.rows[0] || {}, v.agent_version);
-    res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30, ...(update ? { update } : {}) });
+    const remote = dev.rows[0]?.remote_pending || 0;
+    res.set('Cache-Control', 'no-store').json({ ok: true, heartbeat_seconds: 30, ...(update ? { update } : {}), ...(remote ? { remote_pending: remote } : {}) });
   }));
 }

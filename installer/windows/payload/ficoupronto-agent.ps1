@@ -2,6 +2,8 @@
 # Mantem um FFmpeg por camera publicando no MediaMTX local, recupera quedas,
 # reencontra a camera pelo MAC se o IP mudar, envia sinal de vida a central
 # e aplica atualizacoes assinadas pedidas pela central (ficoupronto-updater.ps1).
+# Plano so gestao (config.mode = management): sem cameras; fica o sinal de vida, o backup e os
+# arquivos a distancia (ficoupronto-remote.ps1, aberto quando a central tem pedido).
 # Falha da internet ou da central NAO derruba o video local.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
@@ -37,6 +39,8 @@ $config = Read-FpConfig
 $secrets = Read-FpSecrets
 if ($null -eq $config -or $null -eq $secrets) { Log 'Sem configuracao; rode o instalador.'; Start-Sleep -Seconds 60; exit 1 }
 $configStamp = (Get-Item -LiteralPath $paths.Config).LastWriteTimeUtc
+$mode = Get-FpInstallMode $config
+$remoteProc = $null
 $state = @{}
 $blocked = $false
 $nextHeartbeat = [datetime]::UtcNow
@@ -61,7 +65,7 @@ try {
     $stamp = (Get-Item -LiteralPath $paths.Config).LastWriteTimeUtc
     if ($stamp -ne $configStamp) {
       foreach ($k in @($state.Keys)) { Stop-NvMedia $state[$k].Media }
-      $state = @{}; $config = Read-FpConfig; $secrets = Read-FpSecrets; $configStamp = $stamp
+      $state = @{}; $config = Read-FpConfig; $secrets = Read-FpSecrets; $configStamp = $stamp; $mode = Get-FpInstallMode $config
       Log 'Configuracao recarregada.'
     }
 
@@ -112,7 +116,7 @@ try {
     }
 
     # Gravacao: a cada 5 s confere com a central quais cameras gravam agora.
-    if (-not $blocked -and $now -ge $nextRecordingSync) {
+    if ($mode -ne 'management' -and -not $blocked -and $now -ge $nextRecordingSync) {
       $nextRecordingSync = $now.AddSeconds(5)
       try { $recordingStatus = Sync-FpRecordings $config $secrets.device_token $recording }
       catch { $recordingStatus = @{ state = 'degraded'; detail = 'erro na gravacao' }; Log ('Gravacao: ' + $_.Exception.Message) }
@@ -177,15 +181,20 @@ try {
       $okCount = @($camStates | Where-Object { $_.state -eq 'ok' }).Count
       $tunnel = Get-Service -Name 'FicouPronto.Tunel' -ErrorAction SilentlyContinue
       $free = [math]::Round(((Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))).Free / 1GB), 1)
-      $body = @{ agent_version = $paths.Version; clock = [datetime]::UtcNow.ToString('o'); recording = $recordingStatus; cameras = $camStates; components = @{
+      $components = @{
           service = @{ state = 'ok' }
           network = @{ state = [string]$netInfo.State; detail = [string]$netInfo.Detail }
-          relay = @{ state = $(if (Test-FpTcpPort '127.0.0.1' 8554 500) { 'ok' } else { 'down' }) }
-          tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
-          publisher = @{ state = $(if ($camStates.Count -eq 0) { 'unknown' } elseif ($okCount -eq $camStates.Count) { 'ok' } elseif ($okCount -gt 0) { 'degraded' } else { 'down' }) }
           disk = @{ state = $(if ($free -ge 5) { 'ok' } else { 'degraded' }); detail = ([string]$free + ' GB livres') }
           backup = @{ state = [string]$backupStatus.state; detail = [string]$backupStatus.detail }
-        } }
+        }
+      # So gestao: sem video local, tunel nem FFmpeg (nao gera alerta de "parado").
+      if ($mode -ne 'management') {
+        $components.relay = @{ state = $(if (Test-FpTcpPort '127.0.0.1' 8554 500) { 'ok' } else { 'down' }) }
+        $components.tunnel = @{ state = $(if ($tunnel -and $tunnel.Status -eq 'Running') { 'ok' } else { 'down' }) }
+        $components.publisher = @{ state = $(if ($camStates.Count -eq 0) { 'unknown' } elseif ($okCount -eq $camStates.Count) { 'ok' } elseif ($okCount -gt 0) { 'degraded' } else { 'down' }) }
+      }
+      $body = @{ agent_version = $paths.Version; mode = $mode; clock = [datetime]::UtcNow.ToString('o'); cameras = $camStates; components = $components }
+      if ($mode -ne 'management') { $body.recording = $recordingStatus }
       $ust = Read-FpUpdateState
       if ($ust -and ([string]$ust.version -match '^\d+\.\d+\.\d+$') -and ([string]$ust.state -in @('downloading', 'waiting', 'installing', 'done', 'failed', 'rolled_back'))) {
         $rep = @{ version = [string]$ust.version; state = [string]$ust.state; detail = [string]$ust.detail }
@@ -205,6 +214,14 @@ try {
             $updateJob = @{ Version = [string]$u.version; RequestId = [string]$u.request_id; Url = [string]$u.url; Phase = 'download'; NextTry = $now; Waiting = $false }
           }
         }
+      }
+      # Arquivos a distancia: a central tem pedido; abre o processo que busca e executa (um por vez).
+      if ($r.Ok -and $null -ne $r.Data -and $r.Data.PSObject.Properties['remote_pending'] -and [int]$r.Data.remote_pending -gt 0 -and ($null -eq $remoteProc -or $remoteProc.HasExited)) {
+        try {
+          $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $remoteProc = Start-Process -FilePath $ps -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'ficoupronto-remote.ps1') + '"') -WindowStyle Hidden -PassThru
+          Log ('Central tem ' + $r.Data.remote_pending + ' pedido(s) de arquivo; buscando.')
+        } catch { Log ('Arquivos a distancia: ' + $_.Exception.Message) }
       }
       if ($r.Status -in @(401, 403)) { if (-not $blocked) { Log ('Central recusou o computador: ' + $r.Error) }; $blocked = $true; $nextHeartbeat = $now.AddSeconds(60) }
       else { if ($blocked -and $r.Ok) { Log 'Computador liberado pela central.' }; if ($r.Ok) { $blocked = $false }; $nextHeartbeat = $now.AddSeconds($heartbeatEvery) }

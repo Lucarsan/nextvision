@@ -85,7 +85,7 @@
         + '<td><input class="unLabel" maxlength="60" value="' + safe(u.unit_label || '') + '" placeholder="Ex.: Maracanaú" style="width:150px"></td>'
         + '<td><input class="unCnpj" maxlength="18" value="' + safe(fmtCnpj(u.cnpj)) + '" placeholder="00.000.000/0000-00" style="width:170px"></td>'
         + '<td>' + safe(u.status) + (u.sales_enabled ? '' : ' <span class="ct-muted">(caixa desligado)</span>') + '</td>'
-        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unImport" style="height:34px">Importar planilha</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
+        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unImport" style="height:34px">Importar planilha</button><button type="button" class="ct-btn ghost unDepot" style="height:34px" data-depot="' + (u.depot ? '1' : '') + '">' + (u.depot ? 'É o depósito central' : 'Marcar como depósito') + '</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
       + '</tbody></table></div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:12px"><label>Ligar loja à rede<select id="unAdd">' + (free.map(s => '<option value="' + safe(s.id) + '">' + safe(s.name) + '</option>').join('') || '<option value="">Nenhuma loja livre</option>') + '</select></label>'
       + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button>'
@@ -148,6 +148,12 @@
       });
       input.click();
     });
+    document.querySelectorAll('.unDepot').forEach(b => b.onclick = act(async () => {
+      const on = !b.dataset.depot;
+      if (!confirm(on ? 'Marcar esta loja como depósito central? O quiosque dela abre direto no Estoque (envio e recebimento).' : 'Deixar de ser o depósito central?')) throw Error('');
+      await api('/master/tenants/' + b.closest('tr').dataset.id + '/depot', 'PATCH', { depot: on });
+      return on ? 'Loja marcada como depósito central.' : 'Loja deixou de ser depósito.';
+    }));
     document.querySelectorAll('.unRemove').forEach(b => b.onclick = act(async () => {
       if (!confirm('Tirar esta loja da rede? Ela continua funcionando sozinha.')) throw Error('');
       await api('/master/tenants/' + b.closest('tr').dataset.id + '/network', 'PATCH', { network_id: null });

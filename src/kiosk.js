@@ -81,8 +81,8 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
   // Vendedoras da unidade (as que confirmam venda com PIN).
   app.get('/api/store/kiosk/sellers', ...staff, route(async (req, res) => {
     const r = await q("SELECT id, name FROM users WHERE tenant_id = $1 AND active AND login_kind = 'pin' ORDER BY lower(name)", [req.user.tenant_id]);
-    const t = (await q('SELECT name, unit_label, pin_sales, network_id FROM tenants WHERE id = $1', [req.user.tenant_id])).rows[0];
-    res.set('Cache-Control', 'no-store').json({ sellers: r.rows, unit: { name: t.name, label: t.unit_label || t.name, pin_sales: t.pin_sales, network: !!t.network_id }, kiosk: !!req.user.kiosk });
+    const t = (await q('SELECT name, unit_label, pin_sales, network_id, depot FROM tenants WHERE id = $1', [req.user.tenant_id])).rows[0];
+    res.set('Cache-Control', 'no-store').json({ sellers: r.rows, unit: { name: t.name, label: t.unit_label || t.name, pin_sales: t.pin_sales, network: !!t.network_id, depot: !!t.depot }, kiosk: !!req.user.kiosk });
   }));
 
   // Confere o PIN na hora em que a vendedora toca no nome (a venda confere de novo ao gravar).

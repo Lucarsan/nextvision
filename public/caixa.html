@@ -76,9 +76,10 @@
   .kpi span{font-size:12px;color:var(--muted)}.kpi strong{display:block;font-size:26px;color:var(--ink);margin:4px 0 2px;letter-spacing:-.5px}.kpi em{font-style:normal;font-size:12px;color:var(--muted)}
   .goalbar{position:relative;height:10px;border-radius:6px;background:#ece9e1;margin:14px 0 6px}.goalbar i{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:var(--ink)}
   .protect{background:#ecebe5;border-radius:10px;padding:10px 14px;font-size:13px;margin-top:14px;color:var(--text)}
-  #viewSales .people button,#viewWarranty .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
+  #viewSales .people button,#viewWarranty .people button,#viewStock .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
   .cancelbtn{border:1px solid #e6c9c2;background:#fff;color:var(--red);border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
   tr.canceled td{color:var(--muted);text-decoration:line-through}
+  #stTabs .chip{border:0;cursor:pointer}
   [hidden]{display:none!important}
   @media (max-width:1100px){.grid{grid-template-columns:1fr}}
   @media (max-width:760px){.shell{display:block}.side{position:static;height:auto;width:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;padding:14px}.wm{margin:0;flex:1}.unitbox{margin:0}.nav{display:flex;width:100%}.foot{display:none}main{padding:16px 12px}.kpis{grid-template-columns:1fr}}
@@ -93,6 +94,7 @@
       <button type="button" data-view="day"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Meu dia</button>
       <button type="button" data-view="cash" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg>Caixa</button>
       <button type="button" data-view="warranty"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Garantia</button>
+      <button type="button" data-view="stock"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Estoque</button>
       <button type="button" data-view="sales"><svg viewBox="0 0 24 24"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h6"/></svg>Vendas e caixa</button>
     </nav>
     <div class="foot"><strong id="footName">Caixa do quiosque</strong>Sistema FicouPronto<br><button type="button" id="leave">Sair do quiosque</button></div>
@@ -179,6 +181,26 @@
       <div class="top"><div><h1>Garantia</h1><p class="sub">Digite o código do comprovante que a cliente recebeu no WhatsApp (vale de qualquer unidade)</p></div></div>
       <div class="card" style="max-width:720px"><div style="display:flex;gap:8px"><input class="field" id="wCode" maxlength="8" placeholder="Código do comprovante (8 letras e números)" autocomplete="off"><button type="button" class="go" id="wFind" style="margin:0;width:auto;padding:0 18px">Buscar</button></div>
         <p class="msg err" id="wMsg"></p><div id="wBox" hidden></div></div>
+    </section>
+
+    <!-- ===== Estoque da rede (proposta p. 7 e 14) ===== -->
+    <section id="viewStock" hidden>
+      <div class="top"><div><h1>Estoque</h1><p class="sub" id="stSub">Consulta na rede, transferências e contagem</p></div>
+        <div class="chips" id="stTabs"><button type="button" class="chip ok" data-t="find">Consultar</button><button type="button" class="chip" data-t="recv">Receber <span id="recvN"></span></button><button type="button" class="chip" data-t="send">Enviar</button><button type="button" class="chip" data-t="count">Contagem</button></div></div>
+      <div class="card" id="tFind"><input class="field" id="sfQ" placeholder="Bipe ou digite o código ou nome da peça" autocomplete="off"><div id="sfRes"></div></div>
+      <div class="card" id="tRecv" hidden><div id="rvList"></div></div>
+      <div class="card" id="tSend" hidden>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><select class="field" id="sdTo" style="width:auto"></select><input class="field" id="sdScan" placeholder="Bipe as peças que vão na transferência" autocomplete="off" style="flex:1;min-width:220px"></div>
+        <table><thead><tr><th>Código</th><th>Peça</th><th>Qtd</th><th></th></tr></thead><tbody id="sdItems"></tbody></table>
+        <input class="field" id="sdNote" maxlength="200" placeholder="Observação (opcional)" style="margin-top:10px">
+        <p class="sub" style="margin:10px 0 4px">Quem está enviando?</p><div class="people" id="sdWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg" id="sdMsg"></p></div>
+      <div class="card" id="tCount" hidden>
+        <p class="sub" style="margin:0 0 8px">Bipe cada peça da unidade (uma vez por peça). A contagem fica guardada neste computador até ser aplicada.</p>
+        <input class="field" id="ctScan" placeholder="Bipe a peça" autocomplete="off">
+        <div class="sum"><span id="ctInfo">Nenhuma peça contada</span><button type="button" class="linkbtn" id="ctClear">Recomeçar contagem</button></div>
+        <table><thead><tr><th>Código</th><th>Peça</th><th class="n">Contadas</th><th class="n">No sistema</th><th></th></tr></thead><tbody id="ctItems"></tbody></table>
+        <label class="disc"><input type="checkbox" id="ctZero"> Peças não contadas ficam com estoque zero (contagem completa da unidade)</label>
+        <p class="sub" style="margin:10px 0 4px">Quem contou?</p><div class="people" id="ctWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg" id="ctMsg"></p></div>
     </section>
 
     <!-- ===== Vendas do dia, sangria e fechamento (proposta p. 7) ===== -->
@@ -484,10 +506,104 @@
   $('wFind').onclick = () => { $('wMsg').className = 'msg err'; findWarranty(); };
   $('wCode').addEventListener('keydown', e => { if (e.key === 'Enter') { $('wMsg').className = 'msg err'; findWarranty(); } });
 
+  // ---------- Estoque: consulta na rede, receber, enviar, contagem ----------
+  let netUnits = null, sendItems = [], counts = {};
+  try { counts = JSON.parse(localStorage.getItem('fp_count_' + (sessionStorage.getItem('fp_unit') || '')) || '{}'); } catch { counts = {}; }
+  const countKey = () => 'fp_count_' + (unit?.label || '');
+  const saveCounts = () => { try { localStorage.setItem(countKey(), JSON.stringify(counts)); } catch { } };
+  function stTab(t) {
+    $('stTabs').querySelectorAll('[data-t]').forEach(b => b.classList.toggle('ok', b.dataset.t === t));
+    $('tFind').hidden = t !== 'find'; $('tRecv').hidden = t !== 'recv'; $('tSend').hidden = t !== 'send'; $('tCount').hidden = t !== 'count';
+    setTimeout(() => ({ find: $('sfQ'), send: $('sdScan'), count: $('ctScan') }[t]?.focus()), 30);
+    if (t === 'recv') loadRecv();
+  }
+  $('stTabs').querySelectorAll('[data-t]').forEach(b => b.onclick = () => stTab(b.dataset.t));
+  async function openStock() {
+    if (!netUnits) { netUnits = await api('/store/network-units'); $('sdTo').innerHTML = '<option value="">Enviar para…</option>' + netUnits.units.filter(u => u.id !== netUnits.me?.id).map(u => '<option value="' + safe(u.id) + '">' + safe(u.label) + (u.depot ? ' (depósito)' : '') + '</option>').join(''); }
+    try { const c = JSON.parse(localStorage.getItem(countKey()) || 'null'); if (c) counts = c; } catch { }
+    drawSend(); drawCount(); loadRecv(); stTab(unit?.depot ? 'send' : 'find');
+  }
+  let sfT;
+  $('sfQ').addEventListener('input', () => { clearTimeout(sfT); sfT = setTimeout(findStock, 300); });
+  $('sfQ').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(sfT); findStock(); } });
+  async function findStock() {
+    const v = $('sfQ').value.trim(); if (v.length < 2) { $('sfRes').innerHTML = ''; return; }
+    const list = await api('/store/stock/network?q=' + encodeURIComponent(v)).catch(() => []);
+    $('sfRes').innerHTML = list.map(p => '<div style="border-top:1px solid var(--line);padding:10px 0"><strong>' + safe(p.name) + '</strong> <span class="code">' + safe(p.code) + ' · ' + brl(p.price_cents) + '</span><div class="units" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'
+      + p.units.map(u => '<span class="chip' + (u.stock > 0 ? ' ok' : '') + '"' + (u.mine ? ' style="outline:2px solid var(--ink)"' : '') + '>' + safe(u.unit) + ': ' + u.stock + '</span>').join('') + '</div></div>').join('') || '<p class="sub">Nenhuma peça encontrada.</p>';
+  }
+  async function loadRecv() {
+    const list = await api('/store/transfers').catch(() => []);
+    const pend = list.filter(t => !t.outgoing && t.status === 'sent');
+    $('recvN').textContent = pend.length ? '(' + pend.length + ')' : '';
+    $('rvList').innerHTML = (pend.map(t => '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px" data-tr="' + safe(t.id) + '"><strong>Transferência nº ' + t.number + '</strong> <span class="sub">de ' + safe(t.from_unit) + ' · ' + safe(t.sent_at) + (t.sent_by ? ' · ' + safe(t.sent_by.split(' ')[0]) : '') + '</span>'
+        + (t.note ? '<p class="sub" style="margin:4px 0 0">' + safe(t.note) + '</p>' : '')
+        + '<input class="field rvScan" placeholder="Bipe as peças que chegaram" style="margin-top:8px"><table><thead><tr><th>Código</th><th>Peça</th><th class="n">Enviadas</th><th class="n">Recebidas</th></tr></thead><tbody>'
+        + t.items.map(i => '<tr data-code="' + safe(i.code) + '"><td class="code">' + safe(i.code) + '</td><td>' + safe(i.name) + '</td><td class="n">' + i.qty_sent + '</td><td class="n"><b class="rq">0</b></td></tr>').join('') + '</tbody></table>'
+        + '<p class="sub" style="margin:10px 0 4px">Quem está recebendo?</p><div class="people rvWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg rvMsg"></p></div>').join('') || '<p class="sub">Nenhuma transferência a receber.</p>')
+      + (list.filter(t => t.outgoing || t.status !== 'sent').length ? '<p class="label" style="margin-top:14px">Últimas transferências</p>' + list.filter(t => t.outgoing || t.status !== 'sent').map(t => '<p class="sub" style="margin:2px 0">nº ' + t.number + ' · ' + safe(t.from_unit) + ' → ' + safe(t.to_unit) + ' · ' + safe(t.sent_at) + ' · ' + ({ sent: 'a caminho', received: 'recebida', divergent: 'recebida com diferença' }[t.status]) + '</p>').join('') : '');
+    $('rvList').querySelectorAll('[data-tr]').forEach(box => {
+      const got = {};
+      box.querySelector('.rvScan').addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return; e.preventDefault(); const code = e.target.value.trim(); e.target.value = '';
+        const row = box.querySelector('tr[data-code="' + CSS.escape(code) + '"]'); const msg = box.querySelector('.rvMsg');
+        if (!row) { msg.className = 'msg rvMsg err'; msg.textContent = 'A peça ' + code + ' não está nesta transferência.'; return; }
+        got[code] = (got[code] || 0) + 1; row.querySelector('.rq').textContent = got[code]; msg.textContent = '';
+      });
+      const el = box.querySelector('.rvWho');
+      el.innerHTML = sellers.map(s => '<button type="button" data-w="' + safe(s.id) + '">' + safe(s.name.split(' ')[0]) + '</button>').join('');
+      el.querySelectorAll('[data-w]').forEach(b => b.onclick = () => {
+        const s = sellers.find(x => x.id === b.dataset.w), msg = box.querySelector('.rvMsg');
+        const missing = [...box.querySelectorAll('tr[data-code]')].filter(r => +r.querySelector('.rq').textContent !== +r.children[2].textContent).length;
+        if (missing && !confirm(missing + ' peça(s) com quantidade diferente do que foi enviado. Confirmar mesmo assim? A diferença vai para o supervisor.')) return;
+        let r; askPin(s, () => { msg.className = 'msg rvMsg ok'; msg.textContent = r.status === 'divergent' ? 'Recebida com diferença (o supervisor vai conferir).' : 'Transferência recebida.'; setTimeout(loadRecv, 1200); },
+          async pin => { r = await api('/store/transfers/' + box.dataset.tr + '/receive', 'POST', { items: Object.entries(got).map(([code, quantity]) => ({ code, quantity })), seller_id: s.id, seller_pin: pin }); });
+      });
+    });
+  }
+  function drawSend() {
+    $('sdItems').innerHTML = sendItems.map((x, i) => '<tr><td class="code">' + safe(x.barcode || '') + '</td><td>' + safe(x.name) + '</td><td>' + x.qty + '</td><td><button type="button" class="x" data-sd="' + i + '">×</button></td></tr>').join('') || '<tr><td colspan="4" class="sub">Nenhuma peça bipada.</td></tr>';
+    $('sdItems').querySelectorAll('[data-sd]').forEach(b => b.onclick = () => { sendItems.splice(+b.dataset.sd, 1); drawSend(); });
+  }
+  $('sdScan').addEventListener('keydown', async e => {
+    if (e.key !== 'Enter') return; e.preventDefault(); const code = $('sdScan').value.trim(); $('sdScan').value = ''; if (!code) return;
+    try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); const cur = sendItems.find(x => x.id === p.id); if (cur) cur.qty++; else sendItems.push({ id: p.id, name: p.name, barcode: p.barcode, qty: 1 }); $('sdMsg').textContent = ''; drawSend(); }
+    catch (err) { $('sdMsg').className = 'msg err'; $('sdMsg').textContent = 'Peça não encontrada: ' + code; }
+  });
+  function drawCount() {
+    const list = Object.values(counts);
+    $('ctInfo').textContent = list.length ? list.length + ' peças diferentes · ' + list.reduce((a, x) => a + x.qty, 0) + ' unidades contadas' : 'Nenhuma peça contada';
+    $('ctItems').innerHTML = list.slice().reverse().slice(0, 300).map(x => '<tr><td class="code">' + safe(x.barcode || '') + '</td><td>' + safe(x.name) + '</td><td class="n">' + x.qty + '</td><td class="n">' + (x.stock ?? '—') + '</td><td><button type="button" class="x" data-ct="' + safe(x.id) + '">−</button></td></tr>').join('');
+    $('ctItems').querySelectorAll('[data-ct]').forEach(b => b.onclick = () => { const x = counts[b.dataset.ct]; if (x.qty > 1) x.qty--; else delete counts[b.dataset.ct]; saveCounts(); drawCount(); });
+  }
+  $('ctScan').addEventListener('keydown', async e => {
+    if (e.key !== 'Enter') return; e.preventDefault(); const code = $('ctScan').value.trim(); $('ctScan').value = ''; if (!code) return;
+    try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); const x = counts[p.id] || (counts[p.id] = { id: p.id, name: p.name, barcode: p.barcode, stock: p.stock_qty, qty: 0 }); x.qty++; saveCounts(); $('ctMsg').textContent = ''; drawCount(); }
+    catch (err) { $('ctMsg').className = 'msg err'; $('ctMsg').textContent = 'Peça não encontrada: ' + code + ' (separe para cadastrar)'; }
+  });
+  $('ctClear').onclick = () => { if (!confirm('Apagar a contagem feita até agora neste computador?')) return; counts = {}; saveCounts(); drawCount(); };
+  function refreshStockWho() {
+    whoButtons('sdWho', s => {
+      $('sdMsg').className = 'msg err';
+      if (!$('sdTo').value) { $('sdMsg').textContent = 'Escolha a unidade de destino.'; return; }
+      if (!sendItems.length) { $('sdMsg').textContent = 'Bipe as peças da transferência.'; return; }
+      let r; askPin(s, () => { $('sdMsg').className = 'msg ok'; $('sdMsg').textContent = 'Transferência nº ' + r.number + ' enviada: ' + r.units + ' peças. O estoque já saiu desta unidade.'; sendItems = []; $('sdNote').value = ''; drawSend(); },
+        async pin => { r = await api('/store/transfers', 'POST', { to_tenant_id: $('sdTo').value, items: sendItems.map(x => ({ product_id: x.id, quantity: x.qty })), note: $('sdNote').value.trim(), seller_id: s.id, seller_pin: pin }); });
+    });
+    whoButtons('ctWho', s => {
+      const list = Object.values(counts); $('ctMsg').className = 'msg err';
+      if (!list.length) { $('ctMsg').textContent = 'Nenhuma peça contada.'; return; }
+      if (!confirm('Aplicar a contagem: ' + list.length + ' peças passam a ter o estoque contado' + ($('ctZero').checked ? ' e as não contadas ficam com zero' : '') + '. Confirmar?')) return;
+      let r; askPin(s, () => { $('ctMsg').className = 'msg ok'; $('ctMsg').textContent = 'Contagem aplicada: ' + r.counted + ' peças' + (r.zeroed ? ', ' + r.zeroed + ' zeradas' : '') + '.'; counts = {}; saveCounts(); drawCount(); },
+        async pin => { r = await api('/store/stock/count', 'POST', { items: list.map(x => ({ product_id: x.id, quantity: x.qty })), zero_others: $('ctZero').checked, seller_id: s.id, seller_pin: pin }); });
+    });
+  }
+
   // ---------- Navegação ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty';
+    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock';
+    if (b.dataset.view === 'stock') openStock().catch(e => { $('stSub').textContent = e.message; });
     if (b.dataset.view === 'warranty') setTimeout(() => $('wCode').focus(), 30);
     if (b.dataset.view === 'day') drawDayPick(); else clearTimeout(dayTimer);
     if (b.dataset.view === 'sales') loadSales().catch(e => { $('salesSub').textContent = e.message; });
@@ -503,7 +619,8 @@
       if (b?.network) brandName = b.name;
       if (b?.network) { const [first, ...rest] = b.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) document.documentElement.style.setProperty('--gold', b.brand_color); }
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;
-      draw(); await loadCash(); refreshWho();
+      draw(); await loadCash(); refreshWho(); refreshStockWho();
+      if (unit.depot) document.querySelector('[data-view="stock"]').click();
     } catch (e) { $('cashSub').textContent = e.message; }
   })();
   setInterval(() => { if (!$('viewCash').hidden && !items.length) loadCash().catch(() => {}); }, 120000);

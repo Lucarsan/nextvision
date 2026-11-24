@@ -86,7 +86,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
 
   app.get('/api/master/networks/:id/units', ...master, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
-    const r = await q('SELECT id, name, slug, unit_label, cnpj, city, status, sales_enabled FROM tenants WHERE network_id = $1 ORDER BY lower(coalesce(unit_label, name))', [req.params.id]);
+    const r = await q('SELECT id, name, slug, unit_label, cnpj, city, status, sales_enabled, depot FROM tenants WHERE network_id = $1 ORDER BY lower(coalesce(unit_label, name))', [req.params.id]);
     res.json(r.rows);
   }));
 

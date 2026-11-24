@@ -182,6 +182,17 @@
     $('unitSel').innerHTML = '<option value="">Todas as unidades</option>' + data.units.map(u => '<option value="' + safe(u.id) + '"' + (u.id === cur ? ' selected' : '') + '>' + safe(u.name) + '</option>').join('');
     draw(); $('feedback').textContent = '';
     loadComm().catch(() => {});
+    loadTransfers().catch(() => {});
+  }
+  async function loadTransfers() {
+    const list = await api('/network/transfers');
+    const sel = $('unitSel').selectedOptions[0]?.textContent, all = !$('unitSel').value;
+    const rows = list.filter(t => all || t.from_unit === sel || t.to_unit === sel);
+    if (!rows.length) return;
+    const warn = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
+    const html = '<div class="alert ' + (rows.some(t => t.status === 'divergent') ? 'red' : 'yellow') + '"><b>' + warn + plural(rows.length, 'transferência para conferir', 'transferências para conferir') + '</b><p>Recebidas com diferença ou paradas há mais de 2 dias.</p>'
+      + '<details><summary>Ver transferências</summary><ul>' + rows.map(t => '<li>nº ' + t.number + ' · ' + safe(t.from_unit) + ' → ' + safe(t.to_unit) + ' · ' + safe(t.sent_at) + ' · ' + (t.status === 'divergent' ? 'diferença: ' + (t.items || []).map(i => safe(i.name) + ' (enviadas ' + i.qty_sent + ', recebidas ' + (i.qty_received ?? 0) + ')').join('; ') : 'ainda não recebida') + '</li>').join('') + '</ul></details></div>';
+    const box = $('alerts'); if (box.querySelector('.alert.ok')) box.innerHTML = html; else box.insertAdjacentHTML('afterbegin', html);
   }
   async function loadComm() {
     const c = await api('/network/commissions');

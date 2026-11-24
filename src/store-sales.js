@@ -17,6 +17,7 @@ import { registerInfinitePay } from './infinitepay.js';
 import bcrypt from 'bcryptjs';
 import { pinOk, authorizerByPin } from './kiosk.js';
 import { linkedIds, linkLocal, searchNetwork, adopt } from './network-customers.js';
+import { newReceiptCode } from './warranty.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -1452,6 +1453,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
+      sale.receipt_code = (await c.query('UPDATE sales SET receipt_code=$2 WHERE id=$1 RETURNING receipt_code', [sale.id, newReceiptCode()])).rows[0].receipt_code;
       if (v.offline_payment && (v.payments ? v.payments.some(p => p.method !== 'cash') : v.payment_method !== 'cash')) {
         await c.query('UPDATE sales SET offline_payment=true,offline_auth=$2 WHERE id=$1', [sale.id, v.offline_auth || null]); sale.offline_payment = true; sale.offline_auth = v.offline_auth || null;
       }

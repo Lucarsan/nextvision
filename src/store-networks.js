@@ -1,4 +1,5 @@
 import { tierFor } from './commission-tiers.js';
+import { openClaims } from './warranty.js';
 // Rede de lojas: várias unidades (tenants) sob uma marca, com um painel geral para o dono da rede.
 // - Central (master): cria a rede, liga e desliga unidades, define CNPJ e rótulo de cada unidade e cria o login do dono da rede.
 // - Dono da rede (role 'network'): vê as unidades e o faturamento por unidade. Não opera caixa nem vê dados de clientes.
@@ -308,6 +309,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND s.offline_payment AND s.econf_done_at IS NULL AND s.canceled_at IS NULL
       ORDER BY s.created_at LIMIT 200`, [req.user.network_id, scope(req), STORE_TZ]);
     const alerts = {
+      warranty_open: await openClaims(q, req.user.network_id, scope(req)),
       econf_pending: econf.rows,
       duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
       canceled: canceled.rows.map(c => ({ unit: c.unit, total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),

@@ -121,6 +121,23 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     const cl = await api('/store/cash/close', { method: 'POST', token: kt, body: { counted_cash_cents: 8000, seller_id: ana.id, seller_pin: '1234' } });
     assert.equal(cl.difference_cents, 8000 - (4410 + 4900 - 1000)); assert.match(cl.session.close_note, /fechado por Ana Paula/);
 
+    // Garantia digital: comprovante público pelo código, consulta em outra unidade da rede e atendimento com prazo.
+    assert.match(off.sale.receipt_code, /^[A-Za-z0-9]{8}$/);
+    const pub = await request(`/public/receipt/${off.sale.receipt_code}`, { token: null });
+    assert.equal(pub.status, 200); assert.deepEqual(pub.data.warranties.map(w => [w.label, w.days]), [['Defeito de fabricação', 30], ['Cor do banho', 365]]);
+    assert.deepEqual(pub.data.units, ['Maracanaú', 'Solares']); assert.equal(JSON.stringify(pub.data).includes('phone'), false);
+    assert.equal((await request('/public/receipt/zzzzzzzz', { token: null })).status, 404);
+    const ks = (await unit({ unit_id: solares.id, password: 'senha-solares' })).data.token;
+    const wv = await api(`/store/warranty/${off.sale.receipt_code}`, { token: ks });
+    assert.equal(wv.unit, 'Maracanaú'); assert.equal(wv.claims.length, 0);
+    assert.equal((await request(`/store/warranty/${off.sale.receipt_code}`, { token: f.foreignToken })).status, 404);
+    assert.equal((await request(`/store/warranty/${off.sale.receipt_code}/claims`, { method: 'POST', token: kt, body: { kind: 'troca', seller_id: ana.id, seller_pin: '0000' } })).status, 401);
+    await api(`/store/warranty/${off.sale.receipt_code}/claims`, { method: 'POST', token: kt, body: { kind: 'troca', note: 'Banho escureceu', seller_id: ana.id, seller_pin: '1234' } }, 201);
+    const wo = (await api('/network/overview', { token: g.data.token })).alerts.warranty_open;
+    assert.equal(wo.length, 1); assert.equal(wo[0].note, 'Banho escureceu');
+    await api(`/network/warranty-claims/${wo[0].id}/close`, { method: 'POST', token: g.data.token, body: {} });
+    assert.equal((await api('/network/overview', { token: g.data.token })).alerts.warranty_open.length, 0);
+
     // Comissão por faixa da rede: Meu dia e painel da rede mostram a faixa alcançada e quanto falta para a próxima.
     assert.equal((await request(`/master/networks/${net.id}/commission-tiers`, { method: 'PUT', token: masterToken, body: { tiers: [{ min_cents: 0, percent: 2 }, { min_cents: 0, percent: 3 }] } })).status, 400);
     await api(`/master/networks/${net.id}/commission-tiers`, { method: 'PUT', token: masterToken, body: { tiers: [{ min_cents: 50000, percent: 4 }, { min_cents: 0, percent: 2 }, { min_cents: 10000, percent: 3 }] } });

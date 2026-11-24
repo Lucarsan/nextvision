@@ -154,6 +154,9 @@
     const dup = only(data.alerts.duplicates), can = only(data.alerts.canceled), low = only(data.alerts.low_stock);
     const warn = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
     let h = '';
+    const wclaims = only(data.alerts.warranty_open || []);
+    if (wclaims.length) h += '<div class="alert ' + (wclaims.some(w => w.late) ? 'red' : 'yellow') + '"><b>' + warn + plural(wclaims.length, 'garantia em aberto', 'garantias em aberto') + '</b><p>Prazo de 30 dias para resolver' + (wclaims.some(w => w.late) ? '; ' + wclaims.filter(w => w.late).length + ' com prazo vencido' : '') + '.</p>'
+      + '<details><summary>Ver garantias</summary><ul>' + wclaims.map(w => '<li>' + safe(w.unit) + ' · venda ' + w.sale_number + ' · ' + safe({ troca: 'troca', conserto: 'conserto', devolucao: 'devolução', outro: 'outro' }[w.kind]) + (w.note ? ' — ' + safe(w.note) : '') + ' · aberta ' + safe(w.opened) + ' · prazo ' + safe(w.due) + ' <button type="button" class="wClose" data-id="' + safe(w.id) + '">Resolvido</button></li>').join('') + '</ul></details></div>';
     const econf = only(data.alerts.econf_pending || []);
     if (econf.length) h += '<div class="alert yellow"><b>' + warn + plural(econf.length, 'pagamento na maquininha avulsa a conciliar', 'pagamentos na maquininha avulsa a conciliar') + '</b><p>Pinpad fora do ar: confira o comprovante e marque como conciliado depois de enviar o ECONF.</p>'
       + '<details><summary>Ver pendências</summary><ul>' + econf.map(e => '<li>' + safe(e.unit) + ' · venda ' + e.sale_number + ' · ' + brl(e.total_cents) + ' · ' + safe(METHOD[e.payment_method] || e.payment_method) + ' · ' + safe(e.at) + (e.offline_auth ? ' · aut. ' + safe(e.offline_auth) : '') + ' <button type="button" class="econfDone" data-id="' + safe(e.id) + '">Conciliado</button></li>').join('') + '</ul></details></div>';
@@ -168,6 +171,7 @@
     for (const u of low) h += '<div class="alert yellow"><b>' + warn + 'Estoque baixo em ' + safe(u.unit) + '</b><p>' + plural(u.products.length, 'peça que vende', 'peças que vendem') + ' com 1 unidade ou menos</p>'
       + '<details><summary>Ver peças</summary><ul>' + u.products.map(p => '<li>' + safe(p.name) + ' · estoque ' + p.stock_qty + ' · ' + p.sold_30d + ' vendida(s) em 30 dias</li>').join('') + '</ul></details></div>';
     $('alerts').innerHTML = h || '<div class="alert ok"><b>Nada para conferir agora.</b><p>Sem vendas repetidas, cancelamentos ou falta de peças no período.</p></div>';
+    document.querySelectorAll('.wClose').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('/network/warranty-claims/' + b.dataset.id + '/close', 'POST'); await load(); } catch (e) { alert(e.message); b.disabled = false; } });
     document.querySelectorAll('.econfDone').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('/network/sales/' + b.dataset.id + '/econf-done', 'POST'); await load(); } catch (e) { alert(e.message); b.disabled = false; } });
   }
 

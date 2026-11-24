@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Comprovante e garantia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#17181d;--text:#2e2f35;--muted:#6b6b70;--bg:#f5f4f0;--line:#ebe9e3;--gold:#b8923a;--gold-soft:#fbf3e0;--green:#2f6b45;--green-bg:#e4f1e7;--red:#8f3f30;--red-bg:#fbe9e5}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,Arial,sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:24px 16px 40px}
+  .brand{text-align:center;margin:8px 0 20px}.brand b{display:block;font:600 30px/1 "Cormorant Garamond",Georgia,serif;letter-spacing:.2em;color:var(--ink)}.brand i{display:block;font-style:normal;font-size:10px;font-weight:600;letter-spacing:.32em;color:var(--gold);margin-top:6px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin-bottom:14px}
+  h1{margin:0 0 4px;font-size:20px;color:var(--ink)}.sub{margin:0;color:var(--muted);font-size:13px}
+  table{width:100%;border-collapse:collapse;margin-top:10px}td{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}td.n{text-align:right;white-space:nowrap}
+  .code{color:var(--muted);font-size:12px}
+  .total{display:flex;justify-content:space-between;margin-top:10px;font-weight:600;color:var(--ink)}
+  .w{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:10px;background:var(--green-bg);margin-top:8px}.w b{color:var(--green)}.w span{font-size:13px;color:var(--green)}
+  .w.off{background:#efede8}.w.off b,.w.off span{color:var(--muted)}
+  .units{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.units span{background:var(--gold-soft);color:#7a5a12;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600}
+  .btn{display:block;text-align:center;margin-top:12px;padding:12px;border-radius:10px;background:var(--ink);color:#fff;text-decoration:none;font-weight:600}
+  .bad{background:var(--red-bg);color:var(--red);border-radius:10px;padding:10px 12px;font-weight:600;margin-top:10px}
+  .foot{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b id="bName">AUDACE</b><i id="bSub">JOIAS</i></div>
+  <div id="box"><div class="card"><p class="sub">Carregando…</p></div></div>
+  <p class="foot">Apresente este comprovante em qualquer unidade para usar a garantia.</p>
+</div>
+<script>
+(async () => {
+  const $ = id => document.getElementById(id);
+  const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const br = d => d.split('-').reverse().join('/');
+  const code = location.pathname.split('/').pop();
+  const r = await fetch('/api/public/receipt/' + encodeURIComponent(code), { cache: 'no-store' });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { $('box').innerHTML = '<div class="card"><h1>Comprovante não encontrado</h1><p class="sub">Confira o link recebido pelo WhatsApp.</p></div>'; return; }
+  const [first, ...rest] = String(d.store || '').trim().split(/\s+/); $('bName').textContent = (first || '').toUpperCase(); $('bSub').textContent = rest.join(' ').toUpperCase();
+  document.title = 'Comprovante e garantia · ' + d.store;
+  const today = new Date().toISOString().slice(0, 10);
+  $('box').innerHTML = '<div class="card"><h1>' + (d.customer_first_name ? 'Olá, ' + safe(d.customer_first_name) + '!' : 'Comprovante da compra') + '</h1>'
+    + '<p class="sub">Compra nº ' + d.sale_number + ' · ' + safe(d.unit) + ' · ' + safe(d.sold_at) + '</p>'
+    + (d.canceled ? '<div class="bad">Esta compra foi cancelada.</div>' : '')
+    + '<table>' + d.items.map(i => '<tr><td>' + safe(i.name) + (i.code ? ' <span class="code">' + safe(i.code) + '</span>' : '') + (i.quantity > 1 ? ' × ' + i.quantity : '') + '</td><td class="n">' + brl(i.total_cents) + '</td></tr>').join('') + '</table>'
+    + '<div class="total"><span>Total pago</span><span>' + brl(d.total_cents) + '</span></div></div>'
+    + (d.canceled ? '' : '<div class="card"><h1>Sua garantia</h1>' + d.warranties.map(w => '<div class="w' + (w.until < today ? ' off' : '') + '"><b>' + safe(w.label) + '</b><span>' + (w.until < today ? 'encerrada em ' : 'válida até ') + br(w.until) + '</span></div>').join('') + '</div>')
+    + (d.units.length > 1 ? '<div class="card"><h1>Nossas ' + d.units.length + ' lojas</h1><p class="sub">A garantia e o cashback valem em todas.</p><div class="units">' + d.units.map(u => '<span>' + safe(u) + '</span>').join('') + '</div></div>' : '')
+    + (d.review_url ? '<a class="btn" href="' + safe(d.review_url) + '" target="_blank" rel="noopener">Avaliar no Google</a>' : '');
+})();
+</script>
+</body>
+</html>

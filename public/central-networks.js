@@ -5,10 +5,10 @@
   const fmtCnpj = c => c && c.length === 14 ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : '';
   let selected = null;
   // 'hidden' precisa vencer o display:flex das listas de unidades.
-  if (!document.getElementById('netHiddenCss')) document.head.insertAdjacentHTML('beforeend', '<style id="netHiddenCss">.pWhere [hidden]{display:none!important}</style>');
+  if (!document.getElementById('netHiddenCss')) document.head.insertAdjacentHTML('beforeend', '<style id="netHiddenCss">#content [hidden]{display:none!important}</style>');
 
   // ---- Pessoas da rede: donos, supervisores e o pessoal de cada unidade ----
-  const FUNCS = { dono: 'Dono (rede toda)', supervisor: 'Supervisor', gerente: 'Gerente da loja', responsavel: 'Responsável da unidade', consultora: 'Consultora' };
+  const FUNCS = { dono: 'Dono (rede toda)', supervisor: 'Supervisor', vendedora: 'Vendedora (PIN, sem login)', gerente: 'Gerente da loja', responsavel: 'Responsável com login', consultora: 'Operador novato com login' };
   const unitName = u => u.unit_label || u.name;
   const funcSelect = cur => '<select class="pFunc">' + Object.entries(FUNCS).map(([k, v]) => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + v + '</option>').join('') + '</select>';
   // Onde a pessoa atua: dono = toda a rede; supervisor = várias unidades; demais = uma unidade.
@@ -18,16 +18,19 @@
     + '<div class="pUnits"' + (p.function === 'supervisor' ? '' : ' hidden') + ' style="display:flex;flex-wrap:wrap;gap:4px 10px">' + units.map(u => '<label style="display:inline-flex;gap:4px;align-items:center;font-weight:500"><input type="checkbox" value="' + safe(u.id) + '"' + ((p.unit_ids || []).includes(u.id) ? ' checked' : '') + '>' + safe(unitName(u)) + '</label>').join('') + '</div></div>';
   const personRow = (p, units) => '<tr data-id="' + safe(p.id || '') + '"' + (p.id ? '' : ' class="pNew"') + '>'
     + '<td><input class="pName" maxlength="120" value="' + safe(p.name || '') + '" placeholder="Nome" style="width:170px"></td>'
-    + '<td><input class="pEmail" type="email" maxlength="200" value="' + safe(p.email || '') + '" placeholder="email@exemplo.com" style="width:230px"></td>'
-    + '<td>' + funcSelect(p.function || 'consultora') + '</td><td>' + wherePicker({ function: 'consultora', ...p }, units) + '</td>'
+    + '<td><input class="pEmail" type="email" maxlength="200" value="' + safe(p.email || '') + '" placeholder="email@exemplo.com" style="width:210px"' + ((p.function || 'vendedora') === 'vendedora' ? ' hidden' : '') + '><span class="pNoEmail ct-muted"' + ((p.function || 'vendedora') === 'vendedora' ? '' : ' hidden') + '>sem login</span></td>'
+    + '<td><input class="pPin" inputmode="numeric" maxlength="4" pattern="\\d{4}" placeholder="' + (p.has_pin ? '•••• (trocar)' : (p.id ? 'sem PIN' : 'gera sozinho')) + '" style="width:110px"></td>'
+    + '<td>' + funcSelect(p.function || 'vendedora') + '</td><td>' + wherePicker({ function: 'vendedora', ...p }, units) + '</td>'
     + (p.id ? '<td><label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" class="pActive"' + (p.active ? ' checked' : '') + '>Ativo</label></td>'
-      + '<td style="white-space:nowrap"><button type="button" class="ct-btn ghost pSave" style="height:34px">Salvar</button> <button type="button" class="ct-btn ghost pLink" style="height:34px"' + (p.active ? '' : ' disabled') + '>Enviar link de senha</button></td>'
+      + '<td style="white-space:nowrap"><button type="button" class="ct-btn ghost pSave" style="height:34px">Salvar</button>' + (p.function === 'vendedora' ? '' : ' <button type="button" class="ct-btn ghost pLink" style="height:34px"' + (p.active ? '' : ' disabled') + '>Enviar link de senha</button>') + '</td>'
       : '<td></td><td><button type="button" class="ct-btn pAdd" style="height:34px">Adicionar</button></td>') + '</tr>';
-  const peopleSection = (people, units) => '<section><h2>Pessoas da rede</h2><p class="ct-muted">Donos veem a rede toda. Supervisores veem só as unidades marcadas. Consultoras usam o caixa da unidade sem cancelar venda nem dar desconto. "Enviar link de senha" manda por e-mail um link para a pessoa criar a própria senha.</p>'
-    + '<div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Função</th><th>Onde atua</th><th>Situação</th><th></th></tr></thead><tbody>'
+  const peopleSection = (people, units) => '<section><h2>Pessoas da rede</h2><p class="ct-muted">Vendedoras não têm login: o computador do quiosque fica aberto com a senha da unidade e cada venda é confirmada com o PIN de 4 dígitos de quem vendeu. Donos veem a rede toda; supervisores, só as unidades marcadas. O PIN de dono, supervisor ou gerente autoriza cancelamento no quiosque. "Enviar link de senha" manda por e-mail um link para a pessoa criar a própria senha.</p>'
+    + '<div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Nome</th><th>E-mail</th><th>PIN</th><th>Função</th><th>Onde atua</th><th>Situação</th><th></th></tr></thead><tbody>'
     + people.map(p => personRow(p, units)).join('') + personRow({}, units) + '</tbody></table></div></section>';
   const readPerson = row => {
-    const func = row.querySelector('.pFunc').value, body = { name: row.querySelector('.pName').value.trim(), email: row.querySelector('.pEmail').value.trim(), function: func };
+    const func = row.querySelector('.pFunc').value, body = { name: row.querySelector('.pName').value.trim(), function: func };
+    const email = row.querySelector('.pEmail').value.trim(); if (func !== 'vendedora' && email) body.email = email;
+    const pin = row.querySelector('.pPin').value.trim(); if (pin) body.pin = pin;
     if (func === 'supervisor') body.unit_ids = [...row.querySelectorAll('.pUnits input:checked')].map(i => i.value);
     else if (func !== 'dono') body.unit_id = row.querySelector('.pUnit').value || null;
     const act = row.querySelector('.pActive'); if (act) body.active = act.checked;
@@ -37,16 +40,18 @@
     document.querySelectorAll('.pFunc').forEach(sel => sel.onchange = () => {
       const w = sel.closest('tr').querySelector('.pWhere'), f = sel.value;
       w.querySelector('.pAll').hidden = f !== 'dono'; w.querySelector('.pUnit').hidden = ['dono', 'supervisor'].includes(f); w.querySelector('.pUnits').hidden = f !== 'supervisor';
+      const tr = sel.closest('tr'); tr.querySelector('.pEmail').hidden = f === 'vendedora'; tr.querySelector('.pNoEmail').hidden = f !== 'vendedora';
     });
     document.querySelectorAll('.pSave').forEach(b => b.onclick = act(async () => {
-      const row = b.closest('tr'); await api('/master/network-people/' + row.dataset.id, 'PATCH', readPerson(row)); return 'Pessoa salva.';
+      const row = b.closest('tr'); const r = await api('/master/network-people/' + row.dataset.id, 'PATCH', readPerson(row));
+      return 'Pessoa salva.' + (r.temporary_pin ? ' PIN (aparece só agora): ' + r.temporary_pin + '.' : '');
     }));
     document.querySelectorAll('.pLink').forEach(b => b.onclick = act(async () => {
       const r = await api('/master/users/' + b.closest('tr').dataset.id + '/password-link', 'POST'); return 'Link de nova senha enviado para ' + r.email + '.';
     }));
     document.querySelectorAll('.pAdd').forEach(b => b.onclick = act(async () => {
       const r = await api('/master/networks/' + net.id + '/people', 'POST', readPerson(b.closest('tr')));
-      return 'Pessoa criada. Senha temporária (aparece só agora): ' + r.temporary_password + ' · ou use "Enviar link de senha".';
+      return 'Pessoa criada.' + (r.temporary_pin ? ' PIN (aparece só agora): ' + r.temporary_pin + '.' : '') + (r.temporary_password ? ' Senha temporária (aparece só agora): ' + r.temporary_password + ' · ou use "Enviar link de senha".' : '');
     }));
   }
 
@@ -80,7 +85,7 @@
         + '<td><input class="unLabel" maxlength="60" value="' + safe(u.unit_label || '') + '" placeholder="Ex.: Maracanaú" style="width:150px"></td>'
         + '<td><input class="unCnpj" maxlength="18" value="' + safe(fmtCnpj(u.cnpj)) + '" placeholder="00.000.000/0000-00" style="width:170px"></td>'
         + '<td>' + safe(u.status) + (u.sales_enabled ? '' : ' <span class="ct-muted">(caixa desligado)</span>') + '</td>'
-        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
+        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
       + '</tbody></table></div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:12px"><label>Ligar loja à rede<select id="unAdd">' + (free.map(s => '<option value="' + safe(s.id) + '">' + safe(s.name) + '</option>').join('') || '<option value="">Nenhuma loja livre</option>') + '</select></label>'
       + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button></div>'
@@ -97,6 +102,12 @@
       const row = b.closest('tr');
       await api('/master/tenants/' + row.dataset.id + '/network', 'PATCH', { unit_label: row.querySelector('.unLabel').value.trim() || null, cnpj: row.querySelector('.unCnpj').value.trim() || null });
       return 'Unidade salva.';
+    }));
+    // Senha do computador do quiosque (abre o caixa da unidade). Mostrada uma vez; a senha antiga deixa de valer.
+    document.querySelectorAll('.unKiosk').forEach(b => b.onclick = act(async () => {
+      if (!confirm('Gerar uma nova senha para o quiosque desta unidade? O computador da loja vai precisar entrar de novo.')) throw Error('');
+      const r = await api('/master/tenants/' + b.closest('tr').dataset.id + '/kiosk-password', 'POST', {});
+      return 'Senha do quiosque ' + r.unit + ' (aparece só agora): ' + r.password;
     }));
     document.querySelectorAll('.unRemove').forEach(b => b.onclick = act(async () => {
       if (!confirm('Tirar esta loja da rede? Ela continua funcionando sozinha.')) throw Error('');

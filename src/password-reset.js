@@ -42,7 +42,7 @@ export function registerPasswordReset(app, { q, auth, roles, route, bad, valid, 
 
   const userByEmail = email => q(`SELECT u.id, u.name, u.email, n.hostname network_hostname, coalesce(n.name, t.name) brand
     FROM users u LEFT JOIN store_networks n ON n.id = coalesce(u.network_id, (SELECT network_id FROM tenants WHERE id = u.tenant_id))
-    LEFT JOIN tenants t ON t.id = u.tenant_id WHERE lower(u.email) = lower($1) AND u.active`, [email]);
+    LEFT JOIN tenants t ON t.id = u.tenant_id WHERE lower(u.email) = lower($1) AND u.active AND u.login_kind = 'email'`, [email]);
 
   app.post('/api/auth/forgot', rateLimit({ windowMs: 900000, limit: 6, standardHeaders: 'draft-7', legacyHeaders: false }), route(async (req, res) => {
     const v = valid(z.object({ email: z.string().trim().email().max(200) }), req, res); if (!v) return;
@@ -73,7 +73,7 @@ export function registerPasswordReset(app, { q, auth, roles, route, bad, valid, 
     if (!emailConfigured()) return bad(res, 503, 'Envio de e-mail não configurado no servidor');
     const r = await q(`SELECT u.id, u.name, u.email, u.role, n.hostname network_hostname, coalesce(n.name, t.name) brand
       FROM users u LEFT JOIN store_networks n ON n.id = coalesce(u.network_id, (SELECT network_id FROM tenants WHERE id = u.tenant_id))
-      LEFT JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.active AND u.role <> 'master'`, [req.params.id]);
+      LEFT JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.active AND u.role <> 'master' AND u.login_kind = 'email'`, [req.params.id]);
     if (!r.rowCount) return bad(res, 404, 'Login não encontrado ou desativado');
     try { await issue(r.rows[0], req, req.user.id); } catch (e) { return bad(res, 502, 'O e-mail não foi enviado: ' + e.message.slice(0, 120)); }
     await audit(req, 'send_password_link', 'user', req.params.id, null);

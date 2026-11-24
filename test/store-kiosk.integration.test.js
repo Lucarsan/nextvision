@@ -1,0 +1,110 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createStoreFixture } from './helpers/store-fixture.js';
+
+const skip = !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL';
+const hostRequest = (base, path, host, { method = 'GET', body } = {}) => new Promise((resolve, reject) => {
+  const u = new URL(base + path);
+  const r = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method, headers: { Host: host, ...(body ? { 'Content-Type': 'application/json' } : {}) } }, res => {
+    let b = ''; res.on('data', c => { b += c; }); res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(b || '{}') }));
+  });
+  r.on('error', reject); if (body) r.write(JSON.stringify(body)); r.end();
+});
+
+test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono entra direto no painel', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { api, request, tenant, masterToken, base } = f;
+    const net = await api('/master/networks', { method: 'POST', token: masterToken, body: { name: 'Audace Joias', slug: 'audace', hostname: 'audace.example.test' } }, 201);
+    await api('/master/tenants/' + tenant, { method: 'PATCH', token: masterToken, body: { sales_enabled: true } });
+    const solares = await api('/master/tenants', { method: 'POST', token: masterToken, body: { name: 'Audace Solares', slug: 'audace-solares' } }, 201);
+    await api(`/master/tenants/${tenant}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Maracanaú' } });
+    await api(`/master/tenants/${solares.id}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Solares' } });
+    const people = `/master/networks/${net.id}/people`;
+
+    // Senha do quiosque: só para loja de rede; mostrada uma vez.
+    assert.equal((await request(`/master/tenants/${f.foreignTenant}/kiosk-password`, { method: 'POST', token: masterToken, body: {} })).status, 400);
+    const kp = await api(`/master/tenants/${tenant}/kiosk-password`, { method: 'POST', token: masterToken, body: {} });
+    assert.equal(kp.unit, 'Maracanaú'); assert.ok(kp.password.length >= 8);
+    await api(`/master/tenants/${solares.id}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'senha-solares' } });
+
+    // Vendedoras sem e-mail, com PIN (gerado e mostrado uma vez, ou definido).
+    const ana = await api(people, { method: 'POST', token: masterToken, body: { name: 'Ana Paula', function: 'vendedora', unit_id: tenant, pin: '1234' } }, 201);
+    assert.equal(ana.email, null); assert.equal(ana.function, 'vendedora'); assert.equal(ana.temporary_pin, undefined); assert.equal(ana.has_pin, true);
+    const julia = await api(people, { method: 'POST', token: masterToken, body: { name: 'Júlia Lima', function: 'vendedora', unit_id: tenant } }, 201);
+    assert.match(julia.temporary_pin, /^\d{4}$/);
+    assert.equal((await request(people, { method: 'POST', token: masterToken, body: { name: 'Sem Email', function: 'supervisor', unit_ids: [] } })).status, 400);
+    const dono = await api(people, { method: 'POST', token: masterToken, body: { name: 'Gabriel Mota', email: 'gabriel@audace.test', function: 'dono', password: 'senha-do-gabriel-1', pin: '9999' } }, 201);
+    await api(people, { method: 'POST', token: masterToken, body: { name: 'Sup Solares', email: 'sup@audace.test', function: 'supervisor', unit_ids: [solares.id], password: 'senha-do-supervisor', pin: '5555' } }, 201);
+    // Vendedora nunca entra pelo e-mail, e a lista de pessoas não mostra o acesso do quiosque.
+    assert.ok(!(await api(people, { token: masterToken })).some(p => /quiosque/i.test(p.name)));
+
+    // Tela "Entrar na unidade": unidades e vendedoras pelo endereço da rede; fora dele, nada.
+    const units = await hostRequest(base, '/api/public/units', 'audace.example.test');
+    assert.deepEqual(units.data.units.map(u => u.label), ['Maracanaú', 'Solares']);
+    assert.deepEqual(units.data.units[0].sellers, ['Ana', 'Júlia']);
+    assert.deepEqual((await hostRequest(base, '/api/public/units', 'app.ficoupronto.com')).data, { network: false, units: [] });
+
+    // Senha errada, senha de outra unidade, unidade fora da rede do endereço: recusado.
+    const unit = body => hostRequest(base, '/api/auth/unit', 'audace.example.test', { method: 'POST', body });
+    assert.equal((await unit({ unit_id: tenant, password: 'errada' })).status, 401);
+    assert.equal((await unit({ unit_id: tenant, password: 'senha-solares' })).status, 401);
+    assert.equal((await unit({ unit_id: f.foreignTenant, password: kp.password })).status, 401);
+    // Senha do quiosque → caixa.
+    const k = await unit({ unit_id: tenant, password: kp.password });
+    assert.equal(k.status, 200); assert.equal(k.data.panel, '/caixa'); assert.equal(k.data.user.kiosk, true);
+    const kt = k.data.token;
+    // Senha do dono em qualquer unidade → painel da rede.
+    const g = await unit({ unit_id: solares.id, password: 'senha-do-gabriel-1' });
+    assert.equal(g.data.panel, '/rede.html'); assert.equal(g.data.user.id, dono.id);
+    assert.equal((await api('/network/me', { token: g.data.token })).network.name, 'Audace Joias');
+    // Supervisor só pelas unidades que acompanha.
+    assert.equal((await unit({ unit_id: solares.id, password: 'senha-do-supervisor' })).data.panel, '/rede.html');
+    assert.equal((await unit({ unit_id: tenant, password: 'senha-do-supervisor' })).status, 401);
+    // Login por e-mail continua para dono; vendedora e quiosque não entram por e-mail.
+    assert.equal((await request('/auth/login', { method: 'POST', token: null, body: { email: 'gabriel@audace.test', password: 'senha-do-gabriel-1' } })).status, 200);
+    assert.equal((await request('/auth/login', { method: 'POST', token: null, body: { email: `quiosque+${tenant}@kiosk.invalid`, password: kp.password } })).status, 401);
+
+    // Caixa do quiosque: vendedoras da unidade e conferência do PIN.
+    const sellers = await api('/store/kiosk/sellers', { token: kt });
+    assert.deepEqual(sellers.sellers.map(s => s.name), ['Ana Paula', 'Júlia Lima']); assert.equal(sellers.kiosk, true); assert.equal(sellers.unit.label, 'Maracanaú');
+    assert.equal((await request('/store/kiosk/check-pin', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '0000' } })).status, 401);
+    assert.equal((await api('/store/kiosk/check-pin', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234' } })).name, 'Ana Paula');
+
+    // Venda no quiosque: sem vendedora/PIN ou com PIN errado não grava.
+    await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0 } }, 201);
+    const prod = (await f.db.query("INSERT INTO products(tenant_id, name, barcode, price_cents, stock_qty) VALUES($1, 'Corrente Aço Elo P', '003622', 4900, 5) RETURNING id", [tenant])).rows[0].id;
+    const item = { items: [{ product_id: prod, quantity: 1 }] };
+    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit' } })).status, 400);
+    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', seller_id: ana.id, seller_pin: '1111' } })).status, 401);
+    const sale = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(sale.sale.seller_id, ana.id);
+    // Desconto: até 10% no dinheiro e 5% no Pix; nada no cartão.
+    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', discount_cents: 100, seller_id: ana.id, seller_pin: '1234' } })).status, 403);
+    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'pix', discount_cents: 300, seller_id: ana.id, seller_pin: '1234' } })).status, 403);
+    const cash = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'cash', discount_cents: 490, seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(cash.sale.total_cents, 4410);
+    // O PIN não fica guardado em venda "a receber".
+    // Cancelar no quiosque: PIN de quem vendeu + PIN de supervisor/dono.
+    const cancel = body => request(`/store/sales/${sale.sale.id}/cancel`, { method: 'POST', token: kt, body: { reason: 'Cobrança repetida', ...body } });
+    assert.equal((await cancel({})).status, 401);
+    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '1234' })).status, 401);
+    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '5555' })).status, 401, 'supervisor de outra unidade não autoriza');
+    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '9999' })).status, 200);
+    const day = await api('/store/cash', { token: kt });
+    assert.match(JSON.stringify(day), /autorizado por Gabriel Mota/);
+
+    // Meu dia: só com o PIN; sem custo nem comissão das colegas.
+    assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '0000' } })).status, 401);
+    const md = await api('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234' } });
+    assert.equal(md.today.count, 1); assert.equal(md.today.total_cents, 4410); assert.equal(md.store_today.count, 1);
+    assert.equal(JSON.stringify(md).includes('cost'), false);
+
+    // Trocar a vendedora para supervisora pede e-mail; trocar a senha do quiosque derruba a sessão antiga.
+    assert.equal((await request(`/master/network-people/${julia.id}`, { method: 'PATCH', token: masterToken, body: { function: 'supervisor', unit_ids: [tenant] } })).status, 400);
+    await new Promise(r => setTimeout(r, 1100));
+    await api(`/master/tenants/${tenant}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'nova-senha-quiosque' } });
+    assert.equal((await request('/store/kiosk/sellers', { token: kt })).status, 401);
+  } finally { await f.cleanup(); }
+});

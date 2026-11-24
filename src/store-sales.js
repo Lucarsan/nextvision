@@ -14,6 +14,8 @@ import { loyaltyBlock, loyaltyUnit } from './loyalty-rules.js';
 import { registerServiceOrders } from './service-orders.js';
 import { matchParts, partKindFor, fold } from './part-match.js';
 import { registerInfinitePay } from './infinitepay.js';
+import bcrypt from 'bcryptjs';
+import { pinOk, authorizerByPin } from './kiosk.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -464,7 +466,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         ($2='' OR barcode=$2 OR fp_fold(name || ' ' || coalesce(device_model,'') || ' ' || coalesce(location,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
       ORDER BY (barcode=$2) DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,
         CASE WHEN $3='part' THEN coalesce(location,'~') END,CASE WHEN $3='part' THEN fp_fold(coalesce(device_model,'')) END,name,device_model,updated_at DESC LIMIT 500`, [tid(req), term, kind, words, deleted]);
-    res.set('Cache-Control', 'no-store'); res.json(r.rows);
+    res.set('Cache-Control', 'no-store'); res.json(req.user.kiosk ? r.rows.map(({ cost_cents, ...x }) => x) : r.rows);
   }));
   // Produto excluído volta para a lista com o cadastro antigo (nome, código, preços); o estoque recomeça do zero.
   app.post('/api/store/products/:id/restore', ...guard, route(async (req, res) => {
@@ -484,7 +486,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!/^[!-~]{3,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
     const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2 AND kind='product'`, [tid(req), code]);
     if (!r.rowCount) return bad(res, 404, 'Produto não cadastrado');
-    res.set('Cache-Control', 'no-store'); res.json(r.rows[0]);
+    const { cost_cents, ...noCost } = r.rows[0];
+    res.set('Cache-Control', 'no-store'); res.json(req.user.kiosk ? noCost : r.rows[0]);
   }));
   app.post('/api/store/products', ...guard, route(async (req, res) => {
     const v = valid(productBody, req, res); if (!v) return;
@@ -1010,6 +1013,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
+      // Quiosque (rede): a vendedora confirma a venda com o PIN de 4 dígitos.
+      seller_pin: z.string().regex(/^\d{4}$/).optional(),
       payment_method: METHOD.optional(),
       // Pagamento dividido (2 a 5 formas diferentes); a soma tem que dar o total cobrado (já com desconto e cashback).
       payments: z.array(z.object({ method: METHOD, amount_cents: z.number().int().min(1).max(100000000) }).strict()).min(2).max(5).optional(),
@@ -1076,7 +1081,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         total = v.items.reduce((a, it) => a + (it.gift ? 0 : (it.unit_price_cents ?? price.get(it.product_id) ?? 0) * (it.quantity || 1)), 0) - (v.discount_cents || 0);
       }
       if (total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, 'Total da venda inválido (confira preços e quantidades)'); }
-      const { new_customer, live_order, ...payload } = v; payload.customer_id = customerId; payload.seller_id = sellerId;
+      const { new_customer, live_order, seller_pin, ...payload } = v; payload.customer_id = customerId; payload.seller_id = sellerId;
       const n = (await c.query('SELECT coalesce(max(number),0)+1 n FROM pending_sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const row = (await c.query(`INSERT INTO pending_sales(tenant_id,number,customer_id,order_id,seller_id,payload,total_cents,description,created_by)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [tid(req), n, customerId, v.order_id || null, sellerId, JSON.stringify(payload), total, v.description || '', req.user.id])).rows[0];
@@ -1095,7 +1100,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // Receber: forma de pagamento (ou dividido), cashback e vendedor (se mudar). Vira venda no caixa aberto.
   app.post('/api/store/sales/pending/:id/pay', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
-    const pay = valid(z.object({ payment_method: METHOD.optional(), payments: saleSchema.shape.payments, cashback_use_cents: cents.optional(), seller_id: uuid.optional() }).strict(), req, res); if (!pay) return;
+    const pay = valid(z.object({ payment_method: METHOD.optional(), payments: saleSchema.shape.payments, cashback_use_cents: cents.optional(), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!pay) return;
     const p = (await q('SELECT payload FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL', [req.params.id, tid(req)])).rows[0];
     if (!p) return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.');
     const merged = saleSchema.safeParse({ ...p.payload, ...pay });
@@ -1273,6 +1278,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       if (pendingId && !(await c.query('SELECT 1 FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [pendingId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.'); }
       const sellerId = v.seller_id || req.user.id;
       if (!(await c.query("SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2 AND active AND role IN ('owner','operator')", [sellerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Vendedor inválido. Atualize a página.'); }
+      // Unidade de rede (quiosque): a venda só grava com a vendedora escolhida e o PIN dela.
+      const pinSales = req.user.kiosk || (await c.query('SELECT pin_sales FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.pin_sales;
+      if (pinSales) {
+        if (!v.seller_id) { await c.query('ROLLBACK'); return bad(res, 400, 'Toque no nome de quem está vendendo e digite o PIN'); }
+        if (!(await pinOk(c, bcrypt, v.seller_id, v.seller_pin))) { await c.query('ROLLBACK'); return bad(res, 401, 'PIN da vendedora incorreto'); }
+      }
       let customerId = v.customer_id || null, created = false;
       if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
       if (v.new_customer) {
@@ -1346,6 +1357,11 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         items = [...merged.values()].map((x, position) => ({ ...x, total_cents: x.unit_price_cents * x.quantity, position }));
         const gross = items.reduce((a, x) => a + x.total_cents, 0), disc = v.discount_cents || 0;
         total = gross - disc;
+        // Quiosque: desconto só dentro da regra da rede (até 10% no dinheiro e 5% no Pix).
+        if (req.user.kiosk && disc) {
+          const max = v.payments ? 0 : v.payment_method === 'cash' ? Math.round(gross * 0.10) : v.payment_method === 'pix' ? Math.round(gross * 0.05) : 0;
+          if (disc > max) { await c.query('ROLLBACK'); return bad(res, 403, 'Desconto acima da regra: até 10% no dinheiro e 5% no Pix'); }
+        }
         if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, disc ? 'O desconto não pode ser igual ou maior que o valor dos itens' : 'Total da venda inválido (confira preços e quantidades)'); }
         if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / gross)); x.total_cents -= cut; left -= cut; }); }
         // Modelo (película/capinha): acha ou cria, com o nome já salvo (fica para sugerir nas próximas vendas).
@@ -1473,14 +1489,22 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   app.post('/api/store/sales/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
-    const v = valid(z.object({ reason: z.string().trim().min(3).max(200) }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ reason: z.string().trim().min(3).max(200), seller_pin: z.string().regex(/^\d{4}$/).optional(), supervisor_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
     const c = await db.connect();
     try {
       await c.query('BEGIN');
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]); // mesma fila das vendas (saldo de cashback)
-      const s = await c.query(`SELECT x.id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open' FOR UPDATE OF x`, [req.params.id, tid(req)]);
+      const s = await c.query(`SELECT x.id,x.seller_id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open' FOR UPDATE OF x`, [req.params.id, tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto'); }
-      await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [req.user.id, v.reason, req.params.id]);
+      // Quiosque: cancelar pede o PIN de quem vendeu e o PIN de um supervisor, dono ou gerente.
+      let reason = v.reason;
+      if (req.user.kiosk) {
+        if (!(await pinOk(c, bcrypt, s.rows[0].seller_id, v.seller_pin))) { await c.query('ROLLBACK'); return bad(res, 401, 'PIN de quem vendeu incorreto'); }
+        const by = await authorizerByPin(c, bcrypt, tid(req), v.supervisor_pin);
+        if (!by) { await c.query('ROLLBACK'); return bad(res, 401, 'PIN do supervisor incorreto'); }
+        reason = (v.reason + ' · autorizado por ' + by.name).slice(0, 300);
+      }
+      await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [req.user.id, reason, req.params.id]);
       // Devolve ao estoque o que a venda baixou.
       // Peça ligada depois ao serviço (só reposição, sem estoque): sai da reposição.
       await c.query(`UPDATE products p SET restock_pending=GREATEST(0,p.restock_pending-i.qty),updated_at=now()

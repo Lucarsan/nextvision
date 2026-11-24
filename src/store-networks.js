@@ -105,17 +105,22 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
   // ---- Pessoas da rede (central) ----
   // Uma lista só com donos, supervisores e o pessoal de cada unidade. "Função" vira papel no sistema:
   //   dono → rede, vê tudo · supervisor → rede, só as unidades marcadas
-  //   gerente → dono da loja na unidade · responsavel → operador livre · consultora → operador novato (não cancela nem dá desconto)
+  //   vendedora → sem login: confirma a venda no caixa do quiosque com o PIN de 4 dígitos
+  //   gerente → dono da loja na unidade · responsavel → operador livre com e-mail · consultora → operador novato com e-mail
+  // Dono, supervisor e gerente podem ter PIN para autorizar cancelamento no quiosque.
   const FUNCS = {
     dono: { role: 'network', access: 'owner' }, supervisor: { role: 'network', access: 'supervisor' },
+    vendedora: { role: 'operator', level: 'full', pin: true },
     gerente: { role: 'owner', level: 'full' }, responsavel: { role: 'operator', level: 'full' }, consultora: { role: 'operator', level: 'basic' }
   };
-  const funcOf = u => u.role === 'network' ? (u.network_access === 'supervisor' ? 'supervisor' : 'dono') : u.role === 'owner' ? 'gerente' : u.access_level === 'basic' ? 'consultora' : 'responsavel';
+  const funcOf = u => u.login_kind === 'pin' ? 'vendedora' : u.role === 'network' ? (u.network_access === 'supervisor' ? 'supervisor' : 'dono') : u.role === 'owner' ? 'gerente' : u.access_level === 'basic' ? 'consultora' : 'responsavel';
   const tempPassword = () => 'Fp-' + crypto.randomBytes(9).toString('base64url');
+  const tempPin = () => String(crypto.randomInt(0, 10000)).padStart(4, '0');
+  const pinEmail = () => 'vendedora+' + crypto.randomUUID() + '@pin.invalid';
   const personSchema = z.object({
-    name: z.string().trim().min(2).max(120), email: z.string().trim().toLowerCase().email().max(200),
+    name: z.string().trim().min(2).max(120), email: z.string().trim().toLowerCase().email().max(200).optional(),
     function: z.enum(Object.keys(FUNCS)), unit_id: uuid.nullable().optional(), unit_ids: z.array(uuid).max(50).optional(),
-    active: z.boolean().optional(), password: z.string().min(12).max(200).optional()
+    active: z.boolean().optional(), password: z.string().min(12).max(200).optional(), pin: z.string().regex(/^\d{4}$/).optional()
   }).strict();
   async function networkUnits(networkId) { return new Set((await q('SELECT id FROM tenants WHERE network_id = $1', [networkId])).rows.map(r => r.id)); }
   // Converte função + unidade(s) nas colunas do usuário; null = combinação inválida.
@@ -124,19 +129,20 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     if (f.role === 'network') {
       const ids = f.access === 'supervisor' ? [...new Set(v.unit_ids || [])] : [];
       if (ids.some(id => !units.has(id))) return null;
-      return { role: 'network', tenant_id: null, network_id: networkId, network_access: f.access, network_unit_ids: ids, access_level: 'full' };
+      return { role: 'network', tenant_id: null, network_id: networkId, network_access: f.access, network_unit_ids: ids, access_level: 'full', login_kind: 'email' };
     }
     if (!v.unit_id || !units.has(v.unit_id)) return null;
-    return { role: f.role, tenant_id: v.unit_id, network_id: null, network_access: 'owner', network_unit_ids: [], access_level: f.level };
+    return { role: f.role, tenant_id: v.unit_id, network_id: null, network_access: 'owner', network_unit_ids: [], access_level: f.level, login_kind: f.pin ? 'pin' : 'email' };
   }
-  const personOut = u => ({ id: u.id, name: u.name, email: u.email, active: u.active, function: funcOf(u), unit_id: u.tenant_id || null, unit_ids: u.role === 'network' ? (u.network_unit_ids || []) : [], created_at: u.created_at });
+  const personOut = u => ({ id: u.id, name: u.name, email: u.login_kind === 'pin' ? null : u.email, active: u.active, function: funcOf(u), unit_id: u.tenant_id || null,
+    unit_ids: u.role === 'network' ? (u.network_unit_ids || []) : [], has_pin: !!u.pin_hash, created_at: u.created_at });
 
   app.get('/api/master/networks/:id/people', ...master, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
-    const r = await q(`SELECT u.id, u.name, u.email, u.active, u.role, u.tenant_id, u.network_access, u.network_unit_ids, u.access_level, u.created_at
+    const r = await q(`SELECT u.id, u.name, u.email, u.active, u.role, u.tenant_id, u.network_access, u.network_unit_ids, u.access_level, u.login_kind, u.pin_hash, u.created_at
       FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
-      WHERE u.network_id = $1 OR (t.network_id = $1 AND u.role IN ('owner', 'operator'))
-      ORDER BY CASE WHEN u.role = 'network' THEN 0 ELSE 1 END, lower(coalesce(t.unit_label, t.name, '')), lower(u.name)`, [req.params.id]);
+      WHERE (u.network_id = $1 OR (t.network_id = $1 AND u.role IN ('owner', 'operator'))) AND u.login_kind <> 'kiosk'
+      ORDER BY CASE WHEN u.role = 'network' THEN 0 ELSE 1 END, lower(coalesce(t.unit_label, t.name, '')), (u.login_kind = 'pin') DESC, lower(u.name)`, [req.params.id]);
     res.set('Cache-Control', 'no-store').json(r.rows.map(personOut));
   }));
 
@@ -145,12 +151,16 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     const v = valid(personSchema, req, res); if (!v) return;
     if (!(await q('SELECT 1 FROM store_networks WHERE id = $1', [req.params.id])).rowCount) return bad(res, 404, 'Rede não encontrada');
     const p = placement(v, req.params.id, await networkUnits(req.params.id)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor) desta rede');
-    const password = v.password || tempPassword();
+    const isPin = p.login_kind === 'pin';
+    if (!isPin && !v.email) return bad(res, 400, 'Informe o e-mail (só a vendedora entra sem e-mail, com PIN)');
+    const password = isPin ? null : (v.password || tempPassword());
+    const pin = v.pin || (isPin ? tempPin() : null);
     try {
-      const r = await q(`INSERT INTO users(name, email, password_hash, role, tenant_id, network_id, network_access, network_unit_ids, access_level, active)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [v.name, v.email, await bcrypt.hash(password, 12), p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level, v.active ?? true]);
+      const r = await q(`INSERT INTO users(name, email, password_hash, role, tenant_id, network_id, network_access, network_unit_ids, access_level, active, login_kind, pin_hash)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [v.name, isPin ? pinEmail() : v.email, await bcrypt.hash(password || crypto.randomBytes(24).toString('hex'), 12),
+        p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level, v.active ?? true, p.login_kind, pin ? await bcrypt.hash(pin, 10) : null]);
       await audit(req, 'create', 'user', r.rows[0].id, p.tenant_id);
-      res.status(201).json({ ...personOut(r.rows[0]), ...(v.password ? {} : { temporary_password: password }) });
+      res.status(201).json({ ...personOut(r.rows[0]), ...(!isPin && !v.password ? { temporary_password: password } : {}), ...(pin && !v.pin ? { temporary_pin: pin } : {}) });
     } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
   }));
 
@@ -158,16 +168,23 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
     const v = valid(personSchema.omit({ password: true }).partial(), req, res); if (!v) return;
     const cur = (await q(`SELECT u.*, coalesce(u.network_id, t.network_id) net FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
-      WHERE u.id = $1 AND u.role IN ('network', 'owner', 'operator')`, [req.params.id])).rows[0];
+      WHERE u.id = $1 AND u.role IN ('network', 'owner', 'operator') AND u.login_kind <> 'kiosk'`, [req.params.id])).rows[0];
     if (!cur?.net) return bad(res, 404, 'Pessoa não encontrada nesta rede');
     const merged = { function: v.function ?? funcOf(cur), unit_id: v.unit_id !== undefined ? v.unit_id : cur.tenant_id, unit_ids: v.unit_ids ?? cur.network_unit_ids };
     const p = placement(merged, cur.net, await networkUnits(cur.net)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor) desta rede');
+    const isPin = p.login_kind === 'pin';
+    // Deixar de ser vendedora exige e-mail real; virar vendedora troca o e-mail por um interno.
+    let email = v.email ?? null;
+    if (isPin) email = cur.login_kind === 'pin' ? cur.email : pinEmail();
+    else if (cur.login_kind === 'pin' && !v.email) return bad(res, 400, 'Informe o e-mail para dar login a esta pessoa');
+    const newPin = v.pin || (isPin && !cur.pin_hash ? tempPin() : null);
     try {
       const r = await q(`UPDATE users SET name = coalesce($2, name), email = coalesce($3, email), active = coalesce($4, active),
-        role = $5, tenant_id = $6, network_id = $7, network_access = $8, network_unit_ids = $9, access_level = $10 WHERE id = $1 RETURNING *`,
-        [cur.id, v.name ?? null, v.email ?? null, v.active ?? null, p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level]);
+        role = $5, tenant_id = $6, network_id = $7, network_access = $8, network_unit_ids = $9, access_level = $10, login_kind = $11,
+        pin_hash = coalesce($12, pin_hash), password_changed_at = CASE WHEN login_kind <> $11 THEN now() ELSE password_changed_at END WHERE id = $1 RETURNING *`,
+        [cur.id, v.name ?? null, email, v.active ?? null, p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level, p.login_kind, newPin ? await bcrypt.hash(newPin, 10) : null]);
       await audit(req, 'update', 'user', cur.id, p.tenant_id);
-      res.json(personOut(r.rows[0]));
+      res.json({ ...personOut(r.rows[0]), ...(newPin && !v.pin ? { temporary_pin: newPin } : {}) });
     } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
   }));
 

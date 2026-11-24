@@ -31,15 +31,21 @@ test('central monta a rede e o dono da rede vê o painel', {
     await cp.fill('.unLabel', 'Maracanaú'); await cp.fill('.unCnpj', '11.222.333/0001-81'); await cp.click('.unSave');
     await cp.waitForFunction(() => document.getElementById('feedback').textContent.includes('Unidade salva')).catch(async e => { console.error('FEEDBACK', await cp.textContent('#feedback'), await cp.inputValue('.unCnpj')); throw e; });
     // Pessoas: o dono (senha temporária mostrada uma vez) e uma consultora da unidade.
-    await cp.fill('.pNew .pName', 'Gabriel Mota'); await cp.fill('.pNew .pEmail', 'gabriel@audace.test'); await cp.selectOption('.pNew .pFunc', 'dono');
+    assert.equal(await cp.isVisible('.pNew .pEmail'), false, 'vendedora (padrão) não tem e-mail');
+    await cp.fill('.pNew .pName', 'Gabriel Mota'); await cp.selectOption('.pNew .pFunc', 'dono'); await cp.fill('.pNew .pEmail', 'gabriel@audace.test'); await cp.fill('.pNew .pPin', '9999');
     assert.equal(await cp.isVisible('.pNew .pUnit'), false);
     await cp.click('.pNew .pAdd');
     await cp.waitForFunction(() => document.getElementById('feedback').textContent.includes('Senha temporária'));
     const gabrielPass = /Senha temporária \(aparece só agora\): (\S+)/.exec(await cp.textContent('#feedback'))[1];
-    await cp.fill('.pNew .pName', 'Consultora Maracanaú 1'); await cp.fill('.pNew .pEmail', 'c1@audace.test'); await cp.selectOption('.pNew .pFunc', 'consultora');
+    await cp.fill('.pNew .pName', 'Ana Paula'); await cp.selectOption('.pNew .pFunc', 'vendedora');
     await cp.selectOption('.pNew .pUnit', tenant); await cp.click('.pNew .pAdd');
-    await cp.waitForFunction(() => document.body.innerHTML.includes('c1@audace.test') && document.getElementById('feedback').textContent.includes('Senha temporária'));
-    // Supervisor: as unidades aparecem como caixas de marcar.
+    await cp.waitForFunction(() => /PIN \(aparece só agora\): \d{4}/.test(document.getElementById('feedback').textContent));
+    const anaPin = /PIN \(aparece só agora\): (\d{4})/.exec(await cp.textContent('#feedback'))[1];
+    // Senha do quiosque da unidade.
+    cp.once('dialog', d => d.accept()); await cp.click('.unKiosk');
+    await cp.waitForFunction(() => document.getElementById('feedback').textContent.includes('Senha do quiosque'));
+    const kioskPass = /\(aparece só agora\): (\S+)/.exec(await cp.textContent('#feedback'))[1];
+        // Supervisor: as unidades aparecem como caixas de marcar.
     await cp.selectOption('.pNew .pFunc', 'supervisor');
     assert.equal(await cp.isVisible('.pNew .pUnits'), true); assert.equal(await cp.isVisible('.pNew .pUnit'), false);
     await cp.screenshot(shot('central-redes'));
@@ -78,7 +84,11 @@ test('central monta a rede e o dono da rede vê o painel', {
     await rp.waitForFunction(() => document.getElementById('wmName').textContent === 'AUDACE');
     assert.equal(await rp.textContent('#wmSub'), 'JOIAS');
     await rp.screenshot(shot('acesso-rede'));
-    await rp.fill('#email', 'gabriel@audace.test'); await rp.fill('#password', gabrielPass); await rp.click('#loginBtn');
+    // Tela "Entrar na unidade" (p. 6): unidades e vendedoras; a senha do dono abre direto o painel da rede.
+    assert.equal(await rp.isVisible('#unitForm'), true);
+    await rp.selectOption('#unit', { label: 'Maracanaú' });
+    assert.match(await rp.textContent('#sellers'), /Ana/);
+    await rp.selectOption('#unit', { label: 'Solares' }); await rp.fill('#unitPass', gabrielPass); await rp.click('#unitBtn');
     await rp.waitForURL(/\/rede\.html$/);
     await rp.waitForFunction(() => document.getElementById('rows').textContent.includes('Solares'));
     await rp.waitForFunction(() => document.getElementById('who').textContent.includes('Gabriel'));
@@ -95,6 +105,36 @@ test('central monta a rede e o dono da rede vê o painel', {
     assert.doesNotMatch(await rp.textContent('#alerts'), /Maracanaú/);
     await rp.selectOption('#unitSel', '');
     await rp.setViewportSize({ width: 390, height: 844 }); await rp.screenshot(shot('painel-rede-celular'));
+
+    // Caixa do quiosque (p. 8): senha da unidade, bipa a peça, vendedora confirma com PIN, finaliza.
+    await db.query("INSERT INTO products(tenant_id, name, barcode, price_cents, stock_qty) VALUES($1, 'Corrente Aço Elo P', '003622', 4900, 3), ($1, 'Conjunto Aço Banho de Ouro Trevo', '3746', 21900, 2)", [tenant]);
+    const kc = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const kp = await kc.newPage(); kp.on('pageerror', e => errors.push(e.message));
+    await kp.goto(origin + '/acesso');
+    await kp.waitForFunction(() => document.getElementById('unit').options.length > 0);
+    await kp.selectOption('#unit', { label: 'Maracanaú' }); await kp.fill('#unitPass', kioskPass); await kp.click('#unitBtn');
+    await kp.waitForURL(/\/caixa$/);
+    await kp.waitForFunction(() => document.getElementById('unitName').textContent === 'Maracanaú' && !document.getElementById('cashBox').hidden).catch(async e => { console.error('CAIXA', await kp.textContent('#cashSub'), await kp.textContent('#unitName'), errors); throw e; });
+    for (const code of ['003622', '3746']) { await kp.fill('#scan', code); await kp.press('#scan', 'Enter'); }
+    await kp.waitForFunction(() => document.getElementById('items').querySelectorAll('tr').length === 2);
+    assert.match(await kp.textContent('#subtotal'), /268,00/);
+    assert.equal(await kp.isDisabled('#finish'), true, 'sem vendedora não finaliza');
+    await kp.click('#sellers button');
+    for (const d of '0000') await kp.click(`#keys [data-k="${d}"]`);
+    await kp.waitForFunction(() => /PIN/.test(document.getElementById('pinMsg').textContent));
+    for (const d of anaPin) await kp.click(`#keys [data-k="${d}"]`);
+    await kp.waitForFunction(() => !document.getElementById('pinOk').hidden);
+    await kp.screenshot(shot('caixa'));
+    await kp.click('#finish');
+    await kp.waitForFunction(() => !document.getElementById('doneBox').hidden);
+    assert.match(await kp.textContent('#doneBox'), /Venda nº \d+ registrada · R\$\s?268,00/);
+    // Meu dia (p. 11): só depois do PIN.
+    await kp.click('[data-view="day"]');
+    await kp.click('#daySellers button');
+    for (const d of anaPin) await kp.click(`#keys [data-k="${d}"]`);
+    await kp.waitForFunction(() => !document.getElementById('dayBox').hidden);
+    assert.match(await kp.textContent('#dMine'), /268,00/);
+    await kp.screenshot(shot('meu-dia'));
     assert.deepEqual(errors, []);
   } finally { await browser?.close(); await f.cleanup(); }
 });

@@ -44,14 +44,16 @@ const BALANCE = `(SELECT coalesce(sum(l.remaining_cents),0)::int FROM cashback_l
 const PHONE = "length(regexp_replace(coalesce(c.phone,''),'\\D','','g')) >= 10";
 
 async function context(q, tenantId) {
-  const t = (await q(`SELECT t.id, t.name, t.unit_label, t.google_review_url, t.network_id, n.name net_name, n.slug, n.message_settings
+  const t = (await q(`SELECT t.id, t.name, t.unit_label, t.google_review_url, t.network_id, n.name net_name, n.slug, n.hostname, n.message_settings
     FROM tenants t LEFT JOIN store_networks n ON n.id = t.network_id WHERE t.id = $1`, [tenantId])).rows[0];
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
-  return { t, today, cfg: settingsOf(t), lojas: t?.slug ? base() + '/nossas-lojas/' + t.slug : '', marca: t?.net_name || t?.name, loja: t?.name };
+  // Links com o endereço da rede (ex.: audace.ficoupronto.com), quando houver.
+  const root = t?.hostname && /^[a-z0-9.-]+$/.test(t.hostname) ? 'https://' + t.hostname : base();
+  return { t, today, root, cfg: settingsOf(t), lojas: t?.slug ? root + '/nossas-lojas/' + t.slug : '', marca: t?.net_name || t?.name, loja: t?.name };
 }
 
 export async function messageQueue(q, tenantId, { limit = 40 } = {}) {
-  const { t, today, cfg, lojas, marca, loja } = await context(q, tenantId);
+  const { t, today, root, cfg, lojas, marca, loja } = await context(q, tenantId);
   const out = { today, review_link_missing: !t.google_review_url, counts: {}, items: [] };
   const push = (type, rows, make) => { out.counts[type] = (out.counts[type] || 0) + rows.length; for (const r of rows.slice(0, limit)) out.items.push({ type, customer_id: r.id, name: r.name, phone: r.phone, ...make(r) }); };
   const common = r => ({ nome: first(r.name), loja, marca, lojas });
@@ -65,7 +67,7 @@ export async function messageQueue(q, tenantId, { limit = 40 } = {}) {
     ORDER BY s.created_at DESC`, [tenantId, today])).rows;
   push('thanks', thanks, r => ({ sale_id: r.sale_id, ref: 'Venda nº ' + r.sale_number, text: fill(cfg.texts.thanks, { ...common(r),
     cashback: r.cashback_earned_cents ? `Você ganhou ${brl(r.cashback_earned_cents)} de cashback${r.exp ? ', válido até ' + dmy(r.exp) : ''}, para usar em qualquer unidade. Seu saldo: ${brl(r.balance)}. ` : '',
-    comprovante: r.receipt_code ? base() + '/g/' + r.receipt_code : '' }) }));
+    comprovante: r.receipt_code ? root + '/g/' + r.receipt_code : '' }) }));
 
   // 2. Avaliação no Google: compras de N a N+5 dias atrás nesta unidade, uma vez a cada 180 dias por cliente.
   if (cfg.review_enabled && t.google_review_url) {

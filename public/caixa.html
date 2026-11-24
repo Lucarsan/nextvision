@@ -633,7 +633,7 @@
     $('mgList').innerHTML = list.length ? list.map((x, i) => '<div class="mg" data-i="' + msgData.items.indexOf(x) + '" style="border-bottom:1px solid var(--line);padding:12px 0">'
       + '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + safe(x.name) + '</b><span class="sub" style="margin:0">' + MSG_LABEL[x.type] + (x.ref ? ' · ' + safe(x.ref) : '') + '</span></div>'
       + '<textarea class="field mgText" rows="3" style="margin-top:6px;width:100%;font:inherit;font-size:14px">' + safe(x.text) + '</textarea>'
-      + '<div style="display:flex;gap:8px;margin-top:6px"><button type="button" class="go mgSend" style="margin:0;width:auto;padding:0 16px">Enviar pelo WhatsApp</button><button type="button" class="linkbtn mgSkip">Não enviar</button></div></div>').join('')
+      + '<div style="display:flex;gap:8px;margin-top:6px"><button type="button" class="go mgSend" style="margin:0;width:auto;padding:10px 18px;font-size:14px;height:auto">Enviar pelo WhatsApp</button><button type="button" class="linkbtn mgSkip">Não enviar</button></div></div>').join('')
       : '<p class="sub">Nenhuma mensagem para enviar agora.</p>';
     const log = async (el, skip) => { const x = msgData.items[+el.dataset.i]; await api('/store/kiosk/messages/log', 'POST', { type: x.type, customer_id: x.customer_id, ...(x.sale_id ? { sale_id: x.sale_id } : {}), ...(x.campaign ? { campaign: x.campaign } : {}), skip }); };
     document.querySelectorAll('.mgSend').forEach(b => b.onclick = async () => {

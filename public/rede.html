@@ -95,6 +95,13 @@
       </section>
       <section class="card attn"><h2>Precisa de atenção</h2><div id="alerts"></div></section>
     </div>
+    <section class="card" id="upCard" style="margin-top:16px" hidden><div class="units-head"><h2 id="upTitle">Painel da loja</h2><span><input type="date" id="upDate" style="padding:6px;border:1px solid #dcd8cd;border-radius:8px"></span></div>
+      <div id="upKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px"></div>
+      <div id="upPend" style="margin-top:12px"></div>
+      <h3 style="margin:16px 0 6px;font-size:15px">Caixa por forma de pagamento</h3><div class="wrap"><table><tbody id="upMethods"></tbody></table></div>
+      <h3 style="margin:16px 0 6px;font-size:15px">Fechamentos</h3><div id="upSessions"></div>
+      <h3 style="margin:16px 0 6px;font-size:15px">Vendas do dia</h3><div class="wrap"><table><thead><tr><th>Hora</th><th>Nº</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th>Cupom</th></tr></thead><tbody id="upSales"></tbody></table></div>
+      <p class="soft" id="upMsg"></p></section>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Relatório para o shopping</h2><span>Faturamento por unidade, dia a dia (CSV)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="month" id="repMonth" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" id="repGo" style="padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Baixar planilha</button><span class="soft" id="repMsg"></span></div></section>
     <section class="card" id="fcCard" style="margin-top:16px;display:none"><div class="units-head"><h2>Créditos do cupom fiscal</h2><span id="fcInfo"></span></div>
@@ -237,6 +244,7 @@
     loadComm().catch(() => {});
     loadTransfers().catch(() => {});
     loadCredits().catch(() => {});
+    loadUnitDay().catch(() => {});
   }
   async function loadCredits() {
     const c = await api('/network/fiscal-credits');
@@ -281,6 +289,38 @@
     $('commInfo').textContent = c.tiers.length ? 'Faixas: ' + c.tiers.map(t => t.percent.toLocaleString('pt-BR') + '% a partir de ' + brl(t.min_cents)).join(' · ') : 'Faixas de comissão ainda não definidas';
     $('commRows').innerHTML = rows.map(x => '<tr><td>' + safe(x.name) + '</td><td>' + safe(x.unit) + '</td><td class="n">' + x.sales_count + '</td><td class="n">' + brl(x.total_cents) + '</td><td class="n">' + (c.tiers.length ? x.percent.toLocaleString('pt-BR') + '%' : '—') + '</td><td class="n">' + (c.tiers.length ? brl(x.commission_cents) : '—') + '</td><td>' + (x.next ? 'faltam ' + brl(x.next.missing_cents) + ' para ' + x.next.percent.toLocaleString('pt-BR') + '%' : (c.tiers.length ? 'faixa máxima' : '')) + '</td></tr>').join('') || '<tr><td colspan="7" class="soft">Nenhuma vendedora.</td></tr>';
   }
+  // ---------- Painel da loja (p. 12) ----------
+  const PM = { cash: 'Dinheiro', pix: 'Pix', debit: 'Débito', credit: 'Crédito', other: 'Outro', mixed: 'Dividido' };
+  const FS = { authorized: 'Autorizado', pending: 'Enviando', processing: 'Enviando', rejected: 'Rejeitado', canceled: 'Cancelado', contingency: 'Contingência', error: 'Erro' };
+  async function loadUnitDay() {
+    const id = $('unitSel').value; $('upCard').hidden = !id; if (!id) return;
+    if (!$('upDate').value) $('upDate').value = day();
+    const d = await api('/network/units/' + id + '/day?date=' + $('upDate').value);
+    $('upTitle').textContent = 'Painel da loja · ' + d.unit.name;
+    const k = d.kpis, kp = (t, v, e) => '<div style="background:#faf9f6;border:1px solid #ebe9e3;border-radius:10px;padding:10px 12px"><span class="soft" style="font-size:12px">' + t + '</span><div style="font-size:20px;font-weight:600">' + v + '</div>' + (e ? '<span class="soft" style="font-size:12px">' + e + '</span>' : '') + '</div>';
+    $('upKpis').innerHTML = kp('Faturamento do dia', brl(k.total_cents), k.count + ' venda(s)' + (k.canceled ? ' · ' + k.canceled + ' cancelada(s)' : '')) + kp('Ticket médio', brl(k.ticket_cents)) + kp('No mês', brl(k.month_cents), k.goal_cents ? Math.round(k.month_cents * 100 / k.goal_cents) + '% da meta de ' + brl(k.goal_cents) : 'sem meta definida')
+      + d.by_seller.map(x => kp(safe(x.seller), brl(x.total_cents), x.count + ' venda(s)')).join('');
+    const p = d.pending, pend = [];
+    if (p.unreviewed) pend.push(p.unreviewed + ' fechamento(s) de caixa para conferir');
+    if (p.econf.length) pend.push('pagamento(s) na maquininha avulsa para conciliar: venda(s) nº ' + p.econf.join(', '));
+    if (p.warranty.length) pend.push(p.warranty.length + ' garantia(s) com prazo até ' + p.warranty.map(w => w.due_on.split('-').reverse().join('/')).join(', '));
+    if (p.transfers.length) pend.push('transferência(s) para conferir: nº ' + p.transfers.map(t => t.number).join(', '));
+    $('upPend').innerHTML = pend.length ? '<div class="alert yellow"><b>Pendências da loja</b><ul style="margin:6px 0 0">' + pend.map(x => '<li>' + safe(x) + '</li>').join('') + '</ul></div>' : '';
+    $('upMethods').innerHTML = Object.entries(d.by_method).filter(([, v]) => v).map(([m, v]) => '<tr><td>' + PM[m] + '</td><td class="n">' + brl(v) + '</td></tr>').join('') || '<tr><td class="soft">Sem vendas no dia.</td></tr>';
+    $('upSessions').innerHTML = d.sessions.map(c => {
+      const diff = c.counted_cash_cents != null && c.expected_cash_cents != null ? c.counted_cash_cents - c.expected_cash_cents : null;
+      const out = (c.movements || []).filter(m => m.kind === 'withdrawal');
+      return '<div style="border:1px solid #ebe9e3;border-radius:10px;padding:10px 12px;margin-bottom:8px"><b>' + (c.status === 'open' ? 'Caixa aberto' : 'Caixa fechado') + '</b> · aberto ' + safe(c.opened_at) + ' por ' + safe(c.opened_by || '') + (c.closed_at ? ' · fechado ' + safe(c.closed_at) + ' por ' + safe(c.closed_by || '') : '')
+        + (c.status === 'closed' ? '<div>Dinheiro esperado ' + brl(c.expected_cash_cents) + ' · contado ' + brl(c.counted_cash_cents) + (diff ? ' · <b style="color:' + (diff < 0 ? '#b42318' : '#b45309') + '">diferença ' + brl(diff) + '</b>' : ' · sem diferença') + (c.close_note ? ' · ' + safe(c.close_note) : '') + '</div>' : '')
+        + (out.length ? '<div class="soft">Sangrias: ' + out.map(m => brl(m.amount_cents) + (m.note ? ' (' + safe(m.note) + ')' : '') + (m.by ? ' por ' + safe(m.by) : '')).join('; ') + '</div>' : '')
+        + (c.status === 'closed' ? (c.reviewed_at ? '<div style="color:#1f7a4d;margin-top:4px">Conferido por ' + safe(c.reviewed_by) + ' em ' + safe(c.reviewed_at) + (c.review_note ? ' · ' + safe(c.review_note) : '') + '</div>'
+          : '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input class="rvNote" placeholder="Observação (opcional)" style="flex:1;min-width:180px;padding:7px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" class="rvBtn" data-id="' + safe(c.id) + '" style="padding:8px 12px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Conferi</button></div>') : '') + '</div>';
+    }).join('') || '<p class="soft">Nenhum caixa no dia.</p>';
+    document.querySelectorAll('.rvBtn').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('/network/cash-sessions/' + b.dataset.id + '/review', 'POST', { note: b.parentNode.querySelector('.rvNote').value.trim() }); await loadUnitDay(); } catch (e) { $('upMsg').textContent = e.message; b.disabled = false; } });
+    $('upSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + x.at + '</td><td>' + x.sale_number + '</td><td>' + safe(x.seller || '') + '</td><td>' + safe(x.customer || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + PM[x.payment_method] + (x.offline_payment ? ' (maquininha avulsa' + (x.econf_done ? ', conciliada' : '') + ')' : '') + '</td><td>' + (x.fiscal_status ? FS[x.fiscal_status] || x.fiscal_status : '<span class="soft">—</span>') + '</td></tr>').join('') || '<tr><td colspan="7" class="soft">Nenhuma venda no dia.</td></tr>';
+  }
+  $('upDate').onchange = () => loadUnitDay().catch(e => { $('upMsg').textContent = e.message; });
+
   // ---------- Clientes: cashback e mensagens ----------
   const money = c => (c / 100).toFixed(2).replace('.', ','), cents = v => Math.round(Number(String(v || '0').replace(/\./g, '').replace(',', '.')) * 100);
   async function loadSettings() {
@@ -317,7 +357,7 @@
     $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
     if (user?.access !== 'supervisor') window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') });
   }).catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
-  $('unitSel').onchange = draw;
+  $('unitSel').onchange = () => { draw(); loadUnitDay().catch(e => { $('upMsg').textContent = e.message; }); };
   $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });
   $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); };
   refresh();

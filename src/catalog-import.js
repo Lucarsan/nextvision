@@ -78,8 +78,49 @@ export function parseCustomers(rows, { header, map }) {
   return { items: out, skipped };
 }
 
+// stock: 'sheet' = estoque da planilha; 'zero' = peça nova entra com 0 e a já cadastrada mantém o estoque (catálogo da rede).
+export async function writeProducts(client, tid, items, stock) {
+  // Em lote (2 consultas por loja): milhares de peças em poucos segundos.
+  const col = k => items.map(x => x[k]);
+  const arr = [col('code'), col('name'), col('price_cents'), col('family'), col('ncm'), col('stock_qty'), col('active')];
+  const src = `unnest($2::text[],$3::text[],$4::int[],$5::text[],$6::text[],$7::int[],$8::bool[]) AS x(code,name,price,family,ncm,stock,active)`;
+  await client.query(`UPDATE products p SET name=x.name,price_cents=x.price,family=x.family,ncm=x.ncm,stock_qty=CASE WHEN $9 THEN x.stock ELSE p.stock_qty END,
+      active=x.active,barcode=COALESCE(p.barcode,x.code),imported_at=now(),updated_at=now()
+    FROM ${src} WHERE p.tenant_id=$1 AND p.code=x.code AND p.kind='product' AND (p.active OR NOT x.active)`, [tid, ...arr, stock === 'sheet']);
+  await client.query(`INSERT INTO products(tenant_id,name,barcode,code,price_cents,family,ncm,fiscal_origin,stock_qty,kind,imported_at)
+    SELECT $1,x.name,CASE WHEN EXISTS(SELECT 1 FROM products b WHERE b.tenant_id=$1 AND b.barcode=x.code AND b.active) THEN NULL ELSE x.code END,x.code,x.price,x.family,x.ncm,0,
+      CASE WHEN $9 THEN x.stock ELSE 0 END,'product',now()
+    FROM ${src} WHERE x.active AND NOT EXISTS(SELECT 1 FROM products p WHERE p.tenant_id=$1 AND p.code=x.code AND p.kind='product' AND p.active)`, [tid, ...arr, stock === 'sheet']);
+}
+
 export function registerCatalogImport(app, { q, db: pool, auth, roles, route, bad, audit, uuid }) {
   const raw = express.raw({ type: ['application/octet-stream', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'], limit: '15mb' });
+  // Catálogo único da rede (ex.: Audace, mesmo cadastro de peças nas 7 unidades): grava as peças em todas as unidades.
+  // Peça nova entra com estoque 0 (a contagem de cada loja define o estoque); peça já cadastrada mantém o estoque.
+  app.post('/api/master/networks/:id/import', auth, roles('master'), raw, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Rede inválida');
+    const n = await q('SELECT id,name FROM store_networks WHERE id=$1', [req.params.id]);
+    if (!n.rowCount) return bad(res, 404, 'Rede não encontrada');
+    const units = (await q('SELECT id,coalesce(unit_label,name) label FROM tenants WHERE network_id=$1 ORDER BY 2', [req.params.id])).rows;
+    if (!units.length) return bad(res, 400, 'A rede não tem unidades');
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return bad(res, 400, 'Envie o arquivo .xlsx');
+    let rows; try { rows = await readSheet(req.body); } catch (e) { return bad(res, 400, e.status ? e.message : 'Não consegui ler a planilha (precisa ser .xlsx)'); }
+    const found = detectKind(rows);
+    if (!found) return bad(res, 400, 'Não reconheci as colunas.');
+    if (found.kind !== 'products') return bad(res, 400, 'Para a rede, importe aqui só a planilha de peças. Clientes entram no cadastro único da rede.');
+    const { items, skipped } = parseProducts(rows, found);
+    const existing = await q('SELECT tenant_id,code FROM products WHERE tenant_id=ANY($1) AND code IS NOT NULL AND active', [units.map(u => u.id)]);
+    const have = new Set(existing.rows.map(r => r.tenant_id + '|' + r.code));
+    const per = units.map(u => ({ unit: u.label, new: items.filter(x => x.active && !have.has(u.id + '|' + x.code)).length, update: items.filter(x => have.has(u.id + '|' + x.code)).length }));
+    const summary = { kind: 'products', scope: 'network', store: n.rows[0].name + ' (' + units.length + ' unidades)', total: items.length, units: per,
+      new: per.reduce((a, u) => a + u.new, 0), update: per.reduce((a, u) => a + u.update, 0), inactive: items.filter(x => !x.active).length, negative_stock: 0, no_ncm: items.filter(x => !x.ncm).length, skipped, stock: 'zero' };
+    if (req.query.dry_run === '1') return res.json({ dry_run: true, ...summary });
+    const client = await pool.connect();
+    try { await client.query('BEGIN'); for (const u of units) await writeProducts(client, u.id, items, 'zero'); await client.query('COMMIT'); }
+    catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    await audit(req, 'import_products_network', 'network', n.rows[0].id);
+    res.json({ dry_run: false, ...summary });
+  }));
   app.post('/api/master/tenants/:id/import', auth, roles('master'), raw, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Loja inválida');
     const t = await q('SELECT id,name FROM tenants WHERE id=$1', [req.params.id]);
@@ -98,19 +139,8 @@ export function registerCatalogImport(app, { q, db: pool, auth, roles, route, ba
         inactive: items.filter(x => !x.active).length, negative_stock: items.filter(x => (x.stock_qty ?? 0) < 0).length, no_ncm: items.filter(x => !x.ncm).length, skipped };
       if (dry) return res.json({ dry_run: true, ...summary });
       const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        for (const x of items) {
-          const upd = await client.query(`UPDATE products SET name=$3,price_cents=$4,family=$5,ncm=$6,stock_qty=$7,active=$8,barcode=COALESCE(barcode,$2),imported_at=now(),updated_at=now()
-            WHERE tenant_id=$1 AND code=$2 AND kind='product' AND (active OR NOT $8) RETURNING id`, [tid, x.code, x.name, x.price_cents, x.family, x.ncm, x.stock_qty, x.active]);
-          if (upd.rowCount) continue;
-          if (!x.active) continue;
-          const taken = await client.query('SELECT 1 FROM products WHERE tenant_id=$1 AND barcode=$2 AND active', [tid, x.code]);
-          await client.query(`INSERT INTO products(tenant_id,name,barcode,code,price_cents,family,ncm,fiscal_origin,stock_qty,kind,imported_at)
-            VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,'product',now())`, [tid, x.name, taken.rowCount ? null : x.code, x.code, x.price_cents, x.family, x.ncm, x.stock_qty]);
-        }
-        await client.query('COMMIT');
-      } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+      try { await client.query('BEGIN'); await writeProducts(client, tid, items, 'sheet'); await client.query('COMMIT'); }
+      catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
       await audit(req, 'import_products', 'tenant', tid);
       return res.json({ dry_run: false, ...summary });
     }

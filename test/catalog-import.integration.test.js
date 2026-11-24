@@ -59,3 +59,29 @@ test('central importa peças e clientes de planilha .xlsx, conferindo antes de g
     assert.equal((await post(base, `/master/tenants/${tenant}/import`, masterToken, Buffer.from('não é xlsx'))).status, 400);
   } finally { await f.cleanup(); }
 });
+
+test('central importa o catálogo da rede em todas as unidades, com estoque zero para peças novas', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    const { tenant, masterToken, base, api } = f;
+    const net = await api('/master/networks', { method: 'POST', token: masterToken, body: { name: 'Audace Joias', slug: 'audace-imp', hostname: 'audace-imp.example.test' } }, 201);
+    const b = await api('/master/tenants', { method: 'POST', token: masterToken, body: { name: 'Audace Messejana', slug: 'audace-messejana-imp' } }, 201);
+    await api(`/master/tenants/${tenant}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Maracanaú' } });
+    await api(`/master/tenants/${b.id}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Messejana' } });
+    const head = ['Situação', 'Descrição', 'Código', 'Família de Produto', 'Código NCM', 'Preço Unitário de Venda', 'Estoque Disponível'];
+    // Maracanaú já tem a peça 1511 com estoque contado (7): a importação da rede não mexe nesse estoque.
+    await post(base, `/master/tenants/${tenant}/import`, masterToken, await sheet(head, [['Ativo', 'ALIANCA ACO', '1511', 'ALIANÇA', '7117.19.00', 80, 7]]));
+    const cat = await sheet(head, [['Ativo', 'ALIANCA ACO BASIC', '1511', 'ALIANÇA', '7117.19.00', 89, -85], ['Ativo', 'BRINCO PONTO DE LUZ', '62', 'BRINCOS', '7117.19.00', 29.9, 3]]);
+    const dry = await post(base, `/master/networks/${net.id}/import?dry_run=1`, masterToken, cat);
+    assert.equal(dry.status, 200); assert.equal(dry.data.new, 3); assert.equal(dry.data.update, 1); assert.equal(dry.data.units.length, 2);
+    const done = await post(base, `/master/networks/${net.id}/import`, masterToken, cat);
+    assert.equal(done.status, 200);
+    const rows = (await f.db.query('SELECT tenant_id,code,name,price_cents,stock_qty FROM products WHERE tenant_id=ANY($1) ORDER BY tenant_id,code', [[tenant, b.id]])).rows;
+    const get = (t, c) => rows.find(r => r.tenant_id === t && r.code === c);
+    assert.equal(get(tenant, '1511').stock_qty, 7); assert.equal(get(tenant, '1511').price_cents, 8900); assert.equal(get(tenant, '1511').name, 'ALIANCA ACO BASIC');
+    assert.equal(get(tenant, '62').stock_qty, 0); assert.equal(get(b.id, '1511').stock_qty, 0); assert.equal(get(b.id, '62').stock_qty, 0);
+    assert.equal(rows.length, 4);
+    const cli = await sheet(['Situação', 'CNPJ / CPF', 'Razão Social / Nome Completo', 'Telefone'], [['Ativo', '090.961.743-05', 'Miguel Mendes', '(85) 98133-7352']]);
+    assert.equal((await post(base, `/master/networks/${net.id}/import`, masterToken, cli)).status, 400);
+  } finally { await f.cleanup(); }
+});

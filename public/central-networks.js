@@ -88,7 +88,8 @@
         + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unImport" style="height:34px">Importar planilha</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
       + '</tbody></table></div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:12px"><label>Ligar loja à rede<select id="unAdd">' + (free.map(s => '<option value="' + safe(s.id) + '">' + safe(s.name) + '</option>').join('') || '<option value="">Nenhuma loja livre</option>') + '</select></label>'
-      + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button></div>'
+      + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button>'
+        + '<button type="button" class="ct-btn ghost" id="netImport" style="margin-left:auto">Importar peças para todas as unidades</button></div>'
       + '<p class="ct-muted" style="margin:8px 0 0">Cada unidade é uma loja com CNPJ, caixa e estoque próprios. Crie as lojas em "Lojas" e ligue aqui.</p></section>'
       + peopleSection(people, units);
     render(list + detail);
@@ -118,6 +119,20 @@
       ? s.total + ' peças (' + s.new + ' novas, ' + s.update + ' já cadastradas)' + (s.negative_stock ? '; ' + s.negative_stock + ' com estoque negativo' : '') + (s.no_ncm ? '; ' + s.no_ncm + ' sem NCM' : '') + (s.inactive ? '; ' + s.inactive + ' inativas' : '')
       : s.total + ' clientes (' + s.new + ' novos, ' + s.update + ' já cadastrados); ' + s.with_cpf + ' com CPF, ' + s.with_phone + ' com telefone, ' + s.with_email + ' com e-mail')
       + (s.skipped.length ? '. Ignoradas ' + s.skipped.length + ' linhas: ' + s.skipped.slice(0, 5).map(x => 'linha ' + x.line + ' (' + x.reason + ')').join(', ') + (s.skipped.length > 5 ? '…' : '') : '');
+    // Catálogo único da rede: mesma planilha de peças em todas as unidades; peça nova entra com estoque 0.
+    el('netImport').onclick = () => {
+      const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx';
+      input.onchange = act(async () => {
+        const file = input.files[0]; if (!file) throw Error('');
+        const send = async dry => { const r = await fetch('/api/master/networks/' + net.id + '/import' + (dry ? '?dry_run=1' : ''), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: file }); const j = await r.json().catch(() => ({})); if (!r.ok) throw Error(j.error || 'Erro na importação'); return j; };
+        const pre = await send(true);
+        const lines = pre.units.map(u => u.unit + ': ' + u.new + ' novas, ' + u.update + ' já cadastradas').join('\n');
+        if (!confirm('Peças para ' + pre.store + ': ' + pre.total + ' na planilha.\n\n' + lines + '\n\nPeças novas entram com estoque 0 (o estoque de cada loja vem da contagem). Peças já cadastradas mantêm o estoque.' + (pre.skipped.length ? '\nIgnoradas ' + pre.skipped.length + ' linhas: ' + pre.skipped.slice(0, 5).map(x => 'linha ' + x.line + ' (' + x.reason + ')').join(', ') : '') + '\n\nGravar agora?')) throw Error('Importação cancelada.');
+        const done = await send(false);
+        return 'Peças importadas em ' + done.store + ': ' + done.new + ' novas, ' + done.update + ' atualizadas.';
+      });
+      input.click();
+    };
     document.querySelectorAll('.unImport').forEach(b => b.onclick = () => {
       const tenantId = b.closest('tr').dataset.id, input = document.createElement('input');
       input.type = 'file'; input.accept = '.xlsx';

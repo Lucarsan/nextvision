@@ -58,8 +58,11 @@ function drawMap(){if(map){map.invalidateSize();return}
  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,referrerPolicy:'strict-origin-when-cross-origin',attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
  const icon=L.divIcon({className:'pt-pin',html:'<span></span>',iconSize:[22,30],iconAnchor:[11,30],popupAnchor:[0,-28]});
  pins.forEach(p=>L.marker([p.lat,p.lng],{icon,title:p.name,alt:p.name}).addTo(map).bindPopup('<strong>'+esc(p.name)+'</strong><br>'+esc(p.niche_label)+'<br>'+esc(place(p))+(p.whatsapp?'<br><a href="https://wa.me/'+esc(p.whatsapp)+'" target="_blank" rel="noopener">WhatsApp</a>':'')+'<br><a href="'+esc(gmaps(p))+'" target="_blank" rel="noopener">Abrir no Google Maps</a>'));
- // Começa afastado (Fortaleza e região metropolitana), centrado nas lojas.
- if(pins.length)map.setView([pins.reduce((a,p)=>a+p.lat,0)/pins.length+0.05,pins.reduce((a,p)=>a+p.lng,0)/pins.length-0.02],11);
+ // Enquadra as lojas de Fortaleza e região metropolitana; as do interior (ex.: Sobral) ficam a um clique.
+ const near=pins.filter(p=>Math.abs(p.lat+3.7319)<0.8&&Math.abs(p.lng+38.5267)<0.8),far=pins.filter(p=>!near.includes(p));
+ const fit=l=>{if(l.length>1)map.fitBounds(l.map(p=>[p.lat,p.lng]),{padding:[30,30],maxZoom:13});else if(l.length)map.setView([l[0].lat,l[0].lng],13)};
+ fit(near.length?near:pins);
+ if(far.length&&near.length){const b=document.createElement('p');b.className='st-note';b.innerHTML='Também no interior: '+far.map(p=>esc(p.name)).join(', ')+'. <a href="#" id="ptAll">Ver todas no mapa</a>';$('ptMap').after(b);$('ptAll').onclick=e=>{e.preventDefault();fit(pins)}}
  const off=partners.filter(p=>!pins.includes(p));
  if(off.length){$('ptNoPin').hidden=false;$('ptNoPin').textContent='Ainda sem endereço no mapa: '+off.map(p=>p.name).join(', ')+'. Veja em "Nicho".'}}
 function show(view){document.querySelectorAll('.pt-tab').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));

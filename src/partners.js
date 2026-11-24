@@ -10,10 +10,13 @@ export function registerPartners(app, { q, auth, roles, route, bad, valid, audit
   app.get('/api/public/partners', rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), route(async (_req, res) => {
     if (!cache.data || Date.now() - cache.at > 60000) {
       const r = await q(`SELECT t.id, t.name, t.niche, t.partner_description description, t.address, t.city, t.state, t.whatsapp,
-          t.partner_lat lat, t.partner_lng lng, t.logo_url, EXISTS (SELECT 1 FROM tenant_logos l WHERE l.tenant_id = t.id) has_logo
-        FROM tenants t WHERE t.partner_listed AND NOT t.demo_mode AND t.status IN ('trial', 'active') ORDER BY t.name`);
+          t.partner_lat lat, t.partner_lng lng, t.logo_url, EXISTS (SELECT 1 FROM tenant_logos l WHERE l.tenant_id = t.id) has_logo,
+          n.slug network_slug, n.name network_name
+        FROM tenants t LEFT JOIN store_networks n ON n.id = t.network_id AND n.status = 'active' WHERE t.partner_listed AND NOT t.demo_mode AND t.status IN ('trial', 'active') ORDER BY t.name`);
       cache = { at: Date.now(), data: r.rows.map(t => ({
-        name: t.name, niche: t.niche, niche_label: NICHES[t.niche] || NICHES.general, description: t.description || '',
+        // Unidades de uma rede (ex.: Audace Joias) aparecem juntas, com o nome da rede no lugar do nicho.
+        name: t.name, niche: t.network_slug ? 'rede-' + t.network_slug : t.niche,
+        niche_label: t.network_name || NICHES[t.niche] || NICHES.general, description: t.description || '',
         address: t.address || '', city: t.city || '', state: t.state || '', whatsapp: t.whatsapp || '',
         lat: t.lat, lng: t.lng,
         logo: t.has_logo ? '/api/public/store-logo/' + t.id : (/^https:\/\//.test(t.logo_url || '') ? t.logo_url : null)

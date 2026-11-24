@@ -513,10 +513,19 @@
     $('wBox').innerHTML = '<p style="margin:12px 0 4px"><strong>Venda nº ' + d.sale_number + ' · ' + safe(d.unit) + '</strong> · ' + safe(d.sold_at) + (d.customer_name ? ' · ' + safe(d.customer_name) : '') + (d.canceled ? ' <span class="msg err">(cancelada)</span>' : '') + '</p>'
       + '<table>' + d.items.map(i => '<tr><td class="code">' + safe(i.code || '') + '</td><td>' + safe(i.name) + '</td><td class="n">' + brl(i.total_cents) + '</td></tr>').join('') + '</table>'
       + d.warranties.map(w => '<div class="cb" style="' + (w.until < today ? 'background:#efede8;color:#6b6b70' : 'background:#e4f1e7;color:#2f6b45') + '"><span>' + safe(w.label) + '</span><strong>' + (w.until < today ? 'encerrada em ' : 'até ') + br(w.until) + '</strong></div>').join('')
-      + (d.claims.length ? '<p class="label" style="margin-top:14px">Atendimentos</p>' + d.claims.map(c => '<p class="sub" style="margin:2px 0">' + safe(c.opened) + ' · ' + KIND[c.kind] + ' · ' + safe(c.unit) + (c.note ? ' · ' + safe(c.note) : '') + (c.closed ? ' · resolvido' : ' · em aberto') + '</p>').join('') : '')
+      + (d.claims.length ? '<p class="label" style="margin-top:14px">Atendimentos</p>' + d.claims.map(c => '<p class="sub" style="margin:2px 0">' + safe(c.opened) + ' · ' + KIND[c.kind] + ' · ' + safe(c.unit) + (c.note ? ' · ' + safe(c.note) : '') + (c.closed ? ' · resolvido' : ' · em aberto')
+          + (c.credit_cents ? ' · <b>crédito de ' + brl(c.credit_cents) + '</b>' : (c.mine && !c.closed && ['troca', 'devolucao'].includes(c.kind) ? ' <button type="button" class="linkbtn wCredit" data-id="' + safe(c.id) + '">Gerar crédito para a cliente</button>' : '')) + '</p>').join('') : '')
       + (d.canceled ? '' : '<p class="label" style="margin-top:14px">Registrar atendimento de garantia</p><div style="display:flex;gap:8px;flex-wrap:wrap"><select class="field" id="wKind" style="width:auto">' + Object.entries(KIND).map(([k, l]) => '<option value="' + k + '">' + l + '</option>').join('') + '</select><input class="field" id="wNote" maxlength="200" placeholder="O que aconteceu (ex.: banho escureceu)" style="flex:1;min-width:200px"></div>'
         + '<p class="sub" style="margin:8px 0 4px">Quem está atendendo?</p><div class="people" id="wWho" style="display:flex;gap:6px;flex-wrap:wrap"></div>');
     $('wBox').hidden = false;
+    document.querySelectorAll('.wCredit').forEach(b => b.onclick = () => {
+      if (!d.has_customer) { $('wMsg').className = 'msg err'; $('wMsg').textContent = 'A venda não tem cliente. O supervisor inclui a cliente na venda pelo painel da rede e depois o crédito pode ser gerado.'; return; }
+      const v = prompt('Valor do crédito para a cliente (R$). Vale em qualquer unidade, como saldo de cashback.', (d.total_cents / 100).toFixed(2).replace('.', ','));
+      if (v === null) return; const cents = Math.round(Number(v.replace(/\./g, '').replace(',', '.')) * 100);
+      if (!(cents > 0)) { $('wMsg').className = 'msg err'; $('wMsg').textContent = 'Valor inválido.'; return; }
+      let r; askPin({ name: 'Supervisor, gerente ou dono' }, () => { $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Crédito de ' + brl(r.credit_cents) + ' liberado por ' + r.authorized_by + '. Já aparece no saldo da cliente em qualquer unidade (validade de ' + r.valid_days + ' dias).'; findWarranty(); },
+        async pin => { r = await api('/store/warranty/claims/' + b.dataset.id + '/credit', 'POST', { amount_cents: cents, supervisor_pin: pin }); });
+    });
     if (!d.canceled) whoButtons('wWho', s => askPin(s, () => { $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Atendimento registrado. O prazo para resolver é de 30 dias.'; findWarranty(); },
       pin => api('/store/warranty/' + encodeURIComponent(code) + '/claims', 'POST', { kind: $('wKind').value, note: $('wNote').value.trim(), seller_id: s.id, seller_pin: pin })));
   }

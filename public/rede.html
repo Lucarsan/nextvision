@@ -100,7 +100,7 @@
       <div id="upPend" style="margin-top:12px"></div>
       <h3 style="margin:16px 0 6px;font-size:15px">Caixa por forma de pagamento</h3><div class="wrap"><table><tbody id="upMethods"></tbody></table></div>
       <h3 style="margin:16px 0 6px;font-size:15px">Fechamentos</h3><div id="upSessions"></div>
-      <h3 style="margin:16px 0 6px;font-size:15px">Vendas do dia</h3><div class="wrap"><table><thead><tr><th>Hora</th><th>Nº</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th>Cupom</th></tr></thead><tbody id="upSales"></tbody></table></div>
+      <h3 style="margin:16px 0 6px;font-size:15px">Vendas do dia</h3><div class="wrap"><table><thead><tr><th>Hora</th><th>Nº</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th>Cupom</th><th></th></tr></thead><tbody id="upSales"></tbody></table></div>
       <p class="soft" id="upMsg"></p></section>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Relatório para o shopping</h2><span>Faturamento por unidade, dia a dia (CSV)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="month" id="repMonth" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" id="repGo" style="padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Baixar planilha</button><span class="soft" id="repMsg"></span></div></section>
@@ -154,9 +154,16 @@
         <button type="button" class="btn" id="cpSave" style="margin-top:8px">Criar campanha</button> <span class="soft" id="cpMsg"></span>
         <p class="soft" style="margin:8px 0">Cada unidade vê a campanha na aba Mensagens do quiosque e envia para as clientes dela. Quem pediu para não receber ofertas fica de fora.</p>
         <div class="wrap"><table><thead><tr><th>Campanha</th><th>Período</th><th class="n">Enviadas</th><th></th></tr></thead><tbody id="cpRows"></tbody></table></div></details>
+      <details id="cmStock"><summary>Estoque mínimo e crédito de troca</summary>
+        <div class="grid4"><label>Avisar quando a peça ficar com (unidades) ou menos<input id="stMin" type="number" min="0" max="1000"></label><label>Validade do crédito de troca (dias)<input id="stCred" type="number" min="7" max="730"></label></div>
+        <button type="button" class="btn" id="stSave" style="margin-top:10px">Salvar</button> <span class="soft" id="stMsg"></span></details>
       <details id="cmSent"><summary>Mensagens enviadas no mês</summary>
         <div class="wrap"><table><thead><tr><th>Unidade</th><th class="n">Obrigado</th><th class="n">Avaliação</th><th class="n">Abriram o link</th><th class="n">Cashback vencendo</th><th class="n">Aniversário</th><th class="n">Campanhas</th></tr></thead><tbody id="smRows"></tbody></table></div></details>
     </section>
+    <section class="card" id="exCard" style="margin-top:16px" hidden><div class="units-head"><h2>Exportar dados</h2><span>Planilhas (CSV) com os dados da rede</span></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="soft">De <input type="date" id="exFrom" style="padding:7px;border:1px solid #dcd8cd;border-radius:8px"></label><label class="soft">até <input type="date" id="exTo" style="padding:7px;border:1px solid #dcd8cd;border-radius:8px"></label>
+        <button type="button" class="exBtn" data-k="vendas">Vendas</button><button type="button" class="exBtn" data-k="itens">Itens vendidos</button><button type="button" class="exBtn" data-k="clientes">Clientes</button><button type="button" class="exBtn" data-k="estoque">Estoque</button><span class="soft" id="exMsg"></span></div>
+      <style>.exBtn{padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer}</style></section>
   </main>
 </div>
 <script src="/billing-banner.js?v=1"></script>
@@ -317,7 +324,37 @@
           : '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input class="rvNote" placeholder="Observação (opcional)" style="flex:1;min-width:180px;padding:7px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" class="rvBtn" data-id="' + safe(c.id) + '" style="padding:8px 12px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Conferi</button></div>') : '') + '</div>';
     }).join('') || '<p class="soft">Nenhum caixa no dia.</p>';
     document.querySelectorAll('.rvBtn').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('/network/cash-sessions/' + b.dataset.id + '/review', 'POST', { note: b.parentNode.querySelector('.rvNote').value.trim() }); await loadUnitDay(); } catch (e) { $('upMsg').textContent = e.message; b.disabled = false; } });
-    $('upSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + x.at + '</td><td>' + x.sale_number + '</td><td>' + safe(x.seller || '') + '</td><td>' + safe(x.customer || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + PM[x.payment_method] + (x.offline_payment ? ' (maquininha avulsa' + (x.econf_done ? ', conciliada' : '') + ')' : '') + '</td><td>' + (x.fiscal_status ? FS[x.fiscal_status] || x.fiscal_status : '<span class="soft">—</span>') + '</td></tr>').join('') || '<tr><td colspan="7" class="soft">Nenhuma venda no dia.</td></tr>';
+    $('upSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + x.at + '</td><td>' + x.sale_number + '</td><td>' + safe(x.seller || '') + '</td><td>' + safe(x.customer || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + PM[x.payment_method] + (x.offline_payment ? ' (maquininha avulsa' + (x.econf_done ? ', conciliada' : '') + ')' : '') + '</td><td>' + (x.fiscal_status ? FS[x.fiscal_status] || x.fiscal_status : '<span class="soft">—</span>') + '</td><td>' + (x.canceled ? '' : '<button type="button" class="upFix" data-id="' + safe(x.id) + '" data-n="' + x.sale_number + '" style="border:0;background:none;color:#7a5a12;font-weight:600;cursor:pointer">Corrigir</button>') + '</td></tr>'
+      + '<tr class="fixRow" data-for="' + safe(x.id) + '" hidden><td colspan="8"></td></tr>').join('') || '<tr><td colspan="8" class="soft">Nenhuma venda no dia.</td></tr>';
+    document.querySelectorAll('.upFix').forEach(b => b.onclick = () => openFix(id, b.dataset.id, b.dataset.n));
+  }
+  let sellersCache = {};
+  async function openFix(unitId, saleId, n) {
+    const row = document.querySelector('.fixRow[data-for="' + saleId + '"]'); if (!row.hidden) { row.hidden = true; return; }
+    const sellers = sellersCache[unitId] || (sellersCache[unitId] = await api('/network/units/' + unitId + '/sellers'));
+    const inp = 'padding:7px;border:1px solid #dcd8cd;border-radius:8px';
+    row.firstElementChild.innerHTML = '<div style="background:#faf9f6;border:1px solid #ebe9e3;border-radius:10px;padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:end">'
+      + '<b style="width:100%">Corrigir a venda nº ' + n + '</b>'
+      + '<label class="soft" style="display:flex;flex-direction:column;font-size:12px">Vendedora<select class="fxSeller" style="' + inp + '"><option value="">manter</option>' + sellers.map(x => '<option value="' + safe(x.id) + '">' + safe(x.name) + '</option>').join('') + '</select></label>'
+      + '<label class="soft" style="display:flex;flex-direction:column;font-size:12px">Forma de pagamento<select class="fxPay" style="' + inp + '"><option value="">manter</option><option value="cash">Dinheiro</option><option value="pix">Pix</option><option value="debit">Débito</option><option value="credit">Crédito</option></select></label>'
+      + '<label class="soft" style="display:flex;flex-direction:column;font-size:12px;position:relative">Cliente (nome, CPF ou telefone)<input class="fxCust" style="' + inp + ';width:220px" placeholder="manter"><div class="fxSug"></div></label>'
+      + '<label class="soft" style="display:flex;flex-direction:column;font-size:12px;flex:1;min-width:200px">Motivo<input class="fxWhy" style="' + inp + '" placeholder="Ex.: venda registrada com a vendedora errada"></label>'
+      + '<button type="button" class="fxGo" style="padding:8px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Salvar correção</button><span class="soft fxMsg" style="width:100%"></span></div>';
+    row.hidden = false;
+    let custId = null; const ci = row.querySelector('.fxCust'), sug = row.querySelector('.fxSug');
+    ci.oninput = async () => { custId = null; const t = ci.value.trim(); if (t.length < 2) { sug.innerHTML = ''; return; }
+      const list = await api('/network/customers/search?q=' + encodeURIComponent(t)).catch(() => []);
+      sug.innerHTML = list.map(c => '<button type="button" data-id="' + safe(c.id) + '" style="display:block;border:0;background:#fff;text-align:left;padding:4px 6px;cursor:pointer;width:100%">' + safe(c.name) + ' <span class="soft">' + safe(c.phone || '') + ' · ' + safe(c.unit) + '</span></button>').join('');
+      sug.querySelectorAll('button').forEach(b => b.onclick = () => { custId = b.dataset.id; ci.value = b.textContent; sug.innerHTML = ''; }); };
+    row.querySelector('.fxGo').onclick = async () => {
+      const body = { reason: row.querySelector('.fxWhy').value.trim() };
+      if (row.querySelector('.fxSeller').value) body.seller_id = row.querySelector('.fxSeller').value;
+      if (row.querySelector('.fxPay').value) body.payment_method = row.querySelector('.fxPay').value;
+      if (custId) body.customer_id = custId;
+      const m = row.querySelector('.fxMsg');
+      try { const r = await api('/network/sales/' + saleId + '/correct', 'POST', body); m.textContent = 'Corrigido.' + (r.cashback_earned_cents ? ' A cliente ganhou ' + brl(r.cashback_earned_cents) + ' de cashback.' : ''); setTimeout(() => loadUnitDay().catch(() => {}), 900); }
+      catch (e) { m.textContent = e.message; }
+    };
   }
   $('upDate').onchange = () => loadUnitDay().catch(e => { $('upMsg').textContent = e.message; });
 
@@ -328,6 +365,7 @@
     $('cbOn').checked = d.cashback.enabled; $('cbPct').value = String(d.cashback.percent).replace('.', ','); $('cbDays').value = d.cashback.valid_days; $('cbMax').value = d.cashback.max_use_percent; $('cbMin').value = money(d.cashback.min_sale_cents);
     $('cbNote').textContent = (d.cashback.uniform ? '' : 'Hoje as unidades estão com regras diferentes; ao salvar, todas ficam iguais. ') + 'A regra vale para todas as unidades, porque o cashback é usado em qualquer uma.';
     const m = d.messages; $('mgRev').checked = m.review_enabled; $('mgRevD').value = m.review_delay_days; $('mgExp').checked = m.expiring_enabled; $('mgExpD').value = m.expiring_days; $('mgBday').checked = m.birthday_enabled;
+    $('stMin').value = d.stock.low_stock_min; $('stCred').value = d.stock.credit_valid_days;
     $('txThanks').value = m.texts.thanks; $('txReview').value = m.texts.review; $('txExp').value = m.texts.expiring; $('txBday').value = m.texts.birthday;
     $('ucRows').innerHTML = d.units.map(u => '<tr data-id="' + safe(u.id) + '"><td>' + safe(u.name) + '</td><td><input class="ucWa" value="' + safe(u.whatsapp || '') + '" placeholder="(85) 9…"' + (u.editable ? '' : ' disabled') + '></td><td><input class="ucH" value="' + safe(u.opening_hours || '') + '" placeholder="Seg a sáb, 10h às 22h"' + (u.editable ? '' : ' disabled') + '></td><td><input class="ucG" value="' + safe(u.google_review_url || '') + '" placeholder="https://g.page/r/…/review"' + (u.editable ? '' : ' disabled') + '></td><td>' + (u.editable ? '<button type="button" class="btn ucSave">Salvar</button>' : '') + '</td></tr>').join('');
     document.querySelectorAll('.ucSave').forEach(b => b.onclick = async () => { const tr = b.closest('tr'); $('ucMsg').textContent = ''; try { await api('/network/units/' + tr.dataset.id + '/contact', 'PUT', { whatsapp: tr.querySelector('.ucWa').value, opening_hours: tr.querySelector('.ucH').value, google_review_url: tr.querySelector('.ucG').value.trim() }); $('ucMsg').textContent = 'Salvo.'; } catch (e) { $('ucMsg').textContent = e.message; } });
@@ -345,6 +383,16 @@
   $('mgSave').onclick = async () => { $('mgMsg').textContent = ''; try { await api('/network/settings/messages', 'PUT', { review_enabled: $('mgRev').checked, review_delay_days: Number($('mgRevD').value), expiring_enabled: $('mgExp').checked, expiring_days: Number($('mgExpD').value), birthday_enabled: $('mgBday').checked, texts: { thanks: $('txThanks').value, review: $('txReview').value, expiring: $('txExp').value, birthday: $('txBday').value } }); $('mgMsg').textContent = 'Salvo.'; } catch (e) { $('mgMsg').textContent = e.message; } };
   { const t = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); $('cpFrom').value = t; $('cpTo').value = t; }
   $('cpSave').onclick = async () => { $('cpMsg').textContent = ''; try { await api('/network/campaigns', 'POST', { title: $('cpTitle').value.trim(), body: $('cpBody').value.trim(), audience: $('cpAud').value, starts_on: $('cpFrom').value, ends_on: $('cpTo').value }); $('cpTitle').value = ''; $('cpBody').value = ''; $('cpMsg').textContent = 'Campanha criada.'; await loadCampaigns(); } catch (e) { $('cpMsg').textContent = e.message; } };
+  $('stSave').onclick = async () => { $('stMsg').textContent = ''; try { await api('/network/settings/stock', 'PUT', { low_stock_min: Number($('stMin').value), credit_valid_days: Number($('stCred').value) }); $('stMsg').textContent = 'Salvo.'; } catch (e) { $('stMsg').textContent = e.message; } };
+  { const t = day(); $('exTo').value = t; $('exFrom').value = t.slice(0, 8) + '01'; }
+  document.querySelectorAll('.exBtn').forEach(b => b.onclick = async () => {
+    $('exMsg').textContent = 'Gerando…';
+    try {
+      const r = await fetch('/api/network/export/' + b.dataset.k + '?from=' + $('exFrom').value + '&to=' + $('exTo').value, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) throw Error((await r.json().catch(() => ({}))).error || 'Erro ao exportar');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || b.dataset.k + '.csv'; a.click(); $('exMsg').textContent = '';
+    } catch (e) { $('exMsg').textContent = e.message; }
+  });
   loadSettings().catch(e => { $('cmInfo').textContent = e.message; });
 
   const refresh = () => load().catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
@@ -355,7 +403,7 @@
     else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
     if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
     $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
-    if (user?.access !== 'supervisor') window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') });
+    if (user?.access !== 'supervisor') { window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') }); $('exCard').hidden = false; }
   }).catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
   $('unitSel').onchange = () => { draw(); loadUnitDay().catch(e => { $('upMsg').textContent = e.message; }); };
   $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });

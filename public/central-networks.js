@@ -91,6 +91,7 @@
       + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button>'
         + '<button type="button" class="ct-btn ghost" id="netImport" style="margin-left:auto">Importar peças para todas as unidades</button></div>'
       + '<p class="ct-muted" style="margin:8px 0 0">Cada unidade é uma loja com CNPJ, caixa e estoque próprios. Crie as lojas em "Lojas" e ligue aqui.</p></section>'
+      + '<section><h2>Exportar dados da rede</h2><p class="ct-muted">Planilhas (CSV) de todo o período. Use quando a rede pedir os dados, inclusive bloqueada.</p><p>' + ['vendas', 'itens', 'clientes', 'estoque'].map(k => '<button type="button" class="ct-btn ghost netEx" data-k="' + k + '" style="height:34px;margin-right:6px">' + k[0].toUpperCase() + k.slice(1) + '</button>').join('') + '</p></section>'
       + '<section><h2>Créditos do emissor de NFC-e</h2><p class="ct-muted">Pacote de operações comprado do emissor (ex.: ACBr API). O dono da rede vê no painel; aviso por e-mail em 85% e 100%.</p><p id="fcNow" class="ct-muted">Carregando…</p>'
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>Emissor<input id="fcProv" value="ACBr API" style="width:140px"></label><label>Operações<input id="fcOps" type="number" min="1" style="width:110px"></label><label>Valor (R$)<input id="fcPrice" inputmode="decimal" style="width:110px"></label><label>Data da compra<input id="fcDate" type="date"></label><button type="button" class="ct-btn" id="fcAdd">Registrar pacote</button></div>'
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:10px"><label>Usado segundo o painel do emissor<input id="fcUsed" type="number" min="0" style="width:140px"></label><button type="button" class="ct-btn ghost" id="fcAdj">Acertar usado</button></div></section>'
@@ -164,6 +165,11 @@
       return 'Loja tirada da rede.';
     }));
     el('unAddBtn').onclick = act(async () => { await api('/master/tenants/' + el('unAdd').value + '/network', 'PATCH', { network_id: net.id }); return 'Loja ligada à rede.'; });
+    document.querySelectorAll('.netEx').forEach(b => b.onclick = act(async () => {
+      const r = await fetch('/api/master/networks/' + net.id + '/export/' + b.dataset.k, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) throw Error((await r.json().catch(() => ({}))).error || 'Erro ao exportar');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = net.slug + '-' + b.dataset.k + '.csv'; a.click(); return 'Planilha baixada.';
+    }));
     const fcShow = c => { el('fcNow').innerHTML = c.purchased ? '<b>' + c.used.toLocaleString('pt-BR') + ' de ' + c.purchased.toLocaleString('pt-BR') + '</b> usadas (' + c.percent.toLocaleString('pt-BR') + '%) · ' + c.packages.length + ' pacote(s)' : 'Nenhum pacote registrado.'; };
     api('/master/networks/' + net.id + '/fiscal-credits').then(fcShow).catch(e => { el('fcNow').textContent = e.message; });
     el('fcDate').value = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);

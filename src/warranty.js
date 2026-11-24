@@ -12,7 +12,7 @@ export function registerWarranty(app, { q, auth, roles, route, bad, valid, audit
   const network = [auth, roles('network')];
   const tz = 'America/Fortaleza';
   const saleView = async code => {
-    const r = await q(`SELECT x.id, x.tenant_id, x.receipt_code, x.sale_number, x.total_cents, x.payment_method, x.canceled_at,
+    const r = await q(`SELECT x.id, x.tenant_id, x.customer_id, x.receipt_code, x.sale_number, x.total_cents, x.payment_method, x.canceled_at,
         to_char(x.created_at AT TIME ZONE $2, 'YYYY-MM-DD') sold_on, to_char(x.created_at AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') sold_at,
         coalesce(t.unit_label, t.name) unit, t.name store_name, t.cnpj, t.network_id, n.name network_name, n.warranty_rules, t.google_review_url, c.name customer_name,
         coalesce((SELECT json_agg(json_build_object('name', i.name, 'code', i.barcode, 'quantity', i.quantity, 'total_cents', i.total_cents) ORDER BY i.position) FROM sale_items i WHERE i.sale_id = x.id), '[]') items
@@ -41,10 +41,11 @@ export function registerWarranty(app, { q, auth, roles, route, bad, valid, audit
     const s = await saleView(String(req.params.code || '').trim());
     const me = (await q('SELECT network_id FROM tenants WHERE id = $1', [req.user.tenant_id])).rows[0];
     if (!s || (s.tenant_id !== req.user.tenant_id && (!me?.network_id || me.network_id !== s.network_id))) return bad(res, 404, 'Comprovante não encontrado nesta rede');
-    const claims = (await q(`SELECT w.id, w.kind, w.note, to_char(w.opened_at AT TIME ZONE $2, 'DD/MM/YYYY') opened, w.closed_at IS NOT NULL closed, coalesce(t.unit_label, t.name) unit
-      FROM warranty_claims w JOIN tenants t ON t.id = w.tenant_id WHERE w.sale_id = $1 ORDER BY w.opened_at`, [s.id, tz])).rows;
+    const claims = (await q(`SELECT w.id, w.kind, w.note, to_char(w.opened_at AT TIME ZONE $2, 'DD/MM/YYYY') opened, w.closed_at IS NOT NULL closed, coalesce(t.unit_label, t.name) unit,
+        w.credit_cents, w.tenant_id = $3 mine
+      FROM warranty_claims w JOIN tenants t ON t.id = w.tenant_id WHERE w.sale_id = $1 ORDER BY w.opened_at`, [s.id, tz, req.user.tenant_id])).rows;
     res.set('Cache-Control', 'no-store').json({ id: s.id, code: s.receipt_code, unit: s.unit, sale_number: s.sale_number, sold_at: s.sold_at, total_cents: s.total_cents, canceled: !!s.canceled_at,
-      customer_name: s.customer_name, items: s.items, warranties: s.warranties, claims });
+      customer_name: s.customer_name, has_customer: !!s.customer_id, items: s.items, warranties: s.warranties, claims });
   }));
   app.post('/api/store/warranty/:code/claims', ...kioskStaff, route(async (req, res) => {
     const v = valid(z.object({ kind: z.enum(['troca', 'conserto', 'devolucao', 'outro']), note: z.string().trim().max(300).default(''), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;

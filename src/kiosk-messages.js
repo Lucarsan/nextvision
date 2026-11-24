@@ -145,12 +145,12 @@ export function registerKioskMessages(app, { q, auth, roles, route, bad, valid, 
 
   // ---- Painel da rede: regras do cashback e das mensagens, contato das unidades, campanhas, relatório ----
   app.get('/api/network/settings', ...network, route(async (req, res) => {
-    const n = (await q('SELECT message_settings FROM store_networks WHERE id=$1', [req.user.network_id])).rows[0];
+    const n = (await q('SELECT message_settings, low_stock_min, credit_valid_days FROM store_networks WHERE id=$1', [req.user.network_id])).rows[0];
     const units = (await q(`SELECT id, coalesce(unit_label,name) name, whatsapp, google_review_url, opening_hours, address, cashback_enabled, cashback_percent::float percent,
       cashback_max_use_percent, cashback_valid_days, cashback_min_sale_cents FROM tenants WHERE network_id=$1 ORDER BY lower(coalesce(unit_label,name))`, [req.user.network_id])).rows;
     const scope = req.user.network_access === 'supervisor' ? new Set(req.user.network_unit_ids || []) : null;
     const u0 = units[0] || {};
-    res.set('Cache-Control', 'no-store').json({ can_edit: true, messages: settingsOf(n),
+    res.set('Cache-Control', 'no-store').json({ can_edit: true, messages: settingsOf(n), stock: { low_stock_min: n?.low_stock_min ?? 1, credit_valid_days: n?.credit_valid_days ?? 180 },
       cashback: { enabled: !!u0.cashback_enabled, percent: u0.percent ?? 10, max_use_percent: u0.cashback_max_use_percent ?? 100, valid_days: u0.cashback_valid_days ?? 90, min_sale_cents: u0.cashback_min_sale_cents ?? 0,
         uniform: units.every(x => x.cashback_enabled === u0.cashback_enabled && x.percent === u0.percent && x.cashback_max_use_percent === u0.cashback_max_use_percent && x.cashback_valid_days === u0.cashback_valid_days && x.cashback_min_sale_cents === u0.cashback_min_sale_cents) },
       units: units.map(x => ({ id: x.id, name: x.name, whatsapp: x.whatsapp, google_review_url: x.google_review_url, opening_hours: x.opening_hours, address: x.address, editable: !scope || scope.has(x.id) })) });

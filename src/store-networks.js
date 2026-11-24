@@ -283,13 +283,13 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by
       WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
-    // Estoque baixo: peças com estoque controlado, 1 unidade ou menos, que venderam nos últimos 30 dias.
+    // Estoque baixo: peças com estoque controlado no mínimo da rede (padrão 1) ou menos, que venderam nos últimos 30 dias.
     const low = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
       FROM products p JOIN tenants t ON t.id = p.tenant_id
       JOIN sale_items i ON i.product_id = p.id AND i.tenant_id = p.tenant_id
       JOIN sales s ON s.id = i.sale_id AND s.canceled_at IS NULL AND s.created_at >= now() - interval '30 days'
-      WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND p.active AND p.stock_qty IS NOT NULL AND p.stock_qty <= 1
+      WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND p.active AND p.stock_qty IS NOT NULL AND p.stock_qty <= (SELECT low_stock_min FROM store_networks WHERE id = $1)
       GROUP BY t.unit_label, t.name, p.id ORDER BY sold DESC LIMIT 30`, [req.user.network_id, scope(req)]);
     const lowByUnit = [];
     for (const row of low.rows) { let u = lowByUnit.find(x => x.unit === row.unit); if (!u) lowByUnit.push(u = { unit: row.unit, products: [] }); u.products.push({ name: row.name, stock_qty: row.stock_qty, sold_30d: row.sold }); }

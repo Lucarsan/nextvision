@@ -46,6 +46,11 @@ export async function runNetworkReports(q, now = new Date()) {
   const nets = (await q("SELECT id, name, report_emails FROM store_networks WHERE status = 'active' AND cardinality(report_emails) > 0")).rows;
   const out = [];
   for (const net of nets) {
+    // Sem movimento no dia (nenhuma venda, cancelamento ou caixa): não manda e-mail vazio.
+    const moved = await q(`SELECT 1 FROM tenants t WHERE t.network_id = $1 AND (
+        EXISTS (SELECT 1 FROM sales x WHERE x.tenant_id = t.id AND (x.created_at AT TIME ZONE $3)::date = $2::date)
+        OR EXISTS (SELECT 1 FROM cash_sessions c WHERE c.tenant_id = t.id AND ((c.opened_at AT TIME ZONE $3)::date = $2::date OR (c.closed_at AT TIME ZONE $3)::date = $2::date))) LIMIT 1`, [net.id, day, TZ]);
+    if (!moved.rowCount) { out.push({ network: net.id, day, skipped: true }); continue; }
     const claim = await q(`INSERT INTO network_report_runs(network_id, period_key) VALUES($1, $2)
       ON CONFLICT (network_id, period_key) DO UPDATE SET status = 'sending', attempts = network_report_runs.attempts + 1, updated_at = now()
         WHERE network_report_runs.status = 'error' AND network_report_runs.attempts < 3 AND network_report_runs.updated_at < now() - interval '10 minutes'

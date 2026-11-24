@@ -38,5 +38,9 @@ test('relatórios da rede: faturamento do mês por unidade e resumo diário por 
     assert.match(mine[0].html, /Maracanaú/); assert.match(mine[0].html, /R\$ 130,00/);
     await runNetworkReports(f.db.query.bind(f.db), tomorrow8);
     assert.equal(sent.filter(m => m.subject.startsWith('Audace Joias')).length, 2);
+    // Dia sem movimento (dois dias depois): não manda e-mail.
+    const later = await runNetworkReports(f.db.query.bind(f.db), new Date(tomorrow8.getTime() + 86400000));
+    assert.equal(later.find(o => o.network === net.id).skipped, true);
+    assert.equal(sent.filter(m => m.subject.startsWith('Audace Joias')).length, 2);
   } finally { global.fetch = realFetch; delete process.env.RESEND_API_KEY; delete process.env.EMAIL_FROM; await f.cleanup(); }
 });

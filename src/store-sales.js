@@ -16,6 +16,7 @@ import { matchParts, partKindFor, fold } from './part-match.js';
 import { registerInfinitePay } from './infinitepay.js';
 import bcrypt from 'bcryptjs';
 import { pinOk, authorizerByPin } from './kiosk.js';
+import { linkedIds, linkLocal, searchNetwork, adopt } from './network-customers.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -73,12 +74,17 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   const cbShape = r => ({ balance_cents: r?.balance_cents || 0, next_expires_on: r?.next_on || null, next_expiring_cents: r?.next_cents || 0 });
   async function cashbackFor(tenant, ids, client = { query: q }) {
     if (!ids.length) return new Map();
-    const r = await client.query(`WITH l AS (SELECT customer_id,remaining_cents,expires_on FROM cashback_lots WHERE tenant_id=$1 AND customer_id=ANY($2::uuid[]) AND ${CB_ACTIVE}),
-        n AS (SELECT customer_id,min(expires_on) next_on FROM l GROUP BY 1)
-      SELECT l.customer_id,sum(l.remaining_cents)::int balance_cents,to_char(n.next_on,'YYYY-MM-DD') next_on,
-        (sum(l.remaining_cents) FILTER (WHERE l.expires_on=n.next_on))::int next_cents
-      FROM l JOIN n USING (customer_id) GROUP BY l.customer_id,n.next_on`, [tenant, ids]);
-    const by = new Map(r.rows.map(x => [x.customer_id, x]));
+    // Loja de rede: o saldo soma os lotes das fichas ligadas da mesma cliente nas outras unidades.
+    const linked = await linkedIds(client, tenant, ids);
+    const all = [...new Set([...linked.values()].flat())];
+    const owner = new Map(); for (const [id, list] of linked) for (const x of list) owner.set(x, id);
+    const r = await client.query(`SELECT customer_id,remaining_cents,to_char(expires_on,'YYYY-MM-DD') expires_on FROM cashback_lots WHERE customer_id=ANY($1::uuid[]) AND ${CB_ACTIVE}`, [all]);
+    const agg = new Map();
+    for (const l of r.rows) { const id = owner.get(l.customer_id); const a = agg.get(id) || { balance: 0, lots: [] }; a.balance += l.remaining_cents; a.lots.push(l); agg.set(id, a); }
+    const by = new Map([...agg].map(([id, a]) => {
+      const nextOn = a.lots.reduce((m, l) => (!m || l.expires_on < m ? l.expires_on : m), null);
+      return [id, { balance_cents: a.balance, next_on: nextOn, next_cents: a.lots.filter(l => l.expires_on === nextOn).reduce((x, l) => x + l.remaining_cents, 0) }];
+    }));
     return new Map(ids.map(id => [id, cbShape(by.get(id))]));
   }
   // Percentual guardado como numeric(5,2): calcula em centésimos de ponto para não errar por arredondamento de ponto flutuante.
@@ -286,10 +292,26 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       FROM customer_pets p JOIN customers c ON c.id=p.customer_id AND c.deleted_at IS NULL
       WHERE p.tenant_id=$1 AND p.deleted_at IS NULL AND fp_fold(p.name) LIKE '%'||fp_fold($2)||'%'
       ORDER BY (fp_fold(p.name) LIKE fp_fold($2)||'%') DESC,p.name,c.name LIMIT 12`, [tid(req), term]);
-    const rows = [...r.rows, ...pets.rows], ids = [...new Set(rows.map(x => x.id))];
+    const cpfHit = digits.length === 11 ? (await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND cpf=$2 LIMIT 3', [tid(req), digits])).rows : [];
+    const rows = [...cpfHit, ...r.rows, ...pets.rows].filter((x, i, a) => x.pet || a.findIndex(y => y.id === x.id && !y.pet) === i), ids = [...new Set(rows.map(x => x.id))];
     const progress = await progressFor(tid(req), ids);
     const cashback = await cashbackFor(tid(req), ids);
-    res.json(rows.map(x => ({ ...x, loyalty: progress.get(x.id), cashback: cashback.get(x.id) })));
+    const local = rows.map(x => ({ ...x, loyalty: progress.get(x.id), cashback: cashback.get(x.id) }));
+    // Caixa de loja de rede (?network=1): também mostra clientes cadastradas nas outras unidades.
+    const remote = req.query.network === '1' ? (await searchNetwork({ query: q }, tid(req), term, digits)).map(x => ({ ...x, remote: true })) : [];
+    res.json([...local, ...remote]);
+  }));
+
+  // Traz para esta unidade a cliente achada em outra unidade da rede (cria a ficha local ligada) e devolve como na busca.
+  app.post('/api/store/sales/customers/adopt', ...guard, route(async (req, res) => {
+    const v = valid(z.object({ id: uuid }).strict(), req, res); if (!v) return;
+    const c = await db.connect();
+    let id;
+    try { await c.query('BEGIN'); id = await adopt(c, tid(req), v.id); await c.query('COMMIT'); }
+    catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+    if (!id) return bad(res, 404, 'Cliente não encontrada na rede');
+    const x = (await q('SELECT id,name,phone,offers_opt_out FROM customers WHERE id=$1', [id])).rows[0];
+    res.json({ ...x, loyalty: (await progressFor(tid(req), [id])).get(id), cashback: (await cashbackFor(tid(req), [id])).get(id) });
   }));
 
   app.get('/api/store/sales/customers/:id', ...guard, route(async (req, res) => {
@@ -1058,6 +1080,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
         const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
         customerId = same.rowCount ? same.rows[0].id : (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id;
+        if (!same.rowCount) await linkLocal(c, tid(req), customerId);
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
       let liveOrder = null;
@@ -1290,7 +1313,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
         const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
         if (same.rowCount) customerId = same.rows[0].id;
-        else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; }
+        else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; await linkLocal(c, tid(req), customerId); }
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
       let liveOrder = null;
@@ -1382,8 +1405,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       let cbUsed = 0, cbLots = [];
       if (v.cashback_use_cents) {
         if (!cbCfg.cashback_enabled) { await c.query('ROLLBACK'); return bad(res, 409, 'O cashback está desligado nas Configurações'); }
-        cbLots = (await c.query(`SELECT id,remaining_cents FROM cashback_lots WHERE tenant_id=$1 AND customer_id=$2 AND ${CB_ACTIVE}
-          ORDER BY expires_on,created_at,id FOR UPDATE`, [tid(req), customerId])).rows;
+        // Rede: usa também o saldo gerado nas outras unidades (fichas ligadas da mesma cliente).
+        const mineAll = (await linkedIds(c, tid(req), [customerId])).get(customerId);
+        cbLots = (await c.query(`SELECT id,remaining_cents FROM cashback_lots WHERE customer_id=ANY($1::uuid[]) AND ${CB_ACTIVE}
+          ORDER BY expires_on,created_at,id FOR UPDATE`, [mineAll])).rows;
         const allowed = cbAllowed(total, cbLots.reduce((a, l) => a + l.remaining_cents, 0), cbCfg.cashback_max_use_percent);
         if (v.cashback_use_cents > allowed) { await c.query('ROLLBACK'); return bad(res, 400, allowed ? `O cliente pode usar no máximo ${money(allowed)} de cashback nesta venda. Atualize a venda.` : 'O cliente não tem cashback disponível para esta venda. Atualize a venda.'); }
         cbUsed = v.cashback_use_cents; total -= cbUsed; spread(items, cbUsed);

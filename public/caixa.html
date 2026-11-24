@@ -265,13 +265,15 @@
     clearTimeout(ct); const v = $('custQ').value.trim();
     ct = setTimeout(async () => {
       if (v.length < 2) { $('custResults').hidden = true; return; }
-      const list = await api('/store/sales/customers?q=' + encodeURIComponent(v)).catch(() => []);
-      $('custResults').innerHTML = list.map((c, i) => '<button type="button" data-c="' + i + '"><span>' + safe(c.name) + ' <span class="code">' + safe(c.phone || '') + '</span></span>' + (c.cashback?.balance_cents ? '<strong>' + brl(c.cashback.balance_cents) + '</strong>' : '') + '</button>').join('');
+      const list = await api('/store/sales/customers?network=1&q=' + encodeURIComponent(v)).catch(() => []);
+      $('custResults').innerHTML = list.map((c, i) => '<button type="button" data-c="' + i + '"><span>' + safe(c.name) + ' <span class="code">' + safe(c.phone || '') + '</span>' + (c.remote ? ' <span class="code">· cadastrada em ' + safe(c.unit || 'outra unidade') + '</span>' : '') + '</span>' + (c.cashback?.balance_cents ? '<strong>' + brl(c.cashback.balance_cents) + '</strong>' : '') + '</button>').join('');
       $('custResults').hidden = !list.length;
       $('custResults').querySelectorAll('[data-c]').forEach(b => b.onclick = () => pickCustomer(list[+b.dataset.c]));
     }, 250);
   });
-  function pickCustomer(c) {
+  async function pickCustomer(c) {
+    // Cliente de outra unidade da rede: traz a ficha para esta unidade (o cashback vale em todas).
+    if (c.remote) { try { c = await api('/store/sales/customers/adopt', 'POST', { id: c.id }); } catch (e) { $('scanMsg').textContent = e.message; return; } }
     customer = c; $('custPick').hidden = true; $('custSel').hidden = false; $('newCust').hidden = true;
     $('custName').textContent = c.name;
     const ph = String(c.phone || '').replace(/\D/g, '');

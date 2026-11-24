@@ -34,6 +34,11 @@
   .results button{display:flex;justify-content:space-between;width:100%;border:0;border-bottom:1px solid var(--line);background:#fff;padding:9px 12px;cursor:pointer;text-align:left;font-size:13px}
   .results button:hover{background:#faf8f3}
   table{width:100%;border-collapse:collapse;margin-top:12px}
+  .mxbar{display:flex;gap:8px;flex-wrap:wrap}.mxbar #sfQ{flex:1;min-width:240px}.mxbar select{width:auto}
+  .mxwrap{overflow:auto;max-height:calc(100vh - 290px);margin-top:8px;border:1px solid var(--line);border-radius:10px}
+  table.mx{margin:0}table.mx th{position:sticky;top:0;background:#faf9f6;z-index:1;white-space:nowrap}table.mx th.u,table.mx td.u{text-align:center;min-width:86px}
+  table.mx td{padding:9px 8px}table.mx th.me,table.mx td.me{background:var(--gold-soft)}table.mx td.u b{display:inline-block;min-width:30px;padding:2px 8px;border-radius:999px;background:var(--green-bg);color:var(--green)}
+  table.mx td.u .z{color:#b9b6ad}table.mx td.u .na{color:#d5d2ca}table.mx td.tot{font-weight:700;text-align:right}
   th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
   td{padding:11px 6px;border-bottom:1px solid var(--line);color:var(--ink)}
   .n{text-align:right;white-space:nowrap}.code{color:var(--muted);font-size:13px}
@@ -196,7 +201,11 @@
     <section id="viewStock" hidden>
       <div class="top"><div><h1>Estoque</h1><p class="sub" id="stSub">Consulta na rede, transferências e contagem</p></div>
         <div class="chips" id="stTabs"><button type="button" class="chip ok" data-t="find">Consultar</button><button type="button" class="chip" data-t="recv">Receber <span id="recvN"></span></button><button type="button" class="chip" data-t="send">Enviar</button><button type="button" class="chip" data-t="count">Contagem</button></div></div>
-      <div class="card" id="tFind"><input class="field" id="sfQ" placeholder="Bipe ou digite o código ou nome da peça" autocomplete="off"><div id="sfRes"></div></div>
+      <div class="card" id="tFind">
+        <div class="mxbar"><input class="field" id="sfQ" placeholder="Filtrar: bipe ou digite código ou nome (opcional)" autocomplete="off"><select class="field" id="sfFam"><option value="">Todas as famílias</option></select><select class="field" id="sfOnly"><option value="">Todas as peças</option><option value="in_stock">Com estoque na rede</option><option value="mine_zero">Acabou aqui, tem em outra unidade</option><option value="zero">Sem estoque em nenhuma</option></select></div>
+        <p class="sub" id="sfInfo" style="margin:10px 0 0"></p>
+        <div class="mxwrap"><table class="mx"><thead id="sfHead"></thead><tbody id="sfRes"></tbody></table></div>
+        <div style="text-align:center;margin-top:10px"><button type="button" class="linkbtn" id="sfMore" hidden>Mostrar mais peças</button></div></div>
       <div class="card" id="tRecv" hidden><div id="rvList"></div></div>
       <div class="card" id="tSend" hidden>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><select class="field" id="sdTo" style="width:auto"></select><input class="field" id="sdScan" placeholder="Bipe as peças que vão na transferência" autocomplete="off" style="flex:1;min-width:220px"></div>
@@ -556,16 +565,27 @@
   async function openStock() {
     if (!netUnits) { netUnits = await api('/store/network-units'); $('sdTo').innerHTML = '<option value="">Enviar para…</option>' + netUnits.units.filter(u => u.id !== netUnits.me?.id).map(u => '<option value="' + safe(u.id) + '">' + safe(u.label) + (u.depot ? ' (depósito)' : '') + '</option>').join(''); }
     try { const c = JSON.parse(localStorage.getItem(countKey()) || 'null'); if (c) counts = c; } catch { }
-    drawSend(); drawCount(); loadRecv(); stTab(unit?.depot ? 'send' : 'find');
+    drawSend(); drawCount(); loadRecv(); stTab(unit?.depot ? 'send' : 'find'); findStock();
   }
   let sfT;
   $('sfQ').addEventListener('input', () => { clearTimeout(sfT); sfT = setTimeout(findStock, 300); });
   $('sfQ').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(sfT); findStock(); } });
-  async function findStock() {
-    const v = $('sfQ').value.trim(); if (v.length < 2) { $('sfRes').innerHTML = ''; return; }
-    const list = await api('/store/stock/network?q=' + encodeURIComponent(v)).catch(() => []);
-    $('sfRes').innerHTML = list.map(p => '<div style="border-top:1px solid var(--line);padding:10px 0"><strong>' + safe(p.name) + '</strong> <span class="code">' + safe(p.code) + ' · ' + brl(p.price_cents) + '</span><div class="units" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'
-      + p.units.map(u => '<span class="chip' + (u.stock > 0 ? ' ok' : '') + '"' + (u.mine ? ' style="outline:2px solid var(--ink)"' : '') + '>' + safe(u.unit) + ': ' + u.stock + '</span>').join('') + '</div></div>').join('') || '<p class="sub">Nenhuma peça encontrada.</p>';
+  let mxOff = 0, mxFams = false;
+  $('sfFam').onchange = () => findStock(); $('sfOnly').onchange = () => findStock();
+  $('sfMore').onclick = () => findStock(true);
+  async function findStock(more) {
+    if (!more) mxOff = 0;
+    const qs = new URLSearchParams({ q: $('sfQ').value.trim(), family: $('sfFam').value, only: $('sfOnly').value, offset: mxOff, limit: 300 });
+    let d; try { d = await api('/store/stock/matrix?' + qs); } catch (e) { $('sfInfo').textContent = e.message; return; }
+    if (!mxFams && d.families.length) { $('sfFam').innerHTML = '<option value="">Todas as famílias</option>' + d.families.map(f => '<option>' + safe(f) + '</option>').join(''); mxFams = true; }
+    $('sfHead').innerHTML = '<tr><th>Peça</th><th class="n">Preço</th>' + d.units.map(u => '<th class="u' + (u.mine ? ' me' : '') + '">' + safe(u.label) + (u.mine ? '<br><small>aqui</small>' : u.depot ? '<br><small>depósito</small>' : '') + '</th>').join('') + '<th class="n">Rede</th></tr>';
+    const rows = d.items.map(p => '<tr><td><strong>' + safe(p.name) + '</strong><br><span class="code">' + safe(p.code || 'sem código') + (p.family ? ' · ' + safe(p.family) : '') + '</span></td><td class="n">' + brl(p.price_cents) + '</td>'
+      + p.stock.map((n, i) => '<td class="u' + (d.units[i].mine ? ' me' : '') + '">' + (!p.has[i] ? '<span class="na" title="Peça não cadastrada nesta unidade">—</span>' : n > 0 ? '<b>' + n + '</b>' : '<span class="z">0</span>') + '</td>').join('')
+      + '<td class="tot">' + p.total + '</td></tr>').join('');
+    $('sfRes').innerHTML = more ? $('sfRes').innerHTML + rows : (rows || '<tr><td colspan="' + (d.units.length + 3) + '" class="sub">Nenhuma peça.</td></tr>');
+    mxOff = d.offset + d.items.length;
+    $('sfInfo').textContent = d.total + (d.total === 1 ? ' peça' : ' peças') + ' · mostrando ' + mxOff + ' · em verde, quantas há em cada unidade';
+    $('sfMore').hidden = mxOff >= d.total;
   }
   async function loadRecv() {
     const list = await api('/store/transfers').catch(() => []);

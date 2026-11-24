@@ -100,10 +100,15 @@ test('central monta a rede e o dono da rede vê o painel', {
     assert.match(alerts, /Possível venda duplicada/); assert.match(alerts, /1 venda cancelada hoje/); assert.match(alerts, /Estoque baixo em Maracanaú/);
     await rp.screenshot(shot('painel-rede'));
     // Filtro por unidade.
-    await rp.selectOption('#unitSel', { label: 'Solares' });
+    await rp.click('#unitBtn'); await rp.click('#unitList li:has-text("Solares")');
     assert.match(await rp.textContent('#sub'), /Solares/);
     assert.doesNotMatch(await rp.textContent('#alerts'), /Maracanaú/);
-    await rp.selectOption('#unitSel', '');
+    await rp.click('#unitBtn'); await rp.click('#unitList li[data-v=""]');
+    // Estoque centralizado: lista aberta sem digitar.
+    await rp.click('#nav a[data-page="estoque"]'); await rp.waitForSelector('#mxBody tr td strong');
+    assert.match(await rp.textContent('#mxHead'), /Maracanaú/); assert.match(await rp.textContent('#mxHead'), /Solares/);
+    await rp.screenshot(shot('painel-rede-estoque'));
+    await rp.click('#nav a[data-page="overview"]');
     await rp.setViewportSize({ width: 390, height: 844 }); await rp.screenshot(shot('painel-rede-celular'));
 
     // Caixa do quiosque (p. 8): senha da unidade, bipa a peça, vendedora confirma com PIN, finaliza.
@@ -128,6 +133,11 @@ test('central monta a rede e o dono da rede vê o painel', {
     await kp.click('#finish');
     await kp.waitForFunction(() => !document.getElementById('doneBox').hidden);
     assert.match(await kp.textContent('#doneBox'), /Venda nº \d+ registrada · R\$\s?268,00/);
+    // Estoque da rede no quiosque: a lista já vem aberta, com uma coluna por unidade.
+    await kp.click('[data-view="stock"]'); await kp.waitForSelector('#sfRes tr td strong');
+    assert.match(await kp.textContent('#sfHead'), /Maracanaú/); assert.match(await kp.textContent('#sfRes'), /Corrente Aço Elo P/);
+    await kp.screenshot(shot('caixa-estoque'));
+    await kp.click('[data-view="cash"]');
     // Meu dia (p. 11): só depois do PIN.
     await kp.click('[data-view="day"]');
     await kp.click('#daySellers button');

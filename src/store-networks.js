@@ -1,3 +1,4 @@
+import { tierFor } from './commission-tiers.js';
 // Rede de lojas: várias unidades (tenants) sob uma marca, com um painel geral para o dono da rede.
 // - Central (master): cria a rede, liga e desliga unidades, define CNPJ e rótulo de cada unidade e cria o login do dono da rede.
 // - Dono da rede (role 'network'): vê as unidades e o faturamento por unidade. Não opera caixa nem vê dados de clientes.
@@ -55,6 +56,31 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       await audit(req, 'update', 'store_network', req.params.id, null);
       res.json(networkOut(r.rows[0]));
     } catch (e) { if (!uniqueError(e, res, 'Endereço')) throw e; }
+  }));
+
+  // Faixas de comissão da rede (central).
+  app.put('/api/master/networks/:id/commission-tiers', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const v = valid(z.object({ tiers: z.array(z.object({ min_cents: z.number().int().min(0).max(1000000000), percent: z.number().min(0).max(50).multipleOf(0.01) }).strict()).max(10) }).strict(), req, res); if (!v) return;
+    const tiers = [...v.tiers].sort((a, b) => a.min_cents - b.min_cents);
+    if (new Set(tiers.map(t => t.min_cents)).size !== tiers.length) return bad(res, 400, 'Duas faixas com o mesmo valor mínimo');
+    const r = await q('UPDATE store_networks SET commission_tiers = $2 WHERE id = $1 RETURNING commission_tiers', [req.params.id, JSON.stringify(tiers)]);
+    if (!r.rowCount) return bad(res, 404, 'Rede não encontrada');
+    await audit(req, 'update', 'commission_tiers', req.params.id); res.json(r.rows[0]);
+  }));
+  // Painel da rede: vendas do mês e comissão por vendedora (faixas da rede).
+  app.get('/api/network/commissions', ...network, route(async (req, res) => {
+    const m = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).safeParse(req.query);
+    if (!m.success) return bad(res, 400, 'Mês inválido');
+    const month = m.data.month || (await q("SELECT to_char(now() AT TIME ZONE $1, 'YYYY-MM') m", [STORE_TZ])).rows[0].m;
+    const tiers = (await q('SELECT commission_tiers FROM store_networks WHERE id = $1', [req.user.network_id])).rows[0]?.commission_tiers || [];
+    const r = await q(`SELECT u.id, u.name, coalesce(t.unit_label, t.name) unit, coalesce(sum(x.total_cents) FILTER (WHERE x.id IS NOT NULL), 0)::bigint total, count(x.id)::int n
+      FROM users u JOIN tenants t ON t.id = u.tenant_id
+      LEFT JOIN sales x ON x.seller_id = u.id AND x.canceled_at IS NULL AND to_char(x.created_at AT TIME ZONE $3, 'YYYY-MM') = $4
+      WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND u.login_kind = 'pin' AND (u.active OR x.id IS NOT NULL)
+      GROUP BY u.id, u.name, t.unit_label, t.name ORDER BY total DESC, u.name`, [req.user.network_id, scope(req), STORE_TZ, month]);
+    const rows = r.rows.map(x => { const tt = tierFor(tiers, Number(x.total)); return { id: x.id, name: x.name, unit: x.unit, sales_count: x.n, total_cents: Number(x.total), percent: tt ? tt.percent : 0, commission_cents: tt ? tt.estimated_cents : 0, next: tt?.next || null }; });
+    res.set('Cache-Control', 'no-store').json({ month, tiers, sellers: rows, total_commission_cents: rows.reduce((a, x) => a + x.commission_cents, 0) });
   }));
 
   app.get('/api/master/networks/:id/units', ...master, route(async (req, res) => {

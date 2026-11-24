@@ -95,6 +95,8 @@
       </section>
       <section class="card attn"><h2>Precisa de atenção</h2><div id="alerts"></div></section>
     </div>
+    <section class="card" style="margin-top:16px"><div class="units-head"><h2>Comissões do mês</h2><span id="commInfo"></span></div>
+      <div class="wrap"><table><thead><tr><th>Vendedora</th><th>Unidade</th><th class="n">Vendas</th><th class="n">Vendido no mês</th><th class="n">Faixa</th><th class="n">Comissão prevista</th><th>Próxima faixa</th></tr></thead><tbody id="commRows"></tbody></table></div></section>
   </main>
 </div>
 <script src="/billing-banner.js?v=1"></script>
@@ -175,6 +177,14 @@
     const cur = $('unitSel').value;
     $('unitSel').innerHTML = '<option value="">Todas as unidades</option>' + data.units.map(u => '<option value="' + safe(u.id) + '"' + (u.id === cur ? ' selected' : '') + '>' + safe(u.name) + '</option>').join('');
     draw(); $('feedback').textContent = '';
+    loadComm().catch(() => {});
+  }
+  async function loadComm() {
+    const c = await api('/network/commissions');
+    const sel = $('unitSel').selectedOptions[0]?.textContent, all = !$('unitSel').value;
+    const rows = c.sellers.filter(x => all || x.unit === sel);
+    $('commInfo').textContent = c.tiers.length ? 'Faixas: ' + c.tiers.map(t => t.percent.toLocaleString('pt-BR') + '% a partir de ' + brl(t.min_cents)).join(' · ') : 'Faixas de comissão ainda não definidas';
+    $('commRows').innerHTML = rows.map(x => '<tr><td>' + safe(x.name) + '</td><td>' + safe(x.unit) + '</td><td class="n">' + x.sales_count + '</td><td class="n">' + brl(x.total_cents) + '</td><td class="n">' + (c.tiers.length ? x.percent.toLocaleString('pt-BR') + '%' : '—') + '</td><td class="n">' + (c.tiers.length ? brl(x.commission_cents) : '—') + '</td><td>' + (x.next ? 'faltam ' + brl(x.next.missing_cents) + ' para ' + x.next.percent.toLocaleString('pt-BR') + '%' : (c.tiers.length ? 'faixa máxima' : '')) + '</td></tr>').join('') || '<tr><td colspan="7" class="soft">Nenhuma vendedora.</td></tr>';
   }
   const refresh = () => load().catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
 

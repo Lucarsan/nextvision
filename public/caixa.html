@@ -399,7 +399,7 @@
     $('dMine').textContent = brl(d.today.total_cents); $('dMineN').textContent = d.today.count + (d.today.count === 1 ? ' venda' : ' vendas');
     $('dStore').textContent = brl(d.store_today.total_cents); $('dStoreN').textContent = d.store_today.count + (d.store_today.count === 1 ? ' venda na unidade' : ' vendas na unidade');
     $('dComm').textContent = d.commission.percent ? brl(d.commission.estimated_cents) : '—';
-    $('dCommN').textContent = d.commission.percent ? d.commission.percent.toLocaleString('pt-BR') + '% sobre ' + brl(d.month.total_cents) + ' no mês' : 'Faixas de comissão ainda não configuradas';
+    $('dCommN').textContent = d.commission.percent ? d.commission.percent.toLocaleString('pt-BR') + '% sobre ' + brl(d.month.total_cents) + ' no mês' + (d.commission.next ? ' · faltam ' + brl(d.commission.next.missing_cents) + ' para ' + d.commission.next.percent.toLocaleString('pt-BR') + '%' : '') : (d.commission.next ? 'Faltam ' + brl(d.commission.next.missing_cents) + ' para a faixa de ' + d.commission.next.percent.toLocaleString('pt-BR') + '%' : 'Faixas de comissão ainda não configuradas');
     const month = new Date().toLocaleDateString('pt-BR', { month: 'long', timeZone: 'America/Fortaleza' });
     $('dGoalT').textContent = 'Minha meta de ' + month;
     $('dGoalBar').style.width = Math.min(100, d.month.goal_percent || 0) + '%';

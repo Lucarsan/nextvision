@@ -91,6 +91,9 @@
       + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button>'
         + '<button type="button" class="ct-btn ghost" id="netImport" style="margin-left:auto">Importar peças para todas as unidades</button></div>'
       + '<p class="ct-muted" style="margin:8px 0 0">Cada unidade é uma loja com CNPJ, caixa e estoque próprios. Crie as lojas em "Lojas" e ligue aqui.</p></section>'
+      + '<section><h2>Comissão por faixa</h2><p class="ct-muted">A faixa alcançada pelas vendas do mês da vendedora vale sobre o total do mês. Ex.: 2% a partir de R$ 0, 3% a partir de R$ 20.000, 4% a partir de R$ 30.000.</p>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">' + [0, 1, 2].map(i => { const t = (net.commission_tiers || [])[i] || {}; return '<label>A partir de (R$)<input class="tierMin" inputmode="decimal" style="width:120px" value="' + (t.min_cents != null ? (t.min_cents / 100).toFixed(2).replace('.', ',') : '') + '"></label><label>%<input class="tierPct" inputmode="decimal" style="width:70px" value="' + (t.percent != null ? String(t.percent).replace('.', ',') : ['2', '3', '4'][i]) + '"></label>'; }).join('<span style="width:12px"></span>')
+      + '<button type="button" class="ct-btn" id="tierSave">Salvar faixas</button></div></section>'
       + peopleSection(people, units);
     render(list + detail);
     bindList();
@@ -151,6 +154,13 @@
       return 'Loja tirada da rede.';
     }));
     el('unAddBtn').onclick = act(async () => { await api('/master/tenants/' + el('unAdd').value + '/network', 'PATCH', { network_id: net.id }); return 'Loja ligada à rede.'; });
+    el('tierSave').onclick = act(async () => {
+      const mins = [...document.querySelectorAll('.tierMin')], pcts = [...document.querySelectorAll('.tierPct')];
+      const tiers = mins.map((m, i) => ({ m: m.value.trim(), p: pcts[i].value.trim() })).filter(x => x.m !== '' && x.p !== '')
+        .map(x => ({ min_cents: Math.round(Number(x.m.replace(/\./g, '').replace(',', '.')) * 100), percent: Number(x.p.replace(',', '.')) }));
+      await api('/master/networks/' + net.id + '/commission-tiers', 'PUT', { tiers });
+      return 'Faixas de comissão salvas.';
+    });
     bindPeople(net, units, act);
   }
 

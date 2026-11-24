@@ -1,3 +1,4 @@
+import { tierFor, tiersForTenant } from './commission-tiers.js';
 // Acesso por quiosque (proposta da Audace, p. 6 e 7).
 // - O computador do quiosque abre o caixa com a senha da unidade e fica aberto o dia todo.
 // - Vendedora não tem login: toca no nome e digita o PIN de 4 dígitos para confirmar a venda.
@@ -107,13 +108,13 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
     const store = (await q(`SELECT count(*)::int n, coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE x.tenant_id = $1 AND x.canceled_at IS NULL AND ${today}`, [tenant])).rows[0];
     const monthMine = (await q(`SELECT coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE x.tenant_id = $1 AND x.seller_id = $2 AND x.canceled_at IS NULL AND ${month}`, [tenant, s.id])).rows[0];
     const goal = (await q(`SELECT nullif(target_cents, 0) target FROM store_goals WHERE tenant_id = $1 AND user_id = $2 AND month <= date_trunc('month', now() AT TIME ZONE '${tz}')::date ORDER BY month DESC LIMIT 1`, [tenant, s.id])).rows[0];
-    const monthTotal = Number(monthMine.total), pct = Number(s.commission_percent || 0);
+    const monthTotal = Number(monthMine.total), tier = tierFor(await tiersForTenant({ query: q }, tenant), monthTotal), pct = tier ? tier.percent : Number(s.commission_percent || 0);
     res.set('Cache-Control', 'no-store').json({
       seller: { id: s.id, name: s.name },
       today: { total_cents: mine.rows.reduce((a, x) => a + x.total_cents, 0), count: mine.rows.length, sales: mine.rows },
       store_today: { total_cents: Number(store.total), count: store.n },
       month: { total_cents: monthTotal, goal_cents: goal?.target ?? null, goal_percent: goal?.target ? Math.round(monthTotal * 100 / goal.target) : null },
-      commission: { percent: pct, estimated_cents: Math.round(monthTotal * pct / 100) }
+      commission: { percent: pct, estimated_cents: Math.round(monthTotal * pct / 100), tiered: !!tier, next: tier?.next || null }
     });
   }));
 

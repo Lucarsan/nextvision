@@ -121,6 +121,16 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     const cl = await api('/store/cash/close', { method: 'POST', token: kt, body: { counted_cash_cents: 8000, seller_id: ana.id, seller_pin: '1234' } });
     assert.equal(cl.difference_cents, 8000 - (4410 + 4900 - 1000)); assert.match(cl.session.close_note, /fechado por Ana Paula/);
 
+    // Comissão por faixa da rede: Meu dia e painel da rede mostram a faixa alcançada e quanto falta para a próxima.
+    assert.equal((await request(`/master/networks/${net.id}/commission-tiers`, { method: 'PUT', token: masterToken, body: { tiers: [{ min_cents: 0, percent: 2 }, { min_cents: 0, percent: 3 }] } })).status, 400);
+    await api(`/master/networks/${net.id}/commission-tiers`, { method: 'PUT', token: masterToken, body: { tiers: [{ min_cents: 50000, percent: 4 }, { min_cents: 0, percent: 2 }, { min_cents: 10000, percent: 3 }] } });
+    const md2 = await api('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234' } });
+    assert.equal(md2.month.total_cents, 14210); assert.equal(md2.commission.percent, 3); assert.equal(md2.commission.estimated_cents, 426);
+    assert.deepEqual(md2.commission.next, { percent: 4, min_cents: 50000, missing_cents: 50000 - 14210 });
+    const comm = await api('/network/commissions', { token: g.data.token });
+    const anaC = comm.sellers.find(x => x.name === 'Ana Paula');
+    assert.equal(anaC.commission_cents, 426); assert.equal(anaC.percent, 3); assert.equal(comm.tiers.length, 3);
+
     // Trocar a vendedora para supervisora pede e-mail; trocar a senha do quiosque derruba a sessão antiga.
     assert.equal((await request(`/master/network-people/${julia.id}`, { method: 'PATCH', token: masterToken, body: { function: 'supervisor', unit_ids: [tenant] } })).status, 400);
     await new Promise(r => setTimeout(r, 1100));

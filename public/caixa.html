@@ -93,6 +93,7 @@
     <nav class="nav">
       <button type="button" data-view="day"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Meu dia</button>
       <button type="button" data-view="cash" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg>Caixa</button>
+      <button type="button" data-view="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>Mensagens <span id="msgN" style="display:none;background:var(--gold);color:#fff;border-radius:99px;padding:0 7px;font-size:11px;margin-left:4px"></span></button>
       <button type="button" data-view="warranty"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Garantia</button>
       <button type="button" data-view="stock"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Estoque</button>
       <button type="button" data-view="sales"><svg viewBox="0 0 24 24"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h6"/></svg>Vendas e caixa</button>
@@ -176,6 +177,14 @@
         <button type="button" class="linkbtn" id="dayLock" style="margin-top:12px">Sair do Meu dia</button>
       </div>
     </section>
+    <!-- ===== Mensagens para clientes (proposta p. 10 e 16) ===== -->
+    <section id="viewMsgs" hidden>
+      <div class="top"><div><h1>Mensagens</h1><p class="sub" id="mgSub">Mensagens do dia para as clientes desta unidade. Confira o texto e envie pelo WhatsApp do quiosque.</p></div>
+        <div class="chips" id="mgTabs"></div></div>
+      <div class="card" id="mgWarn" hidden style="margin-bottom:12px"></div>
+      <div class="card"><div id="mgList"></div></div>
+    </section>
+
     <!-- ===== Garantia (proposta p. 15) ===== -->
     <section id="viewWarranty" hidden>
       <div class="top"><div><h1>Garantia</h1><p class="sub">Digite o código do comprovante que a cliente recebeu no WhatsApp (vale de qualquer unidade)</p></div></div>
@@ -391,6 +400,14 @@
       $('doneBox').innerHTML = '<strong>Venda nº ' + r.sale.sale_number + ' registrada · ' + brl(r.sale.total_cents) + '</strong><div class="sub" style="margin:2px 0 0">Vendida por ' + safe(seller.name.split(' ')[0]) + (earned ? ' · cashback de ' + brl(earned) : '') + '</div>'
         + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + '<button type="button" id="newSale">Nova venda</button>';
       $('doneBox').hidden = false; $('st1').classList.add('done');
+      if (wa && c?.id) {
+        api('/store/kiosk/messages').then(d => {
+          const m = d.items.find(x => x.type === 'thanks' && x.sale_id === r.sale.id); if (!m) return;
+          const a = $('doneBox').querySelector('a[href^="https://wa.me"]'); if (!a) return;
+          a.href = waLink(m.phone, m.text);
+          a.addEventListener('click', () => { api('/store/kiosk/messages/log', 'POST', { type: 'thanks', customer_id: m.customer_id, sale_id: m.sale_id }).then(msgBadge).catch(() => {}); }, { once: true });
+        }).catch(() => {});
+      }
       $('newSale').onclick = resetSale;
       items = []; seller = null; sellerPin = ''; $('disc').checked = false; $('offline').checked = false; $('offAuth').value = '';
       draw(); $('finish').disabled = true;
@@ -599,10 +616,40 @@
     });
   }
 
+  // ---------- Mensagens ----------
+  const MSG_LABEL = { thanks: 'Obrigado pela compra', review: 'Avaliação no Google', expiring: 'Cashback vencendo', birthday: 'Aniversário', campaign: 'Campanha' };
+  let msgData = null, msgTab = 'all';
+  const waLink = (phone, text) => { const ph = String(phone || '').replace(/\D/g, ''); return 'https://wa.me/' + (ph.length <= 11 ? '55' + ph : ph) + '?text=' + encodeURIComponent(text); };
+  async function loadMsgs() {
+    msgData = await api('/store/kiosk/messages');
+    const n = msgData.items.length; $('msgN').textContent = n; $('msgN').style.display = n ? '' : 'none';
+    const types = Object.keys(MSG_LABEL).filter(t => msgData.counts[t]);
+    if (msgTab !== 'all' && !types.includes(msgTab)) msgTab = 'all';
+    $('mgTabs').innerHTML = '<button type="button" class="chip' + (msgTab === 'all' ? ' ok' : '') + '" data-t="all">Todas (' + n + ')</button>' + types.map(t => '<button type="button" class="chip' + (msgTab === t ? ' ok' : '') + '" data-t="' + t + '">' + MSG_LABEL[t] + ' (' + msgData.counts[t] + ')</button>').join('');
+    $('mgTabs').querySelectorAll('button').forEach(b => b.onclick = () => { msgTab = b.dataset.t; loadMsgs().catch(() => {}); });
+    $('mgWarn').hidden = !msgData.review_link_missing;
+    $('mgWarn').innerHTML = '<b>Falta o link de avaliação do Google desta unidade.</b> <span class="sub">Sem ele, os pedidos de avaliação não aparecem. A gestão cadastra no painel da rede.</span>';
+    const list = msgData.items.filter(x => msgTab === 'all' || x.type === msgTab);
+    $('mgList').innerHTML = list.length ? list.map((x, i) => '<div class="mg" data-i="' + msgData.items.indexOf(x) + '" style="border-bottom:1px solid var(--line);padding:12px 0">'
+      + '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + safe(x.name) + '</b><span class="sub" style="margin:0">' + MSG_LABEL[x.type] + (x.ref ? ' · ' + safe(x.ref) : '') + '</span></div>'
+      + '<textarea class="field mgText" rows="3" style="margin-top:6px;width:100%;font:inherit;font-size:14px">' + safe(x.text) + '</textarea>'
+      + '<div style="display:flex;gap:8px;margin-top:6px"><button type="button" class="go mgSend" style="margin:0;width:auto;padding:0 16px">Enviar pelo WhatsApp</button><button type="button" class="linkbtn mgSkip">Não enviar</button></div></div>').join('')
+      : '<p class="sub">Nenhuma mensagem para enviar agora.</p>';
+    const log = async (el, skip) => { const x = msgData.items[+el.dataset.i]; await api('/store/kiosk/messages/log', 'POST', { type: x.type, customer_id: x.customer_id, ...(x.sale_id ? { sale_id: x.sale_id } : {}), ...(x.campaign ? { campaign: x.campaign } : {}), skip }); };
+    document.querySelectorAll('.mgSend').forEach(b => b.onclick = async () => {
+      const el = b.closest('.mg'), x = msgData.items[+el.dataset.i];
+      window.open(waLink(x.phone, el.querySelector('.mgText').value), '_blank', 'noopener');
+      b.disabled = true; try { await log(el, false); el.style.opacity = .45; b.textContent = 'Enviada'; setTimeout(() => loadMsgs().catch(() => {}), 1500); } catch (e) { alert(e.message); b.disabled = false; }
+    });
+    document.querySelectorAll('.mgSkip').forEach(b => b.onclick = async () => { const el = b.closest('.mg'); b.disabled = true; try { await log(el, true); await loadMsgs(); } catch (e) { alert(e.message); b.disabled = false; } });
+  }
+  const msgBadge = () => api('/store/kiosk/messages').then(d => { msgData = d; const n = d.items.length; $('msgN').textContent = n; $('msgN').style.display = n ? '' : 'none'; }).catch(() => {});
+
   // ---------- Navegação ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock';
+    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock'; $('viewMsgs').hidden = b.dataset.view !== 'msgs';
+    if (b.dataset.view === 'msgs') loadMsgs().catch(e => { $('mgSub').textContent = e.message; });
     if (b.dataset.view === 'stock') openStock().catch(e => { $('stSub').textContent = e.message; });
     if (b.dataset.view === 'warranty') setTimeout(() => $('wCode').focus(), 30);
     if (b.dataset.view === 'day') drawDayPick(); else clearTimeout(dayTimer);
@@ -621,6 +668,7 @@
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;
       draw(); await loadCash(); refreshWho(); refreshStockWho();
       if (unit.depot) document.querySelector('[data-view="stock"]').click();
+      msgBadge(); setInterval(msgBadge, 10 * 60000);
     } catch (e) { $('cashSub').textContent = e.message; }
   })();
   setInterval(() => { if (!$('viewCash').hidden && !items.length) loadCash().catch(() => {}); }, 120000);

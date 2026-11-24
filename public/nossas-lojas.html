@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nossas lojas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#17181d;--text:#2e2f35;--muted:#6b6b70;--bg:#f5f4f0;--line:#ebe9e3;--gold:#b8923a;--green:#1f7a4d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,Arial,sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:24px 16px 40px}
+  .brand{text-align:center;margin:8px 0 6px}.brand b{display:block;font:600 30px/1 "Cormorant Garamond",Georgia,serif;letter-spacing:.2em;color:var(--ink)}.brand i{display:block;font-style:normal;font-size:10px;font-weight:600;letter-spacing:.32em;color:var(--gold);margin-top:6px}
+  .lead{text-align:center;color:var(--muted);font-size:13px;margin:0 0 18px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px}
+  h2{margin:0 0 4px;font-size:17px;color:var(--ink)}
+  p{margin:2px 0;font-size:14px}.soft{color:var(--muted)}
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .row a{flex:1;min-width:130px;text-align:center;padding:10px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px}
+  .wa{background:var(--green);color:#fff}.map{background:#efede8;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b id="bName"></b><i id="bSub"></i></div>
+  <p class="lead">Seu cashback vale em qualquer uma das nossas lojas.</p>
+  <div id="list"><div class="card"><p class="soft">Carregando…</p></div></div>
+</div>
+<script>
+(async () => {
+  const $ = id => document.getElementById(id);
+  const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const slug = location.pathname.split('/').filter(Boolean)[1] || '';
+  try {
+    const r = await fetch('/api/public/stores/' + encodeURIComponent(slug)); if (!r.ok) throw Error();
+    const d = await r.json();
+    document.title = d.name + ' · Nossas lojas';
+    const [first, ...rest] = d.name.trim().split(/\s+/); $('bName').textContent = first.toUpperCase(); $('bSub').textContent = rest.join(' ').toUpperCase();
+    if (/^#[0-9a-f]{6}$/i.test(d.brand_color || '')) document.documentElement.style.setProperty('--gold', d.brand_color);
+    $('list').innerHTML = d.stores.map(s => '<div class="card"><h2>' + safe(s.name) + '</h2>'
+      + (s.address ? '<p>' + safe(s.address) + '</p>' : '') + (s.opening_hours ? '<p class="soft">' + safe(s.opening_hours) + '</p>' : '')
+      + '<div class="row">' + (s.whatsapp ? '<a class="wa" href="https://wa.me/' + safe(s.whatsapp) + '" target="_blank" rel="noopener">WhatsApp</a>' : '')
+      + (s.address ? '<a class="map" href="https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(d.name + ' ' + s.address) + '" target="_blank" rel="noopener">Como chegar</a>' : '') + '</div></div>').join('')
+      || '<div class="card"><p class="soft">Nenhuma loja cadastrada.</p></div>';
+  } catch { $('list').innerHTML = '<div class="card"><p class="soft">Página não encontrada.</p></div>'; }
+})();
+</script>
+</body>
+</html>

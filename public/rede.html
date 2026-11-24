@@ -102,6 +102,54 @@
       <p id="fcText" style="margin:10px 0 0"></p><p class="soft" id="fcUnits" style="margin:6px 0 0"></p></section>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Comissões do mês</h2><span id="commInfo"></span></div>
       <div class="wrap"><table><thead><tr><th>Vendedora</th><th>Unidade</th><th class="n">Vendas</th><th class="n">Vendido no mês</th><th class="n">Faixa</th><th class="n">Comissão prevista</th><th>Próxima faixa</th></tr></thead><tbody id="commRows"></tbody></table></div></section>
+    <section class="card" style="margin-top:16px" id="cmCard"><div class="units-head"><h2>Clientes: cashback e mensagens</h2><span id="cmInfo">Regras da rede, contato das unidades e campanhas</span></div>
+      <style>
+        #cmCard details{border-top:1px solid #ebe9e3;padding:10px 0}#cmCard summary{cursor:pointer;font-weight:600}
+        #cmCard label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#6b6b70}
+        #cmCard input,#cmCard select,#cmCard textarea{padding:8px;border:1px solid #dcd8cd;border-radius:8px;font:inherit;color:#17181d}
+        #cmCard .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:10px}
+        #cmCard .btn{padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer}
+        #cmCard .ck{flex-direction:row;align-items:center;gap:6px;color:#17181d}
+        #cmCard table input{width:100%}
+      </style>
+      <details id="cmCash"><summary>Regras do cashback</summary>
+        <div class="grid4">
+          <label class="ck"><input type="checkbox" id="cbOn"> Cashback ligado</label>
+          <label>% de cashback<input id="cbPct" inputmode="decimal"></label>
+          <label>Validade (dias)<input id="cbDays" type="number" min="7" max="730"></label>
+          <label>Uso máximo por compra (% do valor)<input id="cbMax" type="number" min="1" max="100"></label>
+          <label>Compra mínima para ganhar (R$)<input id="cbMin" inputmode="decimal"></label>
+        </div>
+        <p class="soft" id="cbNote" style="margin:8px 0"></p><button type="button" class="btn" id="cbSave">Salvar regras do cashback</button> <span class="soft" id="cbMsg"></span></details>
+      <details id="cmMsgs"><summary>Mensagens automáticas da fila do quiosque</summary>
+        <div class="grid4">
+          <label class="ck"><input type="checkbox" id="mgRev"> Pedir avaliação no Google</label>
+          <label>Dias depois da compra<input id="mgRevD" type="number" min="0" max="30"></label>
+          <label class="ck"><input type="checkbox" id="mgExp"> Avisar cashback vencendo</label>
+          <label>Dias antes de vencer<input id="mgExpD" type="number" min="1" max="30"></label>
+          <label class="ck"><input type="checkbox" id="mgBday"> Aniversariantes</label>
+        </div>
+        <p class="soft" style="margin:10px 0 4px">Textos. Use {nome}, {loja}, {marca}, {lojas} (link das lojas), {saldo}, {validade}, {cashback}, {comprovante}, {link_avaliacao}, {saldo_frase}.</p>
+        <div class="grid4" style="grid-template-columns:1fr 1fr">
+          <label>Obrigado pela compra<textarea id="txThanks" rows="4"></textarea></label><label>Pedido de avaliação<textarea id="txReview" rows="4"></textarea></label>
+          <label>Cashback vencendo<textarea id="txExp" rows="4"></textarea></label><label>Aniversário<textarea id="txBday" rows="4"></textarea></label>
+        </div><button type="button" class="btn" id="mgSave" style="margin-top:10px">Salvar mensagens</button> <span class="soft" id="mgMsg"></span></details>
+      <details id="cmUnits"><summary>WhatsApp, horário e link do Google de cada unidade</summary>
+        <p class="soft" style="margin:8px 0">O link do Google é o de "Pedir avaliações" do perfil da unidade (g.page/r/…/review). Não é preciso senha.</p>
+        <div class="wrap"><table><thead><tr><th>Unidade</th><th>WhatsApp</th><th>Horário</th><th>Link de avaliação do Google</th><th></th></tr></thead><tbody id="ucRows"></tbody></table></div><span class="soft" id="ucMsg"></span></details>
+      <details id="cmCamp"><summary>Campanhas pelo WhatsApp</summary>
+        <div class="grid4">
+          <label>Nome<input id="cpTitle" maxlength="80" placeholder="Ex.: Dia das Mães"></label>
+          <label>Para quem<select id="cpAud"><option value="all">Todas as clientes</option><option value="inactive_60">Sem comprar há 60 dias</option><option value="birthday_month">Aniversariantes do mês</option><option value="cashback_balance">Com saldo de cashback</option></select></label>
+          <label>Início<input id="cpFrom" type="date"></label><label>Fim<input id="cpTo" type="date"></label>
+        </div>
+        <label style="margin-top:10px">Texto (use {nome}, {saldo}, {lojas})<textarea id="cpBody" rows="3"></textarea></label>
+        <button type="button" class="btn" id="cpSave" style="margin-top:8px">Criar campanha</button> <span class="soft" id="cpMsg"></span>
+        <p class="soft" style="margin:8px 0">Cada unidade vê a campanha na aba Mensagens do quiosque e envia para as clientes dela. Quem pediu para não receber ofertas fica de fora.</p>
+        <div class="wrap"><table><thead><tr><th>Campanha</th><th>Período</th><th class="n">Enviadas</th><th></th></tr></thead><tbody id="cpRows"></tbody></table></div></details>
+      <details id="cmSent"><summary>Mensagens enviadas no mês</summary>
+        <div class="wrap"><table><thead><tr><th>Unidade</th><th class="n">Obrigado</th><th class="n">Avaliação</th><th class="n">Abriram o link</th><th class="n">Cashback vencendo</th><th class="n">Aniversário</th><th class="n">Campanhas</th></tr></thead><tbody id="smRows"></tbody></table></div></details>
+    </section>
   </main>
 </div>
 <script src="/billing-banner.js?v=1"></script>
@@ -113,8 +161,8 @@
   const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const METHOD = { cash: 'dinheiro', pix: 'Pix', debit: 'débito', credit: 'crédito', other: 'outros', mixed: 'pagamento dividido' };
-  const api = async (path, method = 'GET') => {
-    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
+  const api = async (path, method = 'GET', body) => {
+    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); throw Error('Sessão expirada'); }
     if (!r.ok) throw Object.assign(Error(j.error || 'Erro ao carregar'), { status: r.status, pay_url: j.pay_url });
@@ -233,6 +281,32 @@
     $('commInfo').textContent = c.tiers.length ? 'Faixas: ' + c.tiers.map(t => t.percent.toLocaleString('pt-BR') + '% a partir de ' + brl(t.min_cents)).join(' · ') : 'Faixas de comissão ainda não definidas';
     $('commRows').innerHTML = rows.map(x => '<tr><td>' + safe(x.name) + '</td><td>' + safe(x.unit) + '</td><td class="n">' + x.sales_count + '</td><td class="n">' + brl(x.total_cents) + '</td><td class="n">' + (c.tiers.length ? x.percent.toLocaleString('pt-BR') + '%' : '—') + '</td><td class="n">' + (c.tiers.length ? brl(x.commission_cents) : '—') + '</td><td>' + (x.next ? 'faltam ' + brl(x.next.missing_cents) + ' para ' + x.next.percent.toLocaleString('pt-BR') + '%' : (c.tiers.length ? 'faixa máxima' : '')) + '</td></tr>').join('') || '<tr><td colspan="7" class="soft">Nenhuma vendedora.</td></tr>';
   }
+  // ---------- Clientes: cashback e mensagens ----------
+  const money = c => (c / 100).toFixed(2).replace('.', ','), cents = v => Math.round(Number(String(v || '0').replace(/\./g, '').replace(',', '.')) * 100);
+  async function loadSettings() {
+    const d = await api('/network/settings');
+    $('cbOn').checked = d.cashback.enabled; $('cbPct').value = String(d.cashback.percent).replace('.', ','); $('cbDays').value = d.cashback.valid_days; $('cbMax').value = d.cashback.max_use_percent; $('cbMin').value = money(d.cashback.min_sale_cents);
+    $('cbNote').textContent = (d.cashback.uniform ? '' : 'Hoje as unidades estão com regras diferentes; ao salvar, todas ficam iguais. ') + 'A regra vale para todas as unidades, porque o cashback é usado em qualquer uma.';
+    const m = d.messages; $('mgRev').checked = m.review_enabled; $('mgRevD').value = m.review_delay_days; $('mgExp').checked = m.expiring_enabled; $('mgExpD').value = m.expiring_days; $('mgBday').checked = m.birthday_enabled;
+    $('txThanks').value = m.texts.thanks; $('txReview').value = m.texts.review; $('txExp').value = m.texts.expiring; $('txBday').value = m.texts.birthday;
+    $('ucRows').innerHTML = d.units.map(u => '<tr data-id="' + safe(u.id) + '"><td>' + safe(u.name) + '</td><td><input class="ucWa" value="' + safe(u.whatsapp || '') + '" placeholder="(85) 9…"' + (u.editable ? '' : ' disabled') + '></td><td><input class="ucH" value="' + safe(u.opening_hours || '') + '" placeholder="Seg a sáb, 10h às 22h"' + (u.editable ? '' : ' disabled') + '></td><td><input class="ucG" value="' + safe(u.google_review_url || '') + '" placeholder="https://g.page/r/…/review"' + (u.editable ? '' : ' disabled') + '></td><td>' + (u.editable ? '<button type="button" class="btn ucSave">Salvar</button>' : '') + '</td></tr>').join('');
+    document.querySelectorAll('.ucSave').forEach(b => b.onclick = async () => { const tr = b.closest('tr'); $('ucMsg').textContent = ''; try { await api('/network/units/' + tr.dataset.id + '/contact', 'PUT', { whatsapp: tr.querySelector('.ucWa').value, opening_hours: tr.querySelector('.ucH').value, google_review_url: tr.querySelector('.ucG').value.trim() }); $('ucMsg').textContent = 'Salvo.'; } catch (e) { $('ucMsg').textContent = e.message; } });
+    await loadCampaigns();
+    const month = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 7);
+    const sm = await api('/network/messages/summary?month=' + month);
+    $('smRows').innerHTML = sm.map(x => '<tr><td>' + safe(x.unit) + '</td><td class="n">' + x.thanks + '</td><td class="n">' + x.review + '</td><td class="n">' + x.review_clicked + '</td><td class="n">' + x.expiring + '</td><td class="n">' + x.birthday + '</td><td class="n">' + x.campaign + '</td></tr>').join('');
+  }
+  async function loadCampaigns() {
+    const list = await api('/network/campaigns');
+    $('cpRows').innerHTML = list.map(c => '<tr><td>' + safe(c.title) + '<br><span class="soft">' + safe(c.body.slice(0, 80)) + '</span></td><td>' + c.starts_on.split('-').reverse().join('/') + ' a ' + c.ends_on.split('-').reverse().join('/') + '</td><td class="n">' + c.sent + '</td><td><button type="button" class="btn cpTog" data-id="' + safe(c.id) + '" data-on="' + (c.active ? '0' : '1') + '">' + (c.active ? 'Encerrar' : 'Reativar') + '</button></td></tr>').join('') || '<tr><td colspan="4" class="soft">Nenhuma campanha.</td></tr>';
+    document.querySelectorAll('.cpTog').forEach(b => b.onclick = async () => { try { await api('/network/campaigns/' + b.dataset.id, 'PATCH', { active: b.dataset.on === '1' }); await loadCampaigns(); } catch (e) { $('cpMsg').textContent = e.message; } });
+  }
+  $('cbSave').onclick = async () => { $('cbMsg').textContent = ''; try { const r = await api('/network/settings/cashback', 'PUT', { enabled: $('cbOn').checked, percent: Number($('cbPct').value.replace(',', '.')), valid_days: Number($('cbDays').value), max_use_percent: Number($('cbMax').value), min_sale_cents: cents($('cbMin').value) }); $('cbMsg').textContent = 'Salvo nas ' + r.units + ' unidades.'; } catch (e) { $('cbMsg').textContent = e.message; } };
+  $('mgSave').onclick = async () => { $('mgMsg').textContent = ''; try { await api('/network/settings/messages', 'PUT', { review_enabled: $('mgRev').checked, review_delay_days: Number($('mgRevD').value), expiring_enabled: $('mgExp').checked, expiring_days: Number($('mgExpD').value), birthday_enabled: $('mgBday').checked, texts: { thanks: $('txThanks').value, review: $('txReview').value, expiring: $('txExp').value, birthday: $('txBday').value } }); $('mgMsg').textContent = 'Salvo.'; } catch (e) { $('mgMsg').textContent = e.message; } };
+  { const t = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); $('cpFrom').value = t; $('cpTo').value = t; }
+  $('cpSave').onclick = async () => { $('cpMsg').textContent = ''; try { await api('/network/campaigns', 'POST', { title: $('cpTitle').value.trim(), body: $('cpBody').value.trim(), audience: $('cpAud').value, starts_on: $('cpFrom').value, ends_on: $('cpTo').value }); $('cpTitle').value = ''; $('cpBody').value = ''; $('cpMsg').textContent = 'Campanha criada.'; await loadCampaigns(); } catch (e) { $('cpMsg').textContent = e.message; } };
+  loadSettings().catch(e => { $('cmInfo').textContent = e.message; });
+
   const refresh = () => load().catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
 
   api('/network/me').then(({ network, user }) => {

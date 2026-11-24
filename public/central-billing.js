@@ -77,12 +77,22 @@
       + '<label>Forma de pagamento<select id="bType"><option value="UNDEFINED">Cliente escolhe (Pix, boleto ou cartão)</option><option value="PIX">Só Pix</option><option value="BOLETO">Boleto (com Pix)</option></select></label>'
       + '<label>Dias de carência depois do vencimento<input id="bGrace" type="number" min="0" max="60" value="' + a.grace_days + '"></label>'
       + '<label style="display:flex;gap:8px;align-items:center"><input id="bAuto" type="checkbox"' + (a.auto_block ? ' checked' : '') + '> Bloquear sozinho depois da carência</label>'
+      + (selected.network_id ? '<label>Valor por unidade/mês (R$)<input id="bUnit" inputmode="decimal" placeholder="250,00" value="' + (a.unit_price_cents ? money(a.unit_price_cents) : '') + '"></label><label>Dia do vencimento<input id="bDay" type="number" min="1" max="28" value="' + (a.due_day || 20) + '"></label>' : '')
       + '<label>Liberar até (não bloqueia até essa data)<input id="bOverride" type="date" value="' + safe(a.block_override_until ? String(a.block_override_until).slice(0, 10) : '') + '"></label>'
       + '</div><label>Observações<textarea id="bNotes" maxlength="2000" rows="2">' + safe(a.notes || '') + '</textarea></label>'
       + '<p><button type="button" class="ct-btn" id="bSave">Salvar</button> ' + (a.asaas_customer_id ? '<small class="ct-muted">Cliente no Asaas: ' + safe(a.asaas_customer_id) + '</small>' : '') + '</p></section>';
-    if (data?.units?.length > 1) h += '<section><h2>Unidades cobertas</h2><p>' + data.units.map(u => safe(u.unit_label || u.name) + ' ' + chip(u.status === 'suspended' ? 'suspensa' : u.status === 'trial' ? 'teste' : 'ativa', u.status === 'suspended' ? 'bad' : 'ok')).join(' · ') + '</p></section>';
+    const perUnit = !!(selected.network_id && a.unit_price_cents);
+    if (data && perUnit) {
+      const on = data.units.filter(u => u.billing_since);
+      h += '<section><h2>Mensalidade por unidade</h2><p>' + brl(a.unit_price_cents) + ' por unidade liberada · vence todo dia ' + (a.due_day || 20) + '. Hoje: <b>' + on.length + ' de ' + data.units.length + '</b> unidade(s) = <b>' + brl(on.length * a.unit_price_cents) + '/mês</b>.</p>'
+        + '<p class="ct-muted">Liberar cobra o mês cheio já no próximo vencimento em aberto. Parar tira a unidade das próximas cobranças.</p>'
+        + '<table><thead><tr><th>Unidade</th><th>Cobrança</th><th></th></tr></thead><tbody>'
+        + data.units.map(u => '<tr><td>' + safe(u.unit_label || u.name) + '</td><td>' + (u.billing_since ? chip('Liberada desde ' + dmy(u.billing_since), 'ok') : chip('Não cobra', 'muted')) + '</td><td><button type="button" class="ct-btn ' + (u.billing_since ? 'ghost' : '') + ' uBill" style="height:32px" data-id="' + safe(u.id) + '" data-on="' + (u.billing_since ? '0' : '1') + '" data-name="' + safe(u.unit_label || u.name) + '">' + (u.billing_since ? 'Parar de cobrar' : 'Liberar cobrança') + '</button></td></tr>').join('')
+        + '</tbody></table></section>';
+    } else if (data?.units?.length > 1) h += '<section><h2>Unidades cobertas</h2><p>' + data.units.map(u => safe(u.unit_label || u.name) + ' ' + chip(u.status === 'suspended' ? 'suspensa' : u.status === 'trial' ? 'teste' : 'ativa', u.status === 'suspended' ? 'bad' : 'ok')).join(' · ') + '</p>' + (selected.network_id ? '<p class="ct-muted">Para cobrar por unidade, preencha “Valor por unidade/mês” acima e salve.</p>' : '') + '</section>';
     if (data && a.mode === 'charge') {
-      h += '<section><h2>Mensalidade</h2>' + (active
+      if (perUnit) h += '<section><h2>Mensalidade</h2>' + (active ? '<p><b>' + brl(active.value_cents) + '</b> por mês · ' + safe(active.description) + '</p><p class="ct-muted">O valor muda sozinho quando você libera ou para uma unidade.</p>' : '<p class="ct-muted">Nenhuma unidade liberada: ainda não há mensalidade no Asaas.</p>') + '</section>';
+      else h += '<section><h2>Mensalidade</h2>' + (active
         ? '<p><b>' + brl(active.value_cents) + '</b> por mês · ' + safe(active.description) + ' · desde ' + dmy(active.first_due_date) + (active.end_date ? ' até ' + dmy(active.end_date) : '') + '</p><p class="ct-muted">O Asaas gera a cobrança de cada mês e manda ao cliente. Para mudar o valor, cancele e crie outra.</p><button type="button" class="ct-btn ghost" id="sCancel" data-id="' + safe(active.id) + '">Cancelar mensalidade</button>'
         : '<div class="ct-form" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px"><label>Descrição<input id="sDesc" value="Mensalidade Ficou Pronto"></label><label>Valor por mês (R$)<input id="sValue" inputmode="decimal" placeholder="1.750,00"></label><label>Primeiro vencimento<input id="sFirst" type="date"></label><label>Término (opcional)<input id="sEnd" type="date"></label></div><p><button type="button" class="ct-btn" id="sCreate">Criar mensalidade no Asaas</button></p>')
         + '</section>';
@@ -105,10 +115,17 @@
     el('bSave').onclick = async () => {
       el('bSave').disabled = true;
       try {
-        const r = await api('/master/billing/accounts', 'PUT', { ...(selected.network_id ? { network_id: selected.network_id } : { tenant_id: selected.tenant_id }), mode: el('bMode').value, name: el('bName').value.trim(), cpf_cnpj: el('bDoc').value, email: el('bEmail').value.trim(), phone: el('bPhone').value, billing_type: el('bType').value, grace_days: Number(el('bGrace').value), auto_block: el('bAuto').checked, block_override_until: el('bOverride').value || null, notes: el('bNotes').value });
+        const r = await api('/master/billing/accounts', 'PUT', { ...(selected.network_id ? { network_id: selected.network_id } : { tenant_id: selected.tenant_id }), mode: el('bMode').value, name: el('bName').value.trim(), cpf_cnpj: el('bDoc').value, email: el('bEmail').value.trim(), phone: el('bPhone').value, billing_type: el('bType').value, grace_days: Number(el('bGrace').value), auto_block: el('bAuto').checked, block_override_until: el('bOverride').value || null, notes: el('bNotes').value, ...(selected.network_id ? { unit_price_cents: el('bUnit').value.trim() ? toCents(el('bUnit').value) : null, due_day: Number(el('bDay').value) || 20 } : {}) });
         selected.account = r.account.id; await load(); msg(r.warning || 'Cadastro salvo.');
       } catch (e) { msg(e.message); el('bSave').disabled = false; }
     };
+    document.querySelectorAll('.uBill').forEach(b => b.onclick = async () => {
+      const on = b.dataset.on === '1';
+      if (!confirm(on ? 'Liberar a cobrança de ' + b.dataset.name + '? Entra o mês cheio (' + brl(a.unit_price_cents) + ') já na próxima cobrança.' : 'Parar de cobrar ' + b.dataset.name + '? Sai das próximas cobranças em aberto.')) return;
+      b.disabled = true;
+      try { const r = await api('/master/billing/accounts/' + a.id + '/units/' + b.dataset.id, 'POST', { active: on }); await load(); msg(r.warning || (on ? 'Unidade liberada.' : 'Unidade fora da cobrança.') + (r.value_cents !== undefined ? ' Mensalidade agora: ' + brl(r.value_cents) + '.' : '')); }
+      catch (e) { msg(e.message); await load().catch(() => {}); }
+    });
     if (!data || a.mode !== 'charge') return;
     if (el('sCancel')) el('sCancel').onclick = async () => { if (!confirm('Cancelar a mensalidade? O Asaas apaga as cobranças futuras ainda não pagas dela.')) return; try { await api('/master/billing/subscriptions/' + el('sCancel').dataset.id, 'DELETE'); msg('Mensalidade cancelada.'); await load(); } catch (e) { msg(e.message); } };
     if (el('sCreate')) el('sCreate').onclick = async () => {

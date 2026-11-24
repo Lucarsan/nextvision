@@ -30,6 +30,11 @@ async function fakeAsaas() {
       const p = { id: id('pay'), customer: data.customer, subscription: sub.id, value: data.value, dueDate: data.nextDueDate, description: data.description, status: 'PENDING', invoiceUrl: 'https://www.asaas.com/i/' + n }; s.payments.set(p.id, p);
       return send(200, sub);
     }
+    if (req.method === 'PUT' && (m = /^\/subscriptions\/(.+)$/.exec(path))) {
+      const sub = s.subs.get(m[1]); if (!sub) return send(404, {}); Object.assign(sub, { value: data.value, description: data.description });
+      if (data.updatePendingPayments) for (const p of s.payments.values()) if (p.subscription === m[1] && p.status === 'PENDING' && !p.deleted) Object.assign(p, { value: data.value, description: data.description });
+      return send(200, sub);
+    }
     if (req.method === 'DELETE' && (m = /^\/subscriptions\/(.+)$/.exec(path))) { for (const p of s.payments.values()) if (p.subscription === m[1] && p.status === 'PENDING') p.deleted = true; return send(200, { deleted: true }); }
     if (req.method === 'GET' && path === '/webhooks') return send(200, { data: s.webhooks });
     if (req.method === 'POST' && path === '/webhooks') { const w = { id: id('wh'), ...data }; s.webhooks.push(w); return send(200, w); }
@@ -162,5 +167,55 @@ test('cobrança Asaas: cadastro, implantação parcelada, mensalidade, bloqueio 
     const list = await api('/master/billing', { token: masterToken });
     assert.ok(list.accounts.some(a => a.network_id === netw.id && a.mode === 'exempt'));
     assert.ok(!list.accounts.some(a => a.tenant_id === unit.id), 'unidade de rede não aparece sozinha');
+  } finally { await f.cleanup(); await asaas.close(); }
+});
+
+test('cobrança por unidade: liberar unidade cobra o mês cheio na próxima cobrança; parar tira; sem unidade cancela', { skip }, async () => {
+  const asaas = await fakeAsaas();
+  const f = await createStoreFixture({ env: { ASAAS_API_KEY: '$aact_hmlg_teste', ASAAS_API_URL: asaas.url, ASAAS_WEBHOOK_TOKEN: WEBHOOK_TOKEN, BILLING_SYNC: 'off', PUBLIC_BASE_URL: 'https://app.test' } });
+  try {
+    const { api, request, tenant, foreignTenant, masterToken, db } = f;
+    const net = await api('/master/networks', { method: 'POST', token: masterToken, body: { name: 'Rede Teste', slug: 'rede-cobra', hostname: 'rede-cobra.example.test' } }, 201);
+    await api(`/master/tenants/${tenant}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Messejana' } });
+    await api(`/master/tenants/${foreignTenant}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Benfica' } });
+    assert.equal((await request('/master/billing/accounts', { method: 'PUT', token: masterToken, body: { tenant_id: tenant, name: 'X', mode: 'exempt', unit_price_cents: 25000 } })).status, 400);
+    // Sem valor por unidade não libera.
+    let acc = (await api('/master/billing/accounts', { method: 'PUT', token: masterToken, body: { network_id: net.id, name: 'GRK Joias', cpf_cnpj: '46.383.376/0001-23', mode: 'charge' } })).account;
+    assert.equal((await request(`/master/billing/accounts/${acc.id}/units/${tenant}`, { method: 'POST', token: masterToken, body: { active: true } })).status, 409);
+    const saved = await api('/master/billing/accounts', { method: 'PUT', token: masterToken, body: { network_id: net.id, name: 'GRK Joias', cpf_cnpj: '46.383.376/0001-23', mode: 'charge', unit_price_cents: 25000, due_day: 20 } });
+    acc = saved.account; assert.equal(acc.unit_price_cents, 25000); assert.equal(acc.due_day, 20); assert.equal(saved.warning, null);
+    assert.equal(asaas.subs.size, 0, 'nenhuma unidade liberada: sem assinatura');
+    // Mensalidade fixa fica proibida nesta rede.
+    assert.equal((await request(`/master/billing/accounts/${acc.id}/subscriptions`, { method: 'POST', token: masterToken, body: { description: 'Fixa', value_cents: 175000, first_due_date: iso(10) } })).status, 409);
+    // Unidade de outra rede não.
+    assert.equal((await request(`/master/billing/accounts/${acc.id}/units/${acc.id}`, { method: 'POST', token: masterToken, body: { active: true } })).status, 404);
+
+    // Libera Messejana: cria assinatura de R$ 250 no dia 20.
+    let r = await api(`/master/billing/accounts/${acc.id}/units/${tenant}`, { method: 'POST', token: masterToken, body: { active: true } });
+    assert.equal(r.action, 'created'); assert.equal(r.value_cents, 25000);
+    const sub = [...asaas.subs.values()][0];
+    assert.equal(sub.value, 250); assert.equal(sub.cycle, 'MONTHLY'); assert.match(sub.nextDueDate, /-20$/); assert.match(sub.description, /1 unidade: Messejana/);
+    // Libera Benfica: mês cheio na cobrança em aberto (R$ 500).
+    r = await api(`/master/billing/accounts/${acc.id}/units/${foreignTenant}`, { method: 'POST', token: masterToken, body: { active: true } });
+    assert.equal(r.action, 'updated'); assert.equal(r.value_cents, 50000);
+    const pending = [...asaas.payments.values()].filter(p => p.subscription === sub.id && !p.deleted);
+    assert.equal(pending.length, 1); assert.equal(pending[0].value, 500);
+    let detail = await api(`/master/billing/accounts/${acc.id}`, { token: masterToken });
+    assert.equal(detail.subscriptions.filter(s => s.status === 'active').length, 1);
+    assert.equal(detail.subscriptions[0].per_unit, true); assert.equal(detail.subscriptions[0].units, 2);
+    assert.equal(detail.charges.find(c => !c.deleted).value_cents, 50000);
+    assert.equal(detail.units.filter(u => u.billing_since).length, 2);
+    // Repetir não chama o Asaas de novo.
+    const calls = asaas.calls.length;
+    assert.equal((await api(`/master/billing/accounts/${acc.id}/units/${foreignTenant}`, { method: 'POST', token: masterToken, body: { active: true } })).action, undefined);
+    assert.equal(asaas.calls.filter(c => c.startsWith('PUT /subscriptions')).length, asaas.calls.slice(0, calls).filter(c => c.startsWith('PUT /subscriptions')).length);
+    // Para Benfica: volta a R$ 250; para Messejana: cancela a assinatura.
+    r = await api(`/master/billing/accounts/${acc.id}/units/${foreignTenant}`, { method: 'POST', token: masterToken, body: { active: false } });
+    assert.equal(r.value_cents, 25000); assert.equal(pending[0].value, 250);
+    r = await api(`/master/billing/accounts/${acc.id}/units/${tenant}`, { method: 'POST', token: masterToken, body: { active: false } });
+    assert.equal(r.action, 'canceled'); assert.equal(pending[0].deleted, true);
+    detail = await api(`/master/billing/accounts/${acc.id}`, { token: masterToken });
+    assert.equal(detail.subscriptions.filter(s => s.status === 'active').length, 0);
+    assert.equal((await db.query('SELECT count(*)::int n FROM tenants WHERE network_id=$1 AND billing_since IS NOT NULL', [net.id])).rows[0].n, 0);
   } finally { await f.cleanup(); await asaas.close(); }
 });

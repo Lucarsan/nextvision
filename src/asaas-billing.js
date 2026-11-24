@@ -153,11 +153,53 @@ export async function enforce(q, { accountId = null, refresh = true, skip = new 
   return out;
 }
 
+// ---- Mensalidade por unidade (rede) ----
+// Próximo vencimento no dia escolhido: este mês se ainda não passou (inclusive hoje), senão o mês que vem.
+export const nextDueOn = (day, today = todayLocal()) => {
+  const [y, m, d] = today.split('-').map(Number);
+  const base = d <= day ? new Date(Date.UTC(y, m - 1, day)) : new Date(Date.UTC(y, m, day));
+  return base.toISOString().slice(0, 10);
+};
+const perUnitDescription = units => {
+  const names = units.map(u => u.unit_label || u.name).join(', ');
+  return ('Mensalidade Ficou Pronto — ' + units.length + (units.length === 1 ? ' unidade: ' : ' unidades: ') + names).slice(0, 160);
+};
+// Deixa a assinatura do Asaas igual às unidades liberadas: cria, muda o valor (inclusive da cobrança
+// em aberto: mês cheio) ou cancela quando não sobra unidade. Idempotente: o loop de 30 min corrige falhas.
+export async function syncPerUnit(q, a) {
+  if (!a?.network_id || !a.unit_price_cents || a.mode !== 'charge' || !a.asaas_customer_id || !KEY()) return { skipped: true };
+  const units = (await q('SELECT id,name,unit_label FROM tenants WHERE network_id=$1 AND billing_since IS NOT NULL ORDER BY billing_since, lower(coalesce(unit_label,name))', [a.network_id])).rows;
+  const n = units.length, value = n * a.unit_price_cents, description = perUnitDescription(units);
+  const sub = (await q("SELECT * FROM billing_subscriptions WHERE account_id=$1 AND status='active' ORDER BY created_at DESC LIMIT 1", [a.id])).rows[0];
+  if (sub && !sub.per_unit) { const e = new Error('Já existe uma mensalidade de valor fixo: cancele-a para cobrar por unidade'); e.status = 409; throw e; }
+  if (!n) {
+    if (!sub) return { units: 0 };
+    try { if (sub.asaas_subscription_id) await asaas('DELETE', '/subscriptions/' + encodeURIComponent(sub.asaas_subscription_id)); } catch (e) { if (e.status !== 404) throw e; }
+    await q("UPDATE billing_subscriptions SET status='canceled',canceled_at=now() WHERE id=$1", [sub.id]);
+    await syncAccount(q, a); return { units: 0, action: 'canceled' };
+  }
+  if (!sub) {
+    const first = nextDueOn(a.due_day || 20);
+    const s = await asaas('POST', '/subscriptions', { customer: a.asaas_customer_id, billingType: a.billing_type, value: reais(value), nextDueDate: first, cycle: 'MONTHLY', description, externalReference: 'fp-account:' + a.id });
+    await q('INSERT INTO billing_subscriptions(account_id,description,value_cents,first_due_date,asaas_subscription_id,per_unit,units) VALUES($1,$2,$3,$4,$5,true,$6)', [a.id, description, value, first, s.id, n]);
+    await syncAccount(q, a); return { units: n, value_cents: value, action: 'created' };
+  }
+  if (sub.value_cents !== value || sub.description !== description) {
+    await asaas('PUT', '/subscriptions/' + encodeURIComponent(sub.asaas_subscription_id), { value: reais(value), description, updatePendingPayments: true });
+    await q('UPDATE billing_subscriptions SET value_cents=$2,description=$3,units=$4 WHERE id=$1', [sub.id, value, description, n]);
+    await syncAccount(q, a); return { units: n, value_cents: value, action: 'updated' };
+  }
+  return { units: n, value_cents: value };
+}
+
 export async function syncAll(q) {
   const skip = new Set(); let error = null;
   if (KEY()) {
     const accounts = (await q("SELECT * FROM billing_accounts WHERE asaas_customer_id IS NOT NULL AND mode <> 'exempt'")).rows;
-    for (const a of accounts) { const r = await syncAccount(q, a); if (!r.ok) { skip.add(a.id); error = r.error; } }
+    for (const a of accounts) {
+      if (a.unit_price_cents) { try { await syncPerUnit(q, a); } catch (e) { error = e.message; await q('UPDATE billing_accounts SET last_error=$2 WHERE id=$1', [a.id, String(e.message).slice(0, 300)]); } }
+      const r = await syncAccount(q, a); if (!r.ok) { skip.add(a.id); error = r.error; }
+    }
   }
   const changes = await enforce(q, { refresh: false, skip });
   await q('UPDATE platform_settings SET billing_last_sync_at=now(),billing_last_sync_error=$1 WHERE id=true', [error ? String(error).slice(0, 300) : null]);
@@ -236,6 +278,8 @@ export function registerBilling(app, { q, auth, roles, route, bad, valid, uuid, 
     billing_type: z.enum(['UNDEFINED', 'PIX', 'BOLETO']).default('UNDEFINED'),
     block_override_until: z.union([z.literal(''), dateField]).nullable().optional(),
     notes: z.string().max(2000).default(''),
+    unit_price_cents: z.number().int().min(500).max(100000000).nullable().optional(),
+    due_day: z.number().int().min(1).max(28).optional(),
   }).strict().refine(v => !!v.tenant_id !== !!v.network_id);
   app.put('/api/master/billing/accounts', ...master, route(async (req, res) => {
     const v = valid(accountBody, req, res); if (!v) return;
@@ -243,11 +287,15 @@ export function registerBilling(app, { q, auth, roles, route, bad, valid, uuid, 
     if (!exists.rowCount) return bad(res, 404, v.tenant_id ? 'Loja não encontrada' : 'Rede não encontrada');
     if (v.tenant_id && exists.rows[0].network_id) return bad(res, 400, 'Esta loja é unidade de uma rede: a cobrança é feita na rede');
     if (v.mode === 'charge' && !v.cpf_cnpj) return bad(res, 400, 'Informe o CPF ou CNPJ de quem paga');
-    const r = await q(`INSERT INTO billing_accounts(tenant_id,network_id,name,cpf_cnpj,email,phone,mode,grace_days,auto_block,billing_type,block_override_until,notes)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    if (v.tenant_id && v.unit_price_cents) return bad(res, 400, 'Valor por unidade só vale para rede');
+    const r = await q(`INSERT INTO billing_accounts(tenant_id,network_id,name,cpf_cnpj,email,phone,mode,grace_days,auto_block,billing_type,block_override_until,notes,unit_price_cents,due_day)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,coalesce($14,20))
       ON CONFLICT (${v.tenant_id ? 'tenant_id' : 'network_id'}) DO UPDATE SET name=EXCLUDED.name,cpf_cnpj=EXCLUDED.cpf_cnpj,email=EXCLUDED.email,phone=EXCLUDED.phone,mode=EXCLUDED.mode,
-        grace_days=EXCLUDED.grace_days,auto_block=EXCLUDED.auto_block,billing_type=EXCLUDED.billing_type,block_override_until=EXCLUDED.block_override_until,notes=EXCLUDED.notes,updated_at=now()
-      RETURNING *`, [v.tenant_id || null, v.network_id || null, v.name, v.cpf_cnpj || null, v.email || null, v.phone || null, v.mode, v.grace_days, v.auto_block, v.billing_type, v.block_override_until || null, v.notes]);
+        grace_days=EXCLUDED.grace_days,auto_block=EXCLUDED.auto_block,billing_type=EXCLUDED.billing_type,block_override_until=EXCLUDED.block_override_until,notes=EXCLUDED.notes,
+        unit_price_cents=CASE WHEN $15 THEN EXCLUDED.unit_price_cents ELSE billing_accounts.unit_price_cents END,
+        due_day=CASE WHEN $14::int IS NULL THEN billing_accounts.due_day ELSE EXCLUDED.due_day END,updated_at=now()
+      RETURNING *`, [v.tenant_id || null, v.network_id || null, v.name, v.cpf_cnpj || null, v.email || null, v.phone || null, v.mode, v.grace_days, v.auto_block, v.billing_type, v.block_override_until || null, v.notes,
+        v.unit_price_cents ?? null, v.due_day ?? null, v.unit_price_cents !== undefined]);
     let a = r.rows[0], warning = null;
     await audit(req, 'upsert', 'billing_account', a.id, a.tenant_id || null);
     if (a.mode === 'charge' && KEY()) {
@@ -257,6 +305,7 @@ export function registerBilling(app, { q, auth, roles, route, bad, valid, uuid, 
         else { const c = await asaas('POST', '/customers', customer); a = (await q('UPDATE billing_accounts SET asaas_customer_id=$2 WHERE id=$1 RETURNING *', [a.id, c.id])).rows[0]; }
       } catch (e) { warning = 'Salvo aqui, mas o Asaas recusou: ' + e.message; }
     } else if (a.mode === 'charge') warning = 'Salvo aqui. O cliente será criado no Asaas quando a chave (ASAAS_API_KEY) estiver no servidor.';
+    if (!warning && a.unit_price_cents) { try { await syncPerUnit(q, a); } catch (e) { warning = 'Salvo aqui, mas a mensalidade por unidade não foi ajustada no Asaas: ' + e.message; } }
     await enforce(q, { accountId: a.id });
     res.json({ account: (await q('SELECT * FROM billing_accounts WHERE id=$1', [a.id])).rows[0], warning });
   }));
@@ -268,8 +317,29 @@ export function registerBilling(app, { q, auth, roles, route, bad, valid, uuid, 
     const [subs, charges, units] = await Promise.all([
       q('SELECT * FROM billing_subscriptions WHERE account_id=$1 ORDER BY status, created_at DESC', [a.id]),
       q('SELECT * FROM billing_charges WHERE account_id=$1 ORDER BY deleted, due_date DESC LIMIT 200', [a.id]),
-      a.network_id ? q('SELECT id,name,unit_label,status FROM tenants WHERE network_id=$1 ORDER BY lower(name)', [a.network_id]) : q('SELECT id,name,status FROM tenants WHERE id=$1', [a.tenant_id])]);
+      a.network_id ? q('SELECT id,name,unit_label,status,billing_since FROM tenants WHERE network_id=$1 ORDER BY lower(coalesce(unit_label,name))', [a.network_id]) : q('SELECT id,name,status FROM tenants WHERE id=$1', [a.tenant_id])]);
     res.json({ account: a, subscriptions: subs.rows, charges: charges.rows, units: units.rows, today: todayLocal() });
+  }));
+
+  // Liberar (ou parar) a cobrança de uma unidade da rede. Mês cheio: entra inteira na próxima cobrança em aberto.
+  app.post('/api/master/billing/accounts/:id/units/:tenantId', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success || !uuid.safeParse(req.params.tenantId).success) return bad(res, 400, 'ID inválido');
+    const v = valid(z.object({ active: z.boolean(), since: dateField.optional() }).strict(), req, res); if (!v) return;
+    const a = await loadAccount(req.params.id); if (!a) return bad(res, 404, 'Cadastro não encontrado');
+    if (!a.network_id) return bad(res, 400, 'Só para rede');
+    if (!a.unit_price_cents) return bad(res, 409, 'Informe o valor por unidade no cadastro antes de liberar unidades');
+    const u = (await q('SELECT id,billing_since FROM tenants WHERE id=$1 AND network_id=$2', [req.params.tenantId, a.network_id])).rows[0];
+    if (!u) return bad(res, 404, 'Unidade não é desta rede');
+    if (v.active && v.since && v.since > todayLocal()) return bad(res, 400, 'Data no futuro');
+    const before = u.billing_since;
+    await q('UPDATE tenants SET billing_since=$2 WHERE id=$1', [u.id, v.active ? (v.since || todayLocal()) : null]);
+    await audit(req, v.active ? 'billing_unit_on' : 'billing_unit_off', 'tenant', u.id, u.id);
+    if (a.mode !== 'charge') return res.json({ ok: true, warning: 'Guardado. O cadastro não está em “Cobrar”, então nada foi gerado no Asaas.' });
+    try { res.json({ ok: true, ...(await syncPerUnit(q, a)) }); }
+    catch (e) {
+      if (e.status === 409) { await q('UPDATE tenants SET billing_since=$2 WHERE id=$1', [u.id, before]); return bad(res, 409, e.message); }
+      bad(res, 502, 'Guardado aqui, mas o Asaas não foi ajustado agora (' + e.message + '). O sistema tenta de novo na conferência de 30 min.');
+    }
   }));
 
   const needAsaas = (a, res) => {
@@ -307,6 +377,7 @@ export function registerBilling(app, { q, auth, roles, route, bad, valid, uuid, 
     const v = valid(z.object({ description: z.string().trim().min(2).max(160), value_cents: z.number().int().min(500).max(100000000), first_due_date: dateField, end_date: z.union([z.literal(''), dateField]).optional() }).strict(), req, res); if (!v) return;
     const a = await loadAccount(req.params.id); if (!a) return bad(res, 404, 'Cadastro não encontrado'); if (!needAsaas(a, res)) return;
     if (v.first_due_date < todayLocal()) return bad(res, 400, 'Primeiro vencimento no passado');
+    if (a.unit_price_cents) return bad(res, 409, 'Esta rede é cobrada por unidade: libere as unidades em vez de criar mensalidade fixa');
     if ((await q("SELECT 1 FROM billing_subscriptions WHERE account_id=$1 AND status='active'", [a.id])).rowCount) return bad(res, 409, 'Já existe uma mensalidade ativa: cancele antes de criar outra');
     let s;
     try { s = await asaas('POST', '/subscriptions', { customer: a.asaas_customer_id, billingType: a.billing_type, value: reais(v.value_cents), nextDueDate: v.first_due_date, cycle: 'MONTHLY', description: v.description, endDate: v.end_date || undefined, externalReference: 'fp-account:' + a.id }); }

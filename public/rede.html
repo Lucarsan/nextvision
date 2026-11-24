@@ -95,6 +95,8 @@
       </section>
       <section class="card attn"><h2>Precisa de atenção</h2><div id="alerts"></div></section>
     </div>
+    <section class="card" style="margin-top:16px"><div class="units-head"><h2>Relatório para o shopping</h2><span>Faturamento por unidade, dia a dia (CSV)</span></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="month" id="repMonth" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" id="repGo" style="padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Baixar planilha</button><span class="soft" id="repMsg"></span></div></section>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Comissões do mês</h2><span id="commInfo"></span></div>
       <div class="wrap"><table><thead><tr><th>Vendedora</th><th>Unidade</th><th class="n">Vendas</th><th class="n">Vendido no mês</th><th class="n">Faixa</th><th class="n">Comissão prevista</th><th>Próxima faixa</th></tr></thead><tbody id="commRows"></tbody></table></div></section>
   </main>
@@ -183,6 +185,21 @@
     draw(); $('feedback').textContent = '';
     loadComm().catch(() => {});
     loadTransfers().catch(() => {});
+  }
+  {
+    const now = new Date(Date.now() - 3 * 3600000); $('repMonth').value = now.toISOString().slice(0, 7);
+    $('repGo').onclick = async () => {
+      $('repMsg').textContent = '';
+      try {
+        const r = await api('/network/report/month?month=' + $('repMonth').value);
+        if (!r.rows.length) { $('repMsg').textContent = 'Nenhuma venda nesse mês.'; return; }
+        const lines = [['Unidade', 'CNPJ', 'Dia', 'Vendas', 'Faturamento (R$)']].concat(r.rows.map(x => [x.unit, x.cnpj || '', x.day.split('-').reverse().join('/'), x.sales, (x.total_cents / 100).toFixed(2).replace('.', ',')]));
+        const units = [...new Set(r.rows.map(x => x.unit))];
+        for (const u of units) { const t = r.rows.filter(x => x.unit === u).reduce((a, x) => a + x.total_cents, 0); lines.push([u, '', 'Total do mês', r.rows.filter(x => x.unit === u).reduce((a, x) => a + x.sales, 0), (t / 100).toFixed(2).replace('.', ',')]); }
+        const csv = '\ufeff' + lines.map(l => l.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = 'faturamento-' + r.month + '.csv'; a.click();
+      } catch (e) { $('repMsg').textContent = e.message; }
+    };
   }
   async function loadTransfers() {
     const list = await api('/network/transfers');

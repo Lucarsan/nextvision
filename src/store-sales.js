@@ -220,9 +220,17 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const v = valid(z.object({
       kind: z.enum(['withdrawal', 'deposit', 'expense']), amount_cents: cents.min(1),
       method: z.enum(['cash', 'pix', 'debit', 'credit', 'other']).default('cash'),
-      category: z.string().trim().max(60).default(''), note: z.string().trim().max(200).default('')
+      category: z.string().trim().max(60).default(''), note: z.string().trim().max(200).default(''),
+      seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional()
     }).strict(), req, res); if (!v) return;
     if (v.kind !== 'expense' && v.method !== 'cash') return bad(res, 400, 'Sangria e suprimento são sempre em dinheiro');
+    // Quiosque: sangria e saídas registradas com o PIN de quem fez.
+    if (req.user.kiosk) {
+      const who = v.seller_id ? (await q("SELECT id,name FROM users WHERE id=$1 AND tenant_id=$2 AND active",[v.seller_id, tid(req)])).rows[0] : null;
+      if (!who || !(await pinOk({ query: q }, bcrypt, who.id, v.seller_pin))) return bad(res, 401, 'PIN incorreto');
+      v.note = ((v.note ? v.note + ' · ' : '') + 'por ' + who.name).slice(0, 200);
+    }
+    delete v.seller_id; delete v.seller_pin;
     if (v.kind === 'expense' && !v.note && !v.category) return bad(res, 400, 'Informe a categoria ou a descrição da saída');
     const r = await q(`INSERT INTO cash_movements(tenant_id,session_id,kind,method,category,amount_cents,note,created_by)
       SELECT $1,s.id,$2,$3,$4,$5,$6,$7 FROM cash_sessions s WHERE s.tenant_id=$1 AND s.status='open' RETURNING *`,
@@ -251,8 +259,27 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.json({ session: s.rows[0], ...(await sessionDetail(tid(req), req.params.id)), generated_at: new Date().toISOString(), timezone: TZ });
   }));
 
+  // Quiosque: vendas e lançamentos do caixa aberto, sem custo das peças (para cancelar e conferir).
+  app.get('/api/store/kiosk/cash-today', ...guard, route(async (req, res) => {
+    const s = (await q("SELECT id,opened_at,opening_cents FROM cash_sessions WHERE tenant_id=$1 AND status='open'", [tid(req)])).rows[0];
+    if (!s) return res.json({ session: null, sales: [], movements: [] });
+    const d = await sessionDetail(tid(req), s.id);
+    const sales = d.sales.map(x => ({ id: x.id, sale_number: x.sale_number, total_cents: x.total_cents, payment_method: x.payment_method, created_at: x.created_at, canceled_at: x.canceled_at,
+      cancel_reason: x.cancel_reason, customer_name: x.customer_name, seller_name: x.seller_name, items: (x.items || []).map(i => ({ name: i.name, barcode: i.barcode, quantity: i.quantity, total_cents: i.total_cents })) }));
+    const off = (await q('SELECT id,offline_auth FROM sales WHERE session_id=$1 AND offline_payment', [s.id])).rows;
+    const offMap = new Map(off.map(o => [o.id, o]));
+    res.set('Cache-Control', 'no-store').json({ session: s, sales: sales.map(x => ({ ...x, offline_payment: offMap.has(x.id), offline_auth: offMap.get(x.id)?.offline_auth || null })),
+      movements: d.movements.map(m => ({ id: m.id, kind: m.kind, amount_cents: m.amount_cents, note: m.note, created_at: m.created_at, canceled_at: m.canceled_at })),
+      expected_cash_cents: d.summary.expected_cash_cents });
+  }));
+
   app.post('/api/store/cash/close', ...full, route(async (req, res) => {
-    const v = valid(z.object({ counted_cash_cents: cents, note: z.string().trim().max(400).default('') }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ counted_cash_cents: cents, note: z.string().trim().max(400).default(''), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
+    if (req.user.kiosk) {
+      const who = v.seller_id ? (await q("SELECT id,name FROM users WHERE id=$1 AND tenant_id=$2 AND active", [v.seller_id, tid(req)])).rows[0] : null;
+      if (!who || !(await pinOk({ query: q }, bcrypt, who.id, v.seller_pin))) return bad(res, 401, 'PIN incorreto');
+      v.note = ((v.note ? v.note + ' · ' : '') + 'fechado por ' + who.name).slice(0, 400);
+    }
     const c = await db.connect();
     try {
       await c.query('BEGIN');
@@ -1037,6 +1064,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       seller_id: uuid.optional(),
       // Quiosque (rede): a vendedora confirma a venda com o PIN de 4 dígitos.
       seller_pin: z.string().regex(/^\d{4}$/).optional(),
+      // Pinpad fora do ar: pago na maquininha avulsa; fica pendente de conciliação (ECONF). offline_auth = autorização do comprovante.
+      offline_payment: z.boolean().optional(),
+      offline_auth: z.string().trim().max(40).optional(),
       payment_method: METHOD.optional(),
       // Pagamento dividido (2 a 5 formas diferentes); a soma tem que dar o total cobrado (já com desconto e cashback).
       payments: z.array(z.object({ method: METHOD, amount_cents: z.number().int().min(1).max(100000000) }).strict()).min(2).max(5).optional(),
@@ -1422,6 +1452,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
+      if (v.offline_payment && (v.payments ? v.payments.some(p => p.method !== 'cash') : v.payment_method !== 'cash')) {
+        await c.query('UPDATE sales SET offline_payment=true,offline_auth=$2 WHERE id=$1', [sale.id, v.offline_auth || null]); sale.offline_payment = true; sale.offline_auth = v.offline_auth || null;
+      }
       if (opts.pixCharge && !(await c.query("UPDATE pix_charges SET sale_id=$1 WHERE id=$2 AND tenant_id=$3 AND sale_id IS NULL AND status='paid'", [sale.id, opts.pixCharge.id, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'A venda desta cobrança já foi registrada.'); }
       if (cbUsed) {
         const use = (await c.query('INSERT INTO cashback_uses(tenant_id,customer_id,sale_id,amount_cents) VALUES($1,$2,$3,$4) RETURNING id', [tid(req), customerId, sale.id, cbUsed])).rows[0];

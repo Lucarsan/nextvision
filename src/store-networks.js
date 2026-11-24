@@ -199,6 +199,16 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
   }));
 
   // Faturamento por unidade num período (dias no fuso da loja). Padrão: hoje.
+  // Marca como conciliada a venda paga na maquininha avulsa (o ECONF foi enviado pelo emissor ou conferido à mão).
+  app.post('/api/network/sales/:id/econf-done', ...network, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
+    const r = await q(`UPDATE sales s SET econf_done_at = now(), econf_done_by = $3 FROM tenants t
+      WHERE s.id = $1 AND t.id = s.tenant_id AND t.network_id = $2 AND ($4::uuid[] IS NULL OR t.id = ANY($4)) AND s.offline_payment AND s.econf_done_at IS NULL RETURNING s.id`,
+      [req.params.id, req.user.network_id, req.user.id, scope(req)]);
+    if (!r.rowCount) return bad(res, 404, 'Pendência não encontrada');
+    await audit(req, 'econf_done', 'sale', req.params.id); res.json({ done: true });
+  }));
+
   app.get('/api/network/overview', ...network, route(async (req, res) => {
     const p = z.object({ from: dateField.optional(), to: dateField.optional() }).safeParse(req.query);
     if (!p.success) return bad(res, 400, 'Período inválido');
@@ -265,7 +275,14 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
     });
     const totals = units.reduce((a, u) => { a.sales_count += u.sales_count; a.total_cents += u.total_cents; a.canceled_count += u.canceled_count; a.cashback_used_cents += u.cashback_used_cents; for (const k of METHODS) a.by_method[k] += u.by_method[k]; return a; }, { sales_count: 0, total_cents: 0, canceled_count: 0, cashback_used_cents: 0, by_method: Object.fromEntries(METHODS.map(k => [k, 0])) });
     totals.average_ticket_cents = totals.sales_count ? Math.round(totals.total_cents / totals.sales_count) : 0;
+    // Pinpad fora do ar: vendas pagas na maquininha avulsa ainda sem conciliação (ECONF), de qualquer data.
+    const econf = await q(`SELECT s.id, coalesce(t.unit_label, t.name) unit, s.sale_number, s.total_cents, s.payment_method, s.offline_auth,
+        to_char(s.created_at AT TIME ZONE $3, 'DD/MM HH24:MI') at
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id
+      WHERE t.network_id = $1 AND ($2::uuid[] IS NULL OR t.id = ANY($2)) AND s.offline_payment AND s.econf_done_at IS NULL AND s.canceled_at IS NULL
+      ORDER BY s.created_at LIMIT 200`, [req.user.network_id, scope(req), STORE_TZ]);
     const alerts = {
+      econf_pending: econf.rows,
       duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
       canceled: canceled.rows.map(c => ({ unit: c.unit, total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
       low_stock: lowByUnit

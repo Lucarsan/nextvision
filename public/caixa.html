@@ -76,6 +76,9 @@
   .kpi span{font-size:12px;color:var(--muted)}.kpi strong{display:block;font-size:26px;color:var(--ink);margin:4px 0 2px;letter-spacing:-.5px}.kpi em{font-style:normal;font-size:12px;color:var(--muted)}
   .goalbar{position:relative;height:10px;border-radius:6px;background:#ece9e1;margin:14px 0 6px}.goalbar i{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:var(--ink)}
   .protect{background:#ecebe5;border-radius:10px;padding:10px 14px;font-size:13px;margin-top:14px;color:var(--text)}
+  #viewSales .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
+  .cancelbtn{border:1px solid #e6c9c2;background:#fff;color:var(--red);border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
+  tr.canceled td{color:var(--muted);text-decoration:line-through}
   [hidden]{display:none!important}
   @media (max-width:1100px){.grid{grid-template-columns:1fr}}
   @media (max-width:760px){.shell{display:block}.side{position:static;height:auto;width:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;padding:14px}.wm{margin:0;flex:1}.unitbox{margin:0}.nav{display:flex;width:100%}.foot{display:none}main{padding:16px 12px}.kpis{grid-template-columns:1fr}}
@@ -89,6 +92,7 @@
     <nav class="nav">
       <button type="button" data-view="day"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Meu dia</button>
       <button type="button" data-view="cash" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg>Caixa</button>
+      <button type="button" data-view="sales"><svg viewBox="0 0 24 24"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h6"/></svg>Vendas e caixa</button>
     </nav>
     <div class="foot"><strong id="footName">Caixa do quiosque</strong>Sistema FicouPronto<br><button type="button" id="leave">Sair do quiosque</button></div>
   </aside>
@@ -134,6 +138,8 @@
             <p class="label">Pagamento</p>
             <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button></div>
             <label class="disc" id="discRow" hidden><input type="checkbox" id="disc"> <span id="discLabel"></span></label>
+            <div id="offRow" hidden><label class="disc"><input type="checkbox" id="offline"> Pinpad fora do ar: cobrei na maquininha avulsa</label>
+              <input class="field" id="offAuth" maxlength="40" placeholder="Autorização do comprovante (AUT/NSU)" hidden style="margin-top:6px"></div>
             <div class="who"><div style="display:flex;align-items:center"><span style="font-size:13px;font-weight:600;color:var(--ink)">Quem está vendendo?</span><span class="pinok" id="pinOk" hidden>✓ PIN confirmado</span></div><div class="people" id="sellers"></div></div>
             <div class="total"><span id="totalLabel">Total</span><strong id="total">R$ 0,00</strong></div>
             <div class="steps">
@@ -165,6 +171,23 @@
         </div>
         <div class="protect">A vendedora não vê custo, lucro nem a comissão das colegas.</div>
         <button type="button" class="linkbtn" id="dayLock" style="margin-top:12px">Sair do Meu dia</button>
+      </div>
+    </section>
+    <!-- ===== Vendas do dia, sangria e fechamento (proposta p. 7) ===== -->
+    <section id="viewSales" hidden>
+      <div class="top"><div><h1>Vendas e caixa</h1><p class="sub" id="salesSub">Vendas do caixa aberto</p></div></div>
+      <div class="grid">
+        <div class="card"><p class="label">Vendas de hoje</p><table><thead><tr><th>Nº</th><th>Hora</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th></th></tr></thead><tbody id="tSales"></tbody></table></div>
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div class="card"><p class="label">Sangria (retirada de dinheiro)</p>
+            <input class="field" id="sgVal" inputmode="decimal" placeholder="Valor (R$)"><input class="field" id="sgNote" maxlength="120" placeholder="Motivo (ex.: depósito no banco)" style="margin-top:6px">
+            <div class="people" id="sgWho" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div><p class="msg" id="sgMsg"></p>
+            <table><tbody id="tMoves"></tbody></table></div>
+          <div class="card"><p class="label">Fechar o caixa</p>
+            <p class="sub" style="margin:0 0 8px">Dinheiro esperado na gaveta: <strong id="expCash">—</strong></p>
+            <input class="field" id="clCash" inputmode="decimal" placeholder="Dinheiro contado na gaveta (R$)">
+            <div class="people" id="clWho" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div><p class="msg" id="clMsg"></p></div>
+        </div>
       </div>
     </section>
   </main>
@@ -221,6 +244,9 @@
     $('discRow').hidden = !(method === 'cash' || method === 'pix');
     if (!$('discRow').hidden) $('discLabel').textContent = method === 'cash' ? 'Desconto de 10% no dinheiro (' + brl(Math.round(subtotal() * 0.10)) + ')' : 'Desconto de 5% no Pix (' + brl(Math.round(subtotal() * 0.05)) + ')';
     else $('disc').checked = false;
+    $('offRow').hidden = method === 'cash'; if (method === 'cash') $('offline').checked = false;
+    $('offAuth').hidden = !$('offline').checked;
+    $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)' : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
     $('sellers').innerHTML = sellers.map(s => '<button type="button" data-s="' + safe(s.id) + '"' + (seller?.id === s.id ? ' class="on"' : '') + '>' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada nesta unidade.</span>';
     $('sellers').querySelectorAll('[data-s]').forEach(b => b.onclick = () => askPin(sellers.find(s => s.id === b.dataset.s), pin => { seller = sellers.find(s => s.id === b.dataset.s); sellerPin = pin; draw(); }));
     $('pinOk').hidden = !seller;
@@ -283,7 +309,7 @@
   }
   $('custClear').onclick = () => { customer = null; $('custSel').hidden = true; $('custPick').hidden = false; $('custQ').value = ''; $('custResults').hidden = true; draw(); };
   $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('ncName').focus(); };
-  $('cbUse').onchange = draw; $('disc').onchange = draw;
+  $('cbUse').onchange = draw; $('disc').onchange = draw; $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
   // ---------- PIN ----------
@@ -314,6 +340,7 @@
     const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
+    if ($('offline').checked && method !== 'cash') { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
     else if ($('ncName').value.trim().length >= 2) body.new_customer = { name: $('ncName').value.trim(), phone: $('ncPhone').value.trim() };
     else body.anonymous = true;
@@ -333,7 +360,7 @@
         + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar cashback pelo WhatsApp</a>' : '') + '<button type="button" id="newSale">Nova venda</button>';
       $('doneBox').hidden = false; $('st1').classList.add('done');
       $('newSale').onclick = resetSale;
-      items = []; seller = null; sellerPin = ''; $('disc').checked = false;
+      items = []; seller = null; sellerPin = ''; $('disc').checked = false; $('offline').checked = false; $('offAuth').value = '';
       draw(); $('finish').disabled = true;
     } catch (e) { $('saleMsg').textContent = e.message; $('saleMsg').className = 'msg err'; draw(); }
   };
@@ -383,11 +410,57 @@
   }
   $('dayLock').onclick = () => { clearTimeout(dayTimer); drawDayPick(); };
 
+  // ---------- Vendas do dia, cancelamento, sangria e fechamento ----------
+  const hhmm = d => new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' });
+  const whoButtons = (el, onPick) => {
+    $(el).innerHTML = sellers.map(s => '<button type="button" data-w="' + safe(s.id) + '">' + safe(s.name.split(' ')[0]) + '</button>').join('');
+    $(el).querySelectorAll('[data-w]').forEach(b => b.onclick = () => onPick(sellers.find(s => s.id === b.dataset.w)));
+  };
+  async function loadSales() {
+    const d = await api('/store/kiosk/cash-today');
+    if (!d.session) { $('salesSub').textContent = 'O caixa está fechado.'; $('tSales').innerHTML = ''; $('tMoves').innerHTML = ''; $('expCash').textContent = '—'; return; }
+    $('salesSub').textContent = 'Caixa aberto às ' + hhmm(d.session.opened_at).replace(':', 'h') + ' · ' + d.sales.filter(x => !x.canceled_at).length + ' vendas';
+    $('tSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled_at ? ' class="canceled"' : '') + '><td>' + x.sale_number + '</td><td>' + hhmm(x.created_at) + '</td><td>' + safe((x.seller_name || '').split(' ')[0]) + '</td><td>' + safe(x.customer_name || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + safe(METHOD[x.payment_method] || x.payment_method) + (x.offline_payment ? ' · avulsa' : '') + '</td><td>'
+      + (x.canceled_at ? '<span class="sub">cancelada</span>' : '<button type="button" class="cancelbtn" data-cx="' + safe(x.id) + '">Cancelar</button>') + '</td></tr>').join('') || '<tr><td colspan="7" class="sub">Nenhuma venda ainda.</td></tr>';
+    $('tSales').querySelectorAll('[data-cx]').forEach(b => b.onclick = () => cancelSale(d.sales.find(x => x.id === b.dataset.cx)));
+    $('tMoves').innerHTML = d.movements.filter(m => !m.canceled_at).map(m => '<tr><td>' + hhmm(m.created_at) + '</td><td>' + (m.kind === 'withdrawal' ? 'Sangria' : m.kind === 'deposit' ? 'Suprimento' : 'Saída') + (m.note ? ' · ' + safe(m.note) : '') + '</td><td class="n">' + brl(m.amount_cents) + '</td></tr>').join('');
+    $('expCash').textContent = brl(d.expected_cash_cents);
+  }
+  function cancelSale(x) {
+    const reason = prompt('Cancelar a venda nº ' + x.sale_number + ' (' + brl(x.total_cents) + ').\nMotivo do cancelamento:');
+    if (!reason || reason.trim().length < 3) return;
+    const sellerP = sellers.find(s => s.name === x.seller_name);
+    const ask = sellerP || { id: null, name: x.seller_name || 'Quem vendeu' };
+    askPin(ask, sPin => {
+      askPin({ name: 'Supervisor, gerente ou dono' }, () => loadSales(), async supPin => {
+        await api('/store/sales/' + x.id + '/cancel', 'POST', { reason: reason.trim(), seller_pin: sPin, supervisor_pin: supPin });
+      });
+    }, sellerP ? undefined : async () => {});
+  }
+  function refreshWho() {
+  whoButtons('sgWho', s => {
+    const v = toCents($('sgVal').value); $('sgMsg').className = 'msg err';
+    if (v < 1) { $('sgMsg').textContent = 'Informe o valor da sangria.'; return; }
+    askPin(s, () => { $('sgMsg').className = 'msg ok'; $('sgMsg').textContent = 'Sangria de ' + brl(v) + ' registrada.'; $('sgVal').value = ''; $('sgNote').value = ''; loadSales(); },
+      pin => api('/store/cash/movements', 'POST', { kind: 'withdrawal', amount_cents: v, note: $('sgNote').value.trim(), seller_id: s.id, seller_pin: pin }));
+  });
+  whoButtons('clWho', s => {
+    $('clMsg').className = 'msg err';
+    if ($('clCash').value.trim() === '') { $('clMsg').textContent = 'Informe o dinheiro contado na gaveta.'; return; }
+    if (!confirm('Fechar o caixa agora? Depois disso, novas vendas só com o caixa aberto de novo.')) return;
+    let r;
+    askPin(s, () => { $('clMsg').className = 'msg ok'; $('clMsg').textContent = 'Caixa fechado. Diferença: ' + brl(r.difference_cents) + (r.difference_cents ? ' (o supervisor confere no painel)' : ''); $('clCash').value = ''; loadSales(); loadCash(); },
+      async pin => { r = await api('/store/cash/close', 'POST', { counted_cash_cents: toCents($('clCash').value), seller_id: s.id, seller_pin: pin }); });
+  });
+  }
+
   // ---------- Navegação ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day';
-    if (b.dataset.view === 'day') drawDayPick(); else { clearTimeout(dayTimer); setTimeout(() => $('scan').focus(), 30); }
+    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales';
+    if (b.dataset.view === 'day') drawDayPick(); else clearTimeout(dayTimer);
+    if (b.dataset.view === 'sales') loadSales().catch(e => { $('salesSub').textContent = e.message; });
+    if (b.dataset.view === 'cash') setTimeout(() => $('scan').focus(), 30);
   });
   $('leave').onclick = () => { if (!confirm('Sair do quiosque? Para abrir de novo, será preciso a senha da unidade.')) return; try { localStorage.removeItem('fp_kiosk_token'); } catch { } sessionStorage.removeItem('nv_token'); location.replace('/acesso'); };
 
@@ -398,7 +471,7 @@
       unit = k.unit; sellers = k.sellers; cfg = c;
       if (b?.network) { const [first, ...rest] = b.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) document.documentElement.style.setProperty('--gold', b.brand_color); }
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;
-      draw(); await loadCash();
+      draw(); await loadCash(); refreshWho();
     } catch (e) { $('cashSub').textContent = e.message; }
   })();
   setInterval(() => { if (!$('viewCash').hidden && !items.length) loadCash().catch(() => {}); }, 120000);

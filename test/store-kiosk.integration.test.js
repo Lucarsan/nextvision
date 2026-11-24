@@ -101,6 +101,26 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     assert.equal(md.today.count, 1); assert.equal(md.today.total_cents, 4410); assert.equal(md.store_today.count, 1);
     assert.equal(JSON.stringify(md).includes('cost'), false);
 
+    // Pinpad fora do ar: venda na maquininha avulsa fica pendente de conciliação no painel da rede.
+    const off = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'debit', offline_payment: true, offline_auth: 'AUT123', seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(off.sale.offline_payment, true);
+    const offCash = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'cash', offline_payment: true, seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.notEqual(offCash.sale.offline_payment, true, 'dinheiro não fica pendente');
+    const ov = await api('/network/overview', { token: g.data.token });
+    assert.deepEqual(ov.alerts.econf_pending.map(e => [e.sale_number, e.offline_auth]), [[off.sale.sale_number, 'AUT123']]);
+    await api(`/network/sales/${off.sale.id}/econf-done`, { method: 'POST', token: g.data.token });
+    assert.equal((await api('/network/overview', { token: g.data.token })).alerts.econf_pending.length, 0);
+    // Vendas do caixa no quiosque: sem custo; sangria e fechamento com PIN.
+    const today = await api('/store/kiosk/cash-today', { token: kt });
+    assert.equal(today.sales.length, 4); assert.equal(JSON.stringify(today).includes('cost'), false);
+    assert.equal(today.sales.find(x => x.id === off.sale.id).offline_payment, true);
+    assert.equal((await request('/store/cash/movements', { method: 'POST', token: kt, body: { kind: 'withdrawal', amount_cents: 1000, seller_id: ana.id, seller_pin: '0000' } })).status, 401);
+    const sg = await api('/store/cash/movements', { method: 'POST', token: kt, body: { kind: 'withdrawal', amount_cents: 1000, note: 'Banco', seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(sg.note, 'Banco · por Ana Paula');
+    assert.equal((await request('/store/cash/close', { method: 'POST', token: kt, body: { counted_cash_cents: 0 } })).status, 401);
+    const cl = await api('/store/cash/close', { method: 'POST', token: kt, body: { counted_cash_cents: 8000, seller_id: ana.id, seller_pin: '1234' } });
+    assert.equal(cl.difference_cents, 8000 - (4410 + 4900 - 1000)); assert.match(cl.session.close_note, /fechado por Ana Paula/);
+
     // Trocar a vendedora para supervisora pede e-mail; trocar a senha do quiosque derruba a sessão antiga.
     assert.equal((await request(`/master/network-people/${julia.id}`, { method: 'PATCH', token: masterToken, body: { function: 'supervisor', unit_ids: [tenant] } })).status, 400);
     await new Promise(r => setTimeout(r, 1100));

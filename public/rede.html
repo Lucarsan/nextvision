@@ -106,8 +106,8 @@
   const safe = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const brl = c => 'R$ ' + ((Number(c) || 0) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const METHOD = { cash: 'dinheiro', pix: 'Pix', debit: 'débito', credit: 'crédito', other: 'outros', mixed: 'pagamento dividido' };
-  const api = async path => {
-    const r = await fetch('/api' + path, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
+  const api = async (path, method = 'GET') => {
+    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); throw Error('Sessão expirada'); }
     if (!r.ok) throw Object.assign(Error(j.error || 'Erro ao carregar'), { status: r.status, pay_url: j.pay_url });
@@ -152,6 +152,9 @@
     const dup = only(data.alerts.duplicates), can = only(data.alerts.canceled), low = only(data.alerts.low_stock);
     const warn = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
     let h = '';
+    const econf = only(data.alerts.econf_pending || []);
+    if (econf.length) h += '<div class="alert yellow"><b>' + warn + plural(econf.length, 'pagamento na maquininha avulsa a conciliar', 'pagamentos na maquininha avulsa a conciliar') + '</b><p>Pinpad fora do ar: confira o comprovante e marque como conciliado depois de enviar o ECONF.</p>'
+      + '<details><summary>Ver pendências</summary><ul>' + econf.map(e => '<li>' + safe(e.unit) + ' · venda ' + e.sale_number + ' · ' + brl(e.total_cents) + ' · ' + safe(METHOD[e.payment_method] || e.payment_method) + ' · ' + safe(e.at) + (e.offline_auth ? ' · aut. ' + safe(e.offline_auth) : '') + ' <button type="button" class="econfDone" data-id="' + safe(e.id) + '">Conciliado</button></li>').join('') + '</ul></details></div>';
     if (dup.length) h += '<div class="alert red"><b>' + warn + (dup.length === 1 ? 'Possível venda duplicada' : dup.length + ' possíveis vendas duplicadas') + '</b>'
       + '<p>' + dup.slice(0, 3).map(d => safe(d.unit) + ' · ' + safe(d.at.replace(':', 'h')) + ' · 2 vendas de ' + brl(d.total_cents) + ' no ' + safe(METHOD[d.payment_method] || d.payment_method) + (d.seconds < 5 ? ', quase ao mesmo tempo' : ', com ' + d.seconds + ' segundos de diferença')).join('<br>') + '</p>'
       + '<p class="soft" style="font-size:12px">Confira no caixa da unidade e cancele a repetida, se for o caso.</p></div>';
@@ -163,6 +166,7 @@
     for (const u of low) h += '<div class="alert yellow"><b>' + warn + 'Estoque baixo em ' + safe(u.unit) + '</b><p>' + plural(u.products.length, 'peça que vende', 'peças que vendem') + ' com 1 unidade ou menos</p>'
       + '<details><summary>Ver peças</summary><ul>' + u.products.map(p => '<li>' + safe(p.name) + ' · estoque ' + p.stock_qty + ' · ' + p.sold_30d + ' vendida(s) em 30 dias</li>').join('') + '</ul></details></div>';
     $('alerts').innerHTML = h || '<div class="alert ok"><b>Nada para conferir agora.</b><p>Sem vendas repetidas, cancelamentos ou falta de peças no período.</p></div>';
+    document.querySelectorAll('.econfDone').forEach(b => b.onclick = async () => { b.disabled = true; try { await api('/network/sales/' + b.dataset.id + '/econf-done', 'POST'); await load(); } catch (e) { alert(e.message); b.disabled = false; } });
   }
 
   async function load() {

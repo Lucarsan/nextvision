@@ -85,7 +85,7 @@
         + '<td><input class="unLabel" maxlength="60" value="' + safe(u.unit_label || '') + '" placeholder="Ex.: Maracanaú" style="width:150px"></td>'
         + '<td><input class="unCnpj" maxlength="18" value="' + safe(fmtCnpj(u.cnpj)) + '" placeholder="00.000.000/0000-00" style="width:170px"></td>'
         + '<td>' + safe(u.status) + (u.sales_enabled ? '' : ' <span class="ct-muted">(caixa desligado)</span>') + '</td>'
-        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
+        + '<td style="display:flex;gap:6px"><button type="button" class="ct-btn ghost unSave" style="height:34px">Salvar</button><button type="button" class="ct-btn ghost unKiosk" style="height:34px">Nova senha do quiosque</button><button type="button" class="ct-btn ghost unImport" style="height:34px">Importar planilha</button><button type="button" class="ct-btn ghost unRemove" style="height:34px">Tirar da rede</button></td></tr>').join('') || '<tr><td colspan="5" class="ct-muted">Nenhuma unidade ligada.</td></tr>')
       + '</tbody></table></div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:12px"><label>Ligar loja à rede<select id="unAdd">' + (free.map(s => '<option value="' + safe(s.id) + '">' + safe(s.name) + '</option>').join('') || '<option value="">Nenhuma loja livre</option>') + '</select></label>'
       + '<button type="button" class="ct-btn" id="unAddBtn"' + (free.length ? '' : ' disabled') + '>Ligar</button></div>'
@@ -109,6 +109,27 @@
       const r = await api('/master/tenants/' + b.closest('tr').dataset.id + '/kiosk-password', 'POST', {});
       return 'Senha do quiosque ' + r.unit + ' (aparece só agora): ' + r.password;
     }));
+    // Importar peças ou clientes (.xlsx do sistema antigo). Confere primeiro, mostra o resumo e só grava se confirmar.
+    const sendSheet = async (tenantId, file, dry) => {
+      const r = await fetch('/api/master/tenants/' + tenantId + '/import' + (dry ? '?dry_run=1' : ''), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: file });
+      const j = await r.json().catch(() => ({})); if (!r.ok) throw Error(j.error || 'Erro na importação'); return j;
+    };
+    const describe = s => (s.kind === 'products'
+      ? s.total + ' peças (' + s.new + ' novas, ' + s.update + ' já cadastradas)' + (s.negative_stock ? '; ' + s.negative_stock + ' com estoque negativo' : '') + (s.no_ncm ? '; ' + s.no_ncm + ' sem NCM' : '') + (s.inactive ? '; ' + s.inactive + ' inativas' : '')
+      : s.total + ' clientes (' + s.new + ' novos, ' + s.update + ' já cadastrados); ' + s.with_cpf + ' com CPF, ' + s.with_phone + ' com telefone, ' + s.with_email + ' com e-mail')
+      + (s.skipped.length ? '. Ignoradas ' + s.skipped.length + ' linhas: ' + s.skipped.slice(0, 5).map(x => 'linha ' + x.line + ' (' + x.reason + ')').join(', ') + (s.skipped.length > 5 ? '…' : '') : '');
+    document.querySelectorAll('.unImport').forEach(b => b.onclick = () => {
+      const tenantId = b.closest('tr').dataset.id, input = document.createElement('input');
+      input.type = 'file'; input.accept = '.xlsx';
+      input.onchange = act(async () => {
+        const file = input.files[0]; if (!file) throw Error('');
+        const pre = await sendSheet(tenantId, file, true);
+        if (!confirm('Planilha de ' + (pre.kind === 'products' ? 'PEÇAS' : 'CLIENTES') + ' para ' + pre.store + ':\n\n' + describe(pre) + '\n\nGravar agora?')) throw Error('Importação cancelada.');
+        const done = await sendSheet(tenantId, file, false);
+        return 'Importado em ' + done.store + ': ' + describe(done);
+      });
+      input.click();
+    });
     document.querySelectorAll('.unRemove').forEach(b => b.onclick = act(async () => {
       if (!confirm('Tirar esta loja da rede? Ela continua funcionando sozinha.')) throw Error('');
       await api('/master/tenants/' + b.closest('tr').dataset.id + '/network', 'PATCH', { network_id: null });

@@ -1614,7 +1614,7 @@
       if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço de venda.'; return; }
       if (costRaw && (!Number.isFinite(cost) || cost < 0)) { st.textContent = 'Preço de custo inválido.'; return; }
       if (stock != null && !Number.isInteger(stock)) { st.textContent = 'Estoque: use um número inteiro (ou deixe vazio).'; return; }
-      if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
+      if (barcode && !/^[!-~]{1,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 1 a 64 caracteres).'; return; }
       try {
         const askVariant = f.elements.ask_variant.checked, mode = askVariant ? f.elements.variant_stock.value : 'model';
         const body = { name, price_cents: price, cost_cents: cost, stock_qty: askVariant && mode === 'model' ? null : stock, ask_variant: askVariant, variant_stock: mode, cashback: f.elements.cashback.checked, restock: f.elements.restock.checked }; if (!initial.generated_barcode) body.barcode = barcode;
@@ -2348,7 +2348,7 @@
         e.preventDefault(); st.textContent = '';
         const name = f.elements.name.value.trim(), barcode = f.elements.barcode.value.trim(), n = Number(f.elements.n.value.trim());
         if (name.length < 2) { st.textContent = 'Informe o nome do produto.'; return; }
-        if (barcode && !/^[!-~]{3,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 3 a 64 caracteres).'; return; }
+        if (barcode && !/^[!-~]{1,64}$/.test(barcode)) { st.textContent = 'Código de barras inválido (sem espaços, de 1 a 64 caracteres).'; return; }
         if (!Number.isInteger(n) || n < 0 || n > 99999) { st.textContent = 'Informe a quantidade que chegou (número inteiro).'; return; }
         const price = parseMoney(f.elements.price.value); if (!Number.isFinite(price) || price < 0) { st.textContent = 'Informe o preço de venda.'; return; }
         const cost = moneyOrNull(f.elements.cost.value, 'Custo', st); if (cost === undefined) return;

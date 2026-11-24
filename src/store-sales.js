@@ -436,7 +436,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   const ean13 = body12 => { let sum = 0; for (let i = 0; i < 12; i++) sum += Number(body12[i]) * (i % 2 ? 3 : 1); return body12 + ((10 - (sum % 10)) % 10); };
   const productBody = z.object({
     name: z.string().trim().min(2).max(120),
-    barcode: z.union([z.literal(''), z.string().trim().regex(/^[!-~]{3,64}$/, 'Código de barras inválido')]).optional(),
+    barcode: z.union([z.literal(''), z.string().trim().regex(/^[!-~]{1,64}$/, 'Código de barras inválido')]).optional(),
     price_cents: cents.optional(),
     cost_cents: cents.nullable().optional(),
     stock_qty: stockQty.nullable().optional(),
@@ -483,7 +483,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
   app.get('/api/store/products/barcode/:code', ...guard, route(async (req, res) => {
     const code = String(req.params.code || '').trim();
-    if (!/^[!-~]{3,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
+    if (!/^[!-~]{1,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
     const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2 AND kind='product'`, [tid(req), code]);
     if (!r.rowCount) return bad(res, 404, 'Produto não cadastrado');
     const { cost_cents, ...noCost } = r.rows[0];

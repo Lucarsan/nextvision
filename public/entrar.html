@@ -58,7 +58,15 @@
     try {
       const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw Error(data.error || 'Não foi possível entrar');
+      if (!r.ok) {
+        // Bloqueio pela cobrança: mostra o link do Asaas para pagar e liberar.
+        if (data.code === 'billing_blocked' && /^https:\/\//.test(data.pay_url || '')) {
+          const p = $('loginError'); p.textContent = data.error + ' ';
+          const a = document.createElement('a'); a.href = data.pay_url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Pagar agora'; a.style.fontWeight = '700'; p.append(a);
+          btn.disabled = false; return;
+        }
+        throw Error(data.error || 'Não foi possível entrar');
+      }
       sessionStorage.setItem('nv_token', data.token); try { localStorage.setItem('fp_staff', '1'); } catch { }
       go(data.user.role);
     } catch (err) { $('loginError').textContent = err.message; btn.disabled = false; }

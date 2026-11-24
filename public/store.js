@@ -64,7 +64,7 @@ const openedOrders = new Set();
 async function api(path, method = 'GET', body) {
   const response = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), {status:response.status, code:data.code});
+  if (!response.ok) throw Object.assign(Error(data.error || 'Não foi possível concluir a operação'), {status:response.status, code:data.code, pay_url:data.pay_url});
   return data;
 }
 function showUndo(id, [action, label]) {
@@ -603,7 +603,7 @@ $('createQuick').onclick = async () => {
 $('copyLink').onclick = async () => { try { await navigator.clipboard.writeText($('trackingLink').value); measureShare($('trackingLink').value, 'copy'); feedback('Link copiado.'); } catch { $('trackingLink').select(); } };
 async function refreshVisible() {
   if (document.hidden || window.fpPollPaused?.()) return;
-  try { await reload(); } catch(error) { $('syncStatus').textContent = error.status===403?'Acesso bloqueado pela central.':'Conexão interrompida. Tentando atualizar novamente…';if(error.status===403)feedback(error.message,true); }
+  try { await reload(); } catch(error) { $('syncStatus').textContent = error.status===403?'Acesso bloqueado pela central.':'Conexão interrompida. Tentando atualizar novamente…';if(error.status===403&&!window.fpBlockedNotice?.($('syncStatus'),error))feedback(error.message,true); }
 }
 document.addEventListener('visibilitychange', refreshVisible);
 window.addEventListener('focus', refreshVisible);
@@ -620,8 +620,9 @@ window.addEventListener('fp-wake', refreshVisible);
     if (storeSettings.logo_url) { const img = document.createElement('img'); img.src = storeSettings.logo_url; img.alt = 'Logo da loja'; img.style.cssText = 'width:100%;height:100%;object-fit:contain;border-radius:10px'; $('storeBrandIcon').replaceChildren(img); }
     $('homeFilters').innerHTML = toolbar('home');
     $('homeStatusFilter').innerHTML='<label class="nv-compact-filter"><span class="nv-help">Exibir</span><select aria-label="Exibir pedidos na visão geral" data-filter-scope="home" data-filter="status"><option value="">Todos</option>'+Object.entries(labels).map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label>';
+    if (me.role === 'owner') window.fpBillingBanner?.({ path: '/store/billing', token, before: $('syncStatus') });
     await reload(); if (location.hash === '#orders') await switchView('orders');
-  } catch (error) { feedback(error.message, true); }
+  } catch (error) { if (!(error.status === 403 && window.fpBlockedNotice?.($('syncStatus'), error))) feedback(error.message, true); }
 })();
 
 function settingsTabs(box, settings) {

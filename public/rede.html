@@ -97,6 +97,7 @@
     </div>
   </main>
 </div>
+<script src="/billing-banner.js?v=1"></script>
 <script>
 (() => {
   const token = sessionStorage.getItem('nv_token');
@@ -109,7 +110,7 @@
     const r = await fetch('/api' + path, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); throw Error('Sessão expirada'); }
-    if (!r.ok) throw Error(j.error || 'Erro ao carregar');
+    if (!r.ok) throw Object.assign(Error(j.error || 'Erro ao carregar'), { status: r.status, pay_url: j.pay_url });
     return j;
   };
   // Datas no fuso de Fortaleza (UTC-3, sem horário de verão).
@@ -171,7 +172,7 @@
     $('unitSel').innerHTML = '<option value="">Todas as unidades</option>' + data.units.map(u => '<option value="' + safe(u.id) + '"' + (u.id === cur ? ' selected' : '') + '>' + safe(u.name) + '</option>').join('');
     draw(); $('feedback').textContent = '';
   }
-  const refresh = () => load().catch(e => { $('feedback').textContent = e.message; });
+  const refresh = () => load().catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
 
   api('/network/me').then(({ network, user }) => {
     document.title = network.name + ' | Painel da rede';
@@ -179,7 +180,8 @@
     else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
     if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
     $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
-  }).catch(e => { $('feedback').textContent = e.message; });
+    if (user?.access !== 'supervisor') window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') });
+  }).catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
   $('unitSel').onchange = draw;
   $('range').querySelectorAll('button').forEach(b => b.onclick = () => { range = b.dataset.r; $('range').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); refresh(); });
   $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); };

@@ -15,6 +15,7 @@ import {meterMiddleware,hookShutdown} from './usage-meter.js';
 import {registerCosts} from './costs.js';
 import {registerStoreNetworks} from './store-networks.js';
 import {registerPasswordReset} from './password-reset.js';
+import {registerBilling,startBillingLoop,payLinkFor,BLOCK_MSG,asaasEnv,OPEN as BILL_OPEN,PAID as BILL_PAID,todayLocal} from './asaas-billing.js';
 const app=express();app.set('trust proxy',1);app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(meterMiddleware);hookShutdown();app.use(express.json({limit:'400kb'}));
 // Uso humano (loja, central, técnico, cliente) acorda as rotinas fora do expediente. Agentes e agendador não contam.
 app.use('/api',(req,_res,next)=>{if(!/^\/(connect|internal)\//.test(req.path))markHumanActivity();next();});
@@ -23,13 +24,15 @@ const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const bad=(res,status,message)=>res.status(status).json({error:message});
 const valid=(schema,req,res)=>{const p=schema.safeParse(req.body);if(!p.success){bad(res,400,'Dados inválidos');return null;}return p.data;};
 const uuid=z.string().uuid();
+// 403 de loja/rede bloqueada: se foi a cobrança, devolve o link para pagar.
+const blockedReply=async(res,ids,fallback)=>{const url=await payLinkFor(q,ids).catch(()=>null);return res.status(403).json(url?{error:BLOCK_MSG,code:'billing_blocked',pay_url:url}:{error:fallback});};
 const auth=(req,res,next)=>{
  try{const token=/^Bearer (.+)$/i.exec(req.get('authorization')||'')?.[1];if(!token)return bad(res,401,'Não autenticado');req.user=jwt.verify(token,secret,{algorithms:['HS256']});}
  catch{return bad(res,401,'Sessão inválida');}
- q('SELECT u.active,u.role,u.tenant_id,u.network_id,u.network_access,u.network_unit_ids,u.password_changed_at,u.access_level,u.admin_password_free,t.status,n.status network_status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1',[req.user.id]).then(({rows})=>{
+ q('SELECT u.active,u.role,u.tenant_id,u.network_id,u.network_access,u.network_unit_ids,u.password_changed_at,u.access_level,u.admin_password_free,t.status,n.status network_status FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1',[req.user.id]).then(async({rows})=>{
   const user=rows[0];if(!user?.active||user.role!==req.user.role||user.tenant_id!==req.user.tenant_id||(user.network_id||null)!==(req.user.network_id||null))return bad(res,403,'Conta sem autorização');
   // Dono da rede (role network): vê as unidades da sua rede; bloqueado se a rede for suspensa.
-  if(user.role==='network'&&user.network_status!=='active')return bad(res,403,'Acesso da rede bloqueado. Entre em contato com a central.');
+  if(user.role==='network'&&user.network_status!=='active')return blockedReply(res,{networkId:user.network_id},'Acesso da rede bloqueado. Entre em contato com a central.');
   // Senha trocada depois do login: a sessão antiga deixa de valer.
   if(user.password_changed_at&&(!req.user.iat||req.user.iat<Math.floor(new Date(user.password_changed_at).getTime()/1000)))return bad(res,401,'Sessão encerrada: a senha foi trocada. Entre de novo.');
   if(user.role==='network'){req.user.network_access=user.network_access;req.user.network_unit_ids=user.network_unit_ids||[];}
@@ -37,7 +40,7 @@ const auth=(req,res,next)=>{
   req.user.access_level=user.role==='operator'?user.access_level:'full';
   // Dono liberado da senha do admin (users.admin_password_free).
   req.user.admin_free=user.role==='owner'&&user.admin_password_free===true;
-  if(['owner','operator'].includes(user.role)&&!['trial','active'].includes(user.status))return bad(res,403,'Acesso da loja bloqueado. Entre em contato com a central.');
+  if(['owner','operator'].includes(user.role)&&!['trial','active'].includes(user.status))return blockedReply(res,{tenantId:user.tenant_id},'Acesso da loja bloqueado. Entre em contato com a central.');
   next();
  }).catch(next);
 };
@@ -55,7 +58,7 @@ const orderDetails=z.object({item_type:z.enum(['vehicle','device','pet','other']
 async function notifyOrder(orderId,action){if(!process.env.RESEND_API_KEY||!process.env.EMAIL_FROM)return;const r=await q("SELECT t.name store,t.email_notifications mode,c.email,o.process_snapshot->>'name' process,o.process_snapshot->'steps' steps,o.step_index,o.status FROM orders o JOIN tenants t ON t.id=o.tenant_id JOIN customers c ON c.id=o.customer_id JOIN processes p ON p.id=o.process_id WHERE o.id=$1",[orderId]);const d=r.rows[0];if(!d?.email||d.mode==='off')return;const isEnd=action==='complete';if(!(d.mode==='all'||(d.mode==='steps'&&action==='advance')||(d.mode==='completed'&&isEnd)))return;const subject=isEnd?'Seu serviço foi concluído':action==='advance'?'Seu serviço avançou de etapa':'Atualização do seu serviço';const step=d.steps[d.step_index]||'Concluído';const message=String(d.store)+' — '+String(d.process)+': '+(isEnd?'Serviço concluído.':'Etapa atual: '+step+'.');const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.EMAIL_FROM,to:[d.email],subject,text:message})});if(!response.ok)throw Error('Provedor de e-mail recusou a solicitação (HTTP '+response.status+')');}
 const audit=(req,action,type,id,tenant=tid(req))=>q('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)',[tenant,req.user.id,action,type,id]);
 app.get('/health',(_req,res)=>{res.set('Cache-Control','no-store');const revision=process.env.RENDER_GIT_COMMIT||process.env.NEXTVISION_BUILD_REVISION||'';res.json({ok:true,service:'nextvision',release:/^[a-z0-9-]{1,40}$/.test(process.env.NEXTVISION_RELEASE||'')?process.env.NEXTVISION_RELEASE:'portal-operations',revision:/^[a-f0-9]{7,40}$/i.test(revision)?revision:'development'});});
-app.post('/api/auth/login',rateLimit({windowMs:900000,limit:12,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{const v=valid(z.object({email:z.string().email(),password:z.string().min(1)}),req,res);if(!v)return;const {rows}=await q('SELECT id,tenant_id,network_id,name,email,password_hash,role FROM users WHERE lower(email)=lower($1) AND active=true',[v.email]);const u=rows[0];if(!u||!(await bcrypt.compare(v.password,u.password_hash)))return bad(res,401,'Credenciais inválidas');if(u.role==='network'){const r=await q('SELECT status FROM store_networks WHERE id=$1',[u.network_id]);if(r.rows[0]?.status!=='active')return bad(res,403,'Rede indisponível');}else if(!['master','technician'].includes(u.role)){const r=await q("SELECT status FROM tenants WHERE id=$1",[u.tenant_id]);if(!r.rows.length||!['trial','active'].includes(r.rows[0].status))return bad(res,403,'Loja indisponível');}const token=jwt.sign(u.role==='network'?{id:u.id,tenant_id:null,network_id:u.network_id,role:u.role}:{id:u.id,tenant_id:u.tenant_id,role:u.role},secret,{algorithm:'HS256',expiresIn:'8h'});res.json({token,user:{id:u.id,name:u.name,email:u.email,role:u.role,tenant_id:u.tenant_id,...(u.role==='network'?{network_id:u.network_id}:{})}});}));
+app.post('/api/auth/login',rateLimit({windowMs:900000,limit:12,standardHeaders:'draft-7',legacyHeaders:false}),route(async(req,res)=>{const v=valid(z.object({email:z.string().email(),password:z.string().min(1)}),req,res);if(!v)return;const {rows}=await q('SELECT id,tenant_id,network_id,name,email,password_hash,role FROM users WHERE lower(email)=lower($1) AND active=true',[v.email]);const u=rows[0];if(!u||!(await bcrypt.compare(v.password,u.password_hash)))return bad(res,401,'Credenciais inválidas');if(u.role==='network'){const r=await q('SELECT status FROM store_networks WHERE id=$1',[u.network_id]);if(r.rows[0]?.status!=='active')return blockedReply(res,{networkId:u.network_id},'Rede indisponível');}else if(!['master','technician'].includes(u.role)){const r=await q("SELECT status FROM tenants WHERE id=$1",[u.tenant_id]);if(!r.rows.length||!['trial','active'].includes(r.rows[0].status))return blockedReply(res,{tenantId:u.tenant_id},'Loja indisponível');}const token=jwt.sign(u.role==='network'?{id:u.id,tenant_id:null,network_id:u.network_id,role:u.role}:{id:u.id,tenant_id:u.tenant_id,role:u.role},secret,{algorithm:'HS256',expiresIn:'8h'});res.json({token,user:{id:u.id,name:u.name,email:u.email,role:u.role,tenant_id:u.tenant_id,...(u.role==='network'?{network_id:u.network_id}:{})}});}));
 app.get('/api/me',auth,(req,res)=>res.json(req.user));
 
 const digestToken=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -184,7 +187,7 @@ app.post('/api/master/tenants',auth,roles('master'),route(async(req,res)=>{
 app.patch('/api/master/tenants/:id',auth,roles('master'),route(async(req,res)=>{
  if(!uuid.safeParse(req.params.id).success)return bad(res,400,'ID inválido');
  const v=valid(z.object({status:z.enum(['trial','active','past_due','suspended']).optional(),niche:nicheSchema.optional(),camera_limit:z.number().int().min(1).max(128).optional(),sales_enabled:z.boolean().optional(),demo_mode:z.boolean().optional(),demo_step_seconds:z.number().int().min(10).max(600).optional()}).strict().refine(v=>Object.values(v).some(x=>x!==undefined)),req,res);if(!v)return;
- const r=await q('UPDATE tenants SET status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit),sales_enabled=COALESCE($5,sales_enabled),demo_mode=COALESCE($6,demo_mode),demo_step_seconds=COALESCE($7,demo_step_seconds) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id,v.sales_enabled??null,v.demo_mode??null,v.demo_step_seconds??null]);
+ const r=await q('UPDATE tenants SET billing_prev_status=CASE WHEN $1::text IS NULL THEN billing_prev_status ELSE NULL END,status=COALESCE($1,status),niche=COALESCE($2,niche),camera_limit=COALESCE($3,camera_limit),sales_enabled=COALESCE($5,sales_enabled),demo_mode=COALESCE($6,demo_mode),demo_step_seconds=COALESCE($7,demo_step_seconds) WHERE id=$4 RETURNING *',[v.status||null,v.niche||null,v.camera_limit??null,req.params.id,v.sales_enabled??null,v.demo_mode??null,v.demo_step_seconds??null]);
  if(!r.rowCount)return bad(res,404,'Loja não encontrada');await audit(req,'update','tenant',req.params.id,req.params.id);res.json(r.rows[0]);
 }));
 // Logins da loja (dono e vendedores/operadores): listar e ativar/desativar. Desativado não entra e some da lista de vendedores do caixa.
@@ -244,8 +247,8 @@ app.get('/api/master/overview',auth,roles('master'),route(async(_req,res)=>{
   (SELECT count(*)::int FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL AND o.created_at >= date_trunc('day', now() AT TIME ZONE 'America/Fortaleza') AT TIME ZONE 'America/Fortaleza') orders_today,
   (SELECT count(*)::int FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL AND o.status='live') orders_live,
   (SELECT max(o.created_at) FROM orders o WHERE o.tenant_id=t.id AND o.deleted_at IS NULL) last_order_at,
-  (SELECT i.status FROM invoices i WHERE i.tenant_id=t.id ORDER BY i.due_date DESC LIMIT 1) last_invoice_status,
-  (SELECT i.due_date FROM invoices i WHERE i.tenant_id=t.id ORDER BY i.due_date DESC LIMIT 1) last_invoice_due
+  (SELECT c.status FROM billing_charges c JOIN billing_accounts a ON a.id=c.account_id WHERE (a.tenant_id=t.id OR a.network_id=t.network_id) AND NOT c.deleted ORDER BY c.due_date DESC LIMIT 1) last_invoice_status,
+  (SELECT c.due_date FROM billing_charges c JOIN billing_accounts a ON a.id=c.account_id WHERE (a.tenant_id=t.id OR a.network_id=t.network_id) AND NOT c.deleted ORDER BY c.due_date DESC LIMIT 1) last_invoice_due
   FROM tenants t ORDER BY t.created_at DESC`);
  res.json(r.rows);
 }));
@@ -267,15 +270,20 @@ app.patch('/api/master/support/:id',auth,roles('master'),route(async(req,res)=>{
  if(!r.rowCount)return bad(res,404,'Chamado não encontrado');await audit(req,'update','support_ticket',req.params.id);res.json(r.rows[0]);
 }));
 app.get('/api/master/stats',auth,roles('master'),route(async(req,res)=>{
- const r=await q(`SELECT count(*)::int tenants,
+ // Em atraso/em dia contam pelo cadastro de cobrança (a rede conta as unidades dela). Sem cobrança registrada não conta como "em dia".
+ const r=await q(`WITH acc AS (SELECT t.id tenant_id,a.id account_id,a.mode FROM tenants t LEFT JOIN billing_accounts a ON a.tenant_id=t.id OR a.network_id=t.network_id),
+ od AS (SELECT DISTINCT account_id FROM billing_charges WHERE NOT deleted AND status = ANY($1) AND due_date < $3::date),
+ pd AS (SELECT DISTINCT account_id FROM billing_charges WHERE NOT deleted AND status = ANY($2))
+ SELECT count(*)::int tenants,
  count(*) FILTER(WHERE t.status='active')::int active_tenants,
  count(*) FILTER(WHERE t.status='trial')::int trial_tenants,
  count(*) FILTER(WHERE t.status='suspended')::int blocked_tenants,
- count(*) FILTER(WHERE t.status='past_due' OR EXISTS(SELECT 1 FROM invoices i WHERE i.tenant_id=t.id AND (i.status='overdue' OR (i.status='open' AND i.due_date<current_date))))::int delinquent_tenants,
- count(*) FILTER(WHERE t.status='active' AND EXISTS(SELECT 1 FROM invoices i WHERE i.tenant_id=t.id AND i.status='paid') AND NOT EXISTS(SELECT 1 FROM invoices i WHERE i.tenant_id=t.id AND (i.status='overdue' OR (i.status='open' AND i.due_date<current_date))))::int paid_tenants,
+ count(*) FILTER(WHERE t.status='past_due' OR acc.account_id IN (SELECT account_id FROM od))::int delinquent_tenants,
+ count(*) FILTER(WHERE t.status='active' AND acc.account_id IN (SELECT account_id FROM pd) AND acc.account_id NOT IN (SELECT account_id FROM od))::int paid_tenants,
+ count(*) FILTER(WHERE acc.mode='exempt')::int exempt_tenants,
  (SELECT count(*)::int FROM cameras WHERE deleted_at IS NULL) cameras,
- (SELECT count(*)::int FROM invoices WHERE status='overdue' OR (status='open' AND due_date<current_date)) overdue_invoices
- FROM tenants t`);res.json({...r.rows[0],billing_automation_configured:false});
+ (SELECT count(*)::int FROM billing_charges WHERE NOT deleted AND status = ANY($1) AND due_date < $3::date) overdue_invoices
+ FROM tenants t LEFT JOIN acc ON acc.tenant_id=t.id`,[BILL_OPEN,BILL_PAID,todayLocal()]);res.json({...r.rows[0],billing_automation_configured:!!asaasEnv()});
 }));
 app.get('/api/master/settings',auth,roles('master'),route(async(_req,res)=>res.json((await q('SELECT sales_whatsapp,support_whatsapp FROM platform_settings WHERE id=true')).rows[0])));
 app.put('/api/master/settings',auth,roles('master'),route(async(req,res)=>{
@@ -833,9 +841,9 @@ app.get(/^\/([a-z0-9-]{3,60})\/(\d{4,5})\/?$/,shortLinkLimit,route(async(req,res
  if(!r.rowCount)return res.status(404).sendFile('tracking.html',{root:'public'});
  res.redirect(302,'/p/'+encodeURIComponent(r.rows[0].share_code));
 }));
-registerMonitoring(app,{q,auth,roles,route,bad,valid,z});registerCosts(app,{q,auth,roles,route,bad,valid,z,uuid});registerStoreNetworks(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});registerPasswordReset(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});
+registerMonitoring(app,{q,auth,roles,route,bad,valid,z});registerCosts(app,{q,auth,roles,route,bad,valid,z,uuid});registerStoreNetworks(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});registerPasswordReset(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,bcrypt});registerBilling(app,{q,auth,roles,route,bad,valid,uuid,audit,rateLimit});
 app.get('/como-funciona',(_req,res)=>res.redirect(301,'/o-que-e'));// endereço antigo da página
 app.use(express.static('public',{extensions:['html']}));app.get('/p/:token',(_req,res)=>res.sendFile('tracking.html',{root:'public'}));
 app.use((err,req,res,next)=>{console.error(err.code||err.name);if(process.env.FP_DEBUG)console.error(err.message);if(err.code==='P0001'&&err.message==='camera_limit_reached')return bad(res,409,'Limite de câmeras do plano atingido. Solicite ampliação à central.');if(err.code==='P0001'&&err.message==='camera_limit_below_installed')return bad(res,409,'Remova as câmeras excedentes antes de reduzir o plano.');if(err.code==='23505'){console.error('Violação de unicidade:',err.constraint||'desconhecida');return bad(res,409,err.constraint==='users_email_key'?'Este e-mail já está cadastrado':err.constraint==='tenants_slug_key'?'Este identificador de loja já existe':'Já existe um registro com esses dados');}if(err.code==='23503')return bad(res,400,'Referência inválida');recordServerError(err);return bad(res,500,'Erro interno');});
-startMonitoring(q);startDemoLoop();startAutoCloseLoop(Number(process.env.AUTO_CLOSE_INTERVAL_MS)||60000);
+startMonitoring(q);startBillingLoop(q);startDemoLoop();startAutoCloseLoop(Number(process.env.AUTO_CLOSE_INTERVAL_MS)||60000);
 app.listen(Number(process.env.PORT||3000),async()=>{console.log('NextVision API pronta');void ensureEdgeWorker();try{const r=await q("SELECT current_database() AS database,(SELECT count(*)::int FROM users) AS users_count,(SELECT count(*)::int FROM tenants) AS tenants_count");console.log('Diagnóstico de conexão:',JSON.stringify(r.rows[0]));}catch(e){console.error('Diagnóstico de conexão falhou:',e.code||e.message)}});

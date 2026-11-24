@@ -97,6 +97,9 @@
     </div>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Relatório para o shopping</h2><span>Faturamento por unidade, dia a dia (CSV)</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input type="month" id="repMonth" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"><button type="button" id="repGo" style="padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Baixar planilha</button><span class="soft" id="repMsg"></span></div></section>
+    <section class="card" id="fcCard" style="margin-top:16px;display:none"><div class="units-head"><h2>Créditos do cupom fiscal</h2><span id="fcInfo"></span></div>
+      <div style="height:12px;background:#efece4;border-radius:99px;overflow:hidden"><div id="fcBar" style="height:100%;width:0;background:var(--gold)"></div></div>
+      <p id="fcText" style="margin:10px 0 0"></p><p class="soft" id="fcUnits" style="margin:6px 0 0"></p></section>
     <section class="card" style="margin-top:16px"><div class="units-head"><h2>Comissões do mês</h2><span id="commInfo"></span></div>
       <div class="wrap"><table><thead><tr><th>Vendedora</th><th>Unidade</th><th class="n">Vendas</th><th class="n">Vendido no mês</th><th class="n">Faixa</th><th class="n">Comissão prevista</th><th>Próxima faixa</th></tr></thead><tbody id="commRows"></tbody></table></div></section>
   </main>
@@ -185,6 +188,18 @@
     draw(); $('feedback').textContent = '';
     loadComm().catch(() => {});
     loadTransfers().catch(() => {});
+    loadCredits().catch(() => {});
+  }
+  async function loadCredits() {
+    const c = await api('/network/fiscal-credits');
+    if (!c.purchased) { $('fcCard').style.display = 'none'; return; }
+    $('fcCard').style.display = '';
+    const pct = Math.min(100, c.percent), n = x => Number(x).toLocaleString('pt-BR');
+    $('fcBar').style.width = pct + '%'; $('fcBar').style.background = c.percent >= 100 ? '#b42318' : c.percent >= 85 ? '#d97706' : 'var(--gold)';
+    $('fcInfo').textContent = c.packages[0] ? 'Emissor: ' + c.packages[0].provider : '';
+    $('fcText').innerHTML = '<b>' + n(c.used) + ' de ' + n(c.purchased) + '</b> operações usadas (' + n(c.percent) + '%) · restam <b>' + n(Math.max(0, c.remaining)) + '</b>'
+      + (c.months_left ? ' · no ritmo atual, dá para cerca de ' + n(c.months_left) + ' mês(es)' : '') + (c.percent >= 85 ? ' · <b>hora de renovar o pacote</b>' : '');
+    $('fcUnits').textContent = c.by_unit_this_month.length ? 'Neste mês: ' + c.by_unit_this_month.map(u => u.unit + ' ' + n(u.n)).join(' · ') : '';
   }
   {
     const now = new Date(Date.now() - 3 * 3600000); $('repMonth').value = now.toISOString().slice(0, 7);

@@ -78,7 +78,7 @@
     <a class="wm" href="/rede.html" id="wm"><b id="wmName">REDE</b><i id="wmSub"></i></a>
     <label class="unit"><span>Unidade</span><select id="unitSel"><option value="">Todas as unidades</option></select></label>
     <nav class="nav"><a class="on" href="/rede.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>Painel da rede</a></nav>
-    <div class="who"><strong id="who">—</strong>Sistema FicouPronto<br><button type="button" id="logout">Sair</button></div>
+    <div class="who"><strong id="who">—</strong>Sistema FicouPronto<br><a href="/minha-senha?de=/rede.html" style="color:inherit;font-size:12px">Trocar minha senha</a> · <button type="button" id="logout">Sair</button></div>
   </aside>
   <main>
     <div class="top">
@@ -160,6 +160,18 @@
       <details id="cmSent"><summary>Mensagens enviadas no mês</summary>
         <div class="wrap"><table><thead><tr><th>Unidade</th><th class="n">Obrigado</th><th class="n">Avaliação</th><th class="n">Abriram o link</th><th class="n">Cashback vencendo</th><th class="n">Aniversário</th><th class="n">Campanhas</th></tr></thead><tbody id="smRows"></tbody></table></div></details>
     </section>
+    <section class="card" id="pcCard" style="margin-top:16px"><div class="units-head"><h2>Pessoas e acessos</h2><span id="pcInfo">PINs das vendedoras e senhas dos quiosques</span></div>
+      <div id="pcNew" hidden style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px">
+        <label class="soft" style="display:flex;flex-direction:column;font-size:12px">Nome<input id="pnName" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"></label>
+        <label class="soft" style="display:flex;flex-direction:column;font-size:12px">Função<select id="pnFunc" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"><option value="vendedora">Vendedora (PIN)</option><option value="supervisor">Supervisor (e-mail e senha)</option></select></label>
+        <label class="soft" style="display:flex;flex-direction:column;font-size:12px" id="pnUnitL">Unidade<select id="pnUnit" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"></select></label>
+        <label class="soft" style="display:none;flex-direction:column;font-size:12px" id="pnMailL">E-mail<input id="pnMail" type="email" style="padding:8px;border:1px solid #dcd8cd;border-radius:8px"></label>
+        <div id="pnUnitsL" style="display:none;font-size:12px" class="soft">Unidades do supervisor<div id="pnUnits"></div></div>
+        <button type="button" id="pnSave" style="padding:9px 14px;border:0;border-radius:8px;background:#17181d;color:#fff;font-weight:600;cursor:pointer">Cadastrar</button></div>
+      <div class="wrap"><table><thead><tr><th>Nome</th><th>Função</th><th>Unidade(s)</th><th>Situação</th><th></th></tr></thead><tbody id="pcRows"></tbody></table></div>
+      <h3 style="margin:16px 0 6px;font-size:15px">Senha do computador do quiosque</h3>
+      <div class="wrap"><table><tbody id="kpRows"></tbody></table></div>
+      <p class="soft" id="pcMsg" style="margin-top:8px"></p></section>
     <section class="card" id="exCard" style="margin-top:16px" hidden><div class="units-head"><h2>Exportar dados</h2><span>Planilhas (CSV) com os dados da rede</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="soft">De <input type="date" id="exFrom" style="padding:7px;border:1px solid #dcd8cd;border-radius:8px"></label><label class="soft">até <input type="date" id="exTo" style="padding:7px;border:1px solid #dcd8cd;border-radius:8px"></label>
         <button type="button" class="exBtn" data-k="vendas">Vendas</button><button type="button" class="exBtn" data-k="itens">Itens vendidos</button><button type="button" class="exBtn" data-k="clientes">Clientes</button><button type="button" class="exBtn" data-k="estoque">Estoque</button><span class="soft" id="exMsg"></span></div>
@@ -395,6 +407,42 @@
   });
   loadSettings().catch(e => { $('cmInfo').textContent = e.message; });
 
+  // ---------- Pessoas e acessos ----------
+  let meAccess = null, unitsList = [];
+  const FN = { dono: 'Dono', supervisor: 'Supervisor', vendedora: 'Vendedora', gerente: 'Gerente', responsavel: 'Responsável', consultora: 'Consultora' };
+  const btn = (cls, id, txt) => '<button type="button" class="' + cls + '" data-id="' + safe(id) + '" style="border:0;background:none;color:#7a5a12;font-weight:600;cursor:pointer;padding:2px 4px">' + txt + '</button>';
+  async function loadPeople() {
+    const st = await api('/network/settings'); unitsList = st.units;
+    const uname = id => unitsList.find(u => u.id === id)?.name || '';
+    const list = await api('/network/people'), owner = meAccess !== 'supervisor';
+    $('pcInfo').textContent = owner ? 'Cadastre, desative e gere PIN novo; troque a senha dos quiosques' : 'PIN novo para vendedoras das suas unidades e senha dos quiosques delas';
+    $('pcNew').hidden = !owner; if (owner) $('pcNew').style.display = 'flex';
+    $('pnUnit').innerHTML = unitsList.map(u => '<option value="' + safe(u.id) + '">' + safe(u.name) + '</option>').join('');
+    $('pnUnits').innerHTML = unitsList.map(u => '<label style="display:inline-flex;gap:4px;margin-right:8px"><input type="checkbox" class="pnU" value="' + safe(u.id) + '">' + safe(u.name) + '</label>').join('');
+    $('pcRows').innerHTML = list.map(p => '<tr' + (p.active ? '' : ' style="opacity:.5"') + '><td>' + safe(p.name) + (p.email ? '<br><span class="soft">' + safe(p.email) + '</span>' : '') + '</td><td>' + (FN[p.function] || p.function) + '</td><td>' + safe(p.unit_id ? uname(p.unit_id) : (p.unit_ids || []).map(uname).join(', ') || (p.function === 'dono' ? 'todas' : '')) + '</td><td>' + (p.active ? 'ativo' : 'desativado') + '</td><td style="white-space:nowrap">'
+      + (p.active && (p.function === 'vendedora' || (owner && p.has_pin) || p.me) ? btn('pcPin', p.id, 'Novo PIN') : '')
+      + (owner && p.function === 'supervisor' && p.active ? btn('pcLink', p.id, 'Reenviar link de senha') : '')
+      + (owner && ['vendedora', 'supervisor'].includes(p.function) && !p.me ? btn('pcTog', p.id, p.active ? 'Desativar' : 'Reativar').replace('data-id', 'data-on="' + (p.active ? '0' : '1') + '" data-id') : '') + '</td></tr>').join('') || '<tr><td colspan="5" class="soft">Ninguém para mostrar.</td></tr>';
+    const msg = t => { $('pcMsg').textContent = t; };
+    document.querySelectorAll('.pcPin').forEach(b => b.onclick = async () => { if (!confirm('Gerar um PIN novo? O PIN antigo para de valer na hora.')) return; try { const r = await api('/network/people/' + b.dataset.id + '/new-pin', 'POST', {}); msg(''); alert('Novo PIN de ' + r.name + ': ' + r.pin + '\n\nPasse o PIN só para a pessoa. Ela pode trocar no quiosque em "Trocar meu PIN".'); } catch (e) { msg(e.message); } });
+    document.querySelectorAll('.pcLink').forEach(b => b.onclick = async () => { try { await api('/network/people/' + b.dataset.id + '/password-link', 'POST', {}); msg('Link de senha enviado por e-mail.'); } catch (e) { msg(e.message); } });
+    document.querySelectorAll('.pcTog').forEach(b => b.onclick = async () => { const on = b.dataset.on === '1'; if (!on && !confirm('Desativar este acesso? A pessoa deixa de entrar na hora.')) return; try { await api('/network/people/' + b.dataset.id, 'PATCH', { active: on }); await loadPeople(); msg(on ? 'Reativado.' : 'Desativado.'); } catch (e) { msg(e.message); } });
+    $('kpRows').innerHTML = unitsList.filter(u => u.editable).map(u => '<tr><td>' + safe(u.name) + '</td><td style="text-align:right">' + btn('kpGen', u.id, 'Gerar senha nova') + btn('kpSet', u.id, 'Definir senha') + '</td></tr>').join('');
+    const setKp = async (id, password) => { try { const r = await api('/network/units/' + id + '/kiosk-password', 'PUT', password ? { password } : {}); msg(''); alert(r.password ? 'Nova senha do quiosque ' + r.unit + ': ' + r.password + '\n\nO quiosque vai pedir a senha nova na próxima vez que abrir.' : 'Senha do quiosque ' + r.unit + ' trocada.'); } catch (e) { msg(e.message); } };
+    document.querySelectorAll('.kpGen').forEach(b => b.onclick = () => { if (confirm('Gerar uma senha nova para este quiosque? A antiga para de valer na hora e o computador vai pedir a nova.')) setKp(b.dataset.id); });
+    document.querySelectorAll('.kpSet').forEach(b => b.onclick = () => { const p = prompt('Nova senha do quiosque (pelo menos 8 caracteres):'); if (p) setKp(b.dataset.id, p); });
+  }
+  $('pnFunc').onchange = () => { const sup = $('pnFunc').value === 'supervisor'; $('pnUnitL').style.display = sup ? 'none' : 'flex'; $('pnMailL').style.display = sup ? 'flex' : 'none'; $('pnUnitsL').style.display = sup ? 'block' : 'none'; };
+  $('pnSave').onclick = async () => {
+    const sup = $('pnFunc').value === 'supervisor';
+    const body = { name: $('pnName').value.trim(), function: $('pnFunc').value, ...(sup ? { email: $('pnMail').value.trim(), unit_ids: [...document.querySelectorAll('.pnU:checked')].map(x => x.value) } : { unit_id: $('pnUnit').value }) };
+    try {
+      const r = await api('/network/people', 'POST', body);
+      $('pnName').value = ''; $('pnMail').value = ''; await loadPeople();
+      alert(r.temporary_pin ? 'Cadastrada. PIN de ' + r.name + ': ' + r.temporary_pin + '\n\nPasse só para a pessoa. Ela pode trocar no quiosque.' : r.password_link_sent ? 'Cadastrado. ' + r.name + ' recebeu por e-mail o link para criar a senha (vale 1 hora; dá para reenviar).' : 'Cadastrado. Senha temporária de ' + r.name + ': ' + r.temporary_password);
+    } catch (e) { $('pcMsg').textContent = e.message; }
+  };
+
   const refresh = () => load().catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
 
   api('/network/me').then(({ network, user }) => {
@@ -403,6 +451,7 @@
     else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
     if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
     $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
+    meAccess = user?.access || 'owner'; loadPeople().catch(e => { $('pcMsg').textContent = e.message; });
     if (user?.access !== 'supervisor') { window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') }); $('exCard').hidden = false; }
   }).catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
   $('unitSel').onchange = () => { draw(); loadUnitDay().catch(e => { $('upMsg').textContent = e.message; }); };

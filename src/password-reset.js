@@ -14,6 +14,9 @@ const digest = t => crypto.createHash('sha256').update(t).digest('hex');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fallbackBase = () => (process.env.PUBLIC_BASE_URL || 'https://app.ficoupronto.com').replace(/\/$/, '');
 
+// Preenchida no registro: manda o link de criar/trocar senha para um login (usada pelo painel da rede ao criar acessos).
+export let sendPasswordLink = null;
+
 export function registerPasswordReset(app, { q, auth, roles, route, bad, valid, audit, uuid, rateLimit, bcrypt }) {
   // Endereço do link: o da rede do usuário (ex.: audace.ficoupronto.com) ou o do Ficou Pronto.
   async function baseFor(user, req) {
@@ -39,6 +42,15 @@ export function registerPasswordReset(app, { q, auth, roles, route, bad, valid, 
 </div><p style="font-size:11px;color:#9a9893;text-align:center;margin-top:14px">Enviado pelo Ficou Pronto</p></div></body></html>`;
     await sendEmail(user.email, 'Nova senha · ' + brand, html);
   }
+
+  sendPasswordLink = async (userId, req, requestedBy = null) => {
+    if (!emailConfigured()) return false;
+    const r = await q(`SELECT u.id, u.name, u.email, n.hostname network_hostname, coalesce(n.name, t.name) brand
+      FROM users u LEFT JOIN store_networks n ON n.id = coalesce(u.network_id, (SELECT network_id FROM tenants WHERE id = u.tenant_id))
+      LEFT JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.active AND u.login_kind = 'email'`, [userId]);
+    if (!r.rowCount) return false;
+    await issue(r.rows[0], req, requestedBy); return true;
+  };
 
   const userByEmail = email => q(`SELECT u.id, u.name, u.email, n.hostname network_hostname, coalesce(n.name, t.name) brand
     FROM users u LEFT JOIN store_networks n ON n.id = coalesce(u.network_id, (SELECT network_id FROM tenants WHERE id = u.tenant_id))

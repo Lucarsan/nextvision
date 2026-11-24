@@ -7,6 +7,7 @@ import { openClaims } from './warranty.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { STORE_TZ } from './auto-close.js';
+import { sendPasswordLink } from './password-reset.js';
 
 const slug = z.string().regex(/^[a-z0-9-]{3,60}$/);
 const hostname = z.string().trim().toLowerCase().max(253).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/);
@@ -213,6 +214,64 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       await audit(req, 'update', 'user', cur.id, p.tenant_id);
       res.json({ ...personOut(r.rows[0]), ...(newPin && !v.pin ? { temporary_pin: newPin } : {}) });
     } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
+  }));
+
+  // ---- Pessoas pelo painel da rede ----
+  // Dono: cadastra e desativa vendedoras e supervisores. Supervisor: vê as vendedoras das unidades dele (para gerar PIN novo).
+  const SELF_FUNCS = ['vendedora', 'supervisor'];
+  app.get('/api/network/people', auth, roles('network'), route(async (req, res) => {
+    const sup = req.user.network_access === 'supervisor';
+    const r = await q(`SELECT u.id, u.name, u.email, u.active, u.role, u.tenant_id, u.network_access, u.network_unit_ids, u.access_level, u.login_kind, u.pin_hash, u.created_at
+      FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+      WHERE (u.network_id = $1 OR (t.network_id = $1 AND u.role IN ('owner', 'operator'))) AND u.login_kind <> 'kiosk'
+        AND (NOT $2::boolean OR (u.login_kind = 'pin' AND u.tenant_id = ANY($3::uuid[])))
+      ORDER BY CASE WHEN u.role = 'network' THEN 0 ELSE 1 END, lower(coalesce(t.unit_label, t.name, '')), lower(u.name)`, [req.user.network_id, sup, req.user.network_unit_ids || []]);
+    res.set('Cache-Control', 'no-store').json(r.rows.map(u => ({ ...personOut(u), me: u.id === req.user.id })));
+  }));
+  app.post('/api/network/people', auth, roles('network'), route(async (req, res) => {
+    if (req.user.network_access !== 'owner') return bad(res, 403, 'Só o dono da rede cadastra pessoas');
+    const v = valid(personSchema.omit({ password: true }), req, res); if (!v) return;
+    if (!SELF_FUNCS.includes(v.function)) return bad(res, 400, 'Pelo painel dá para cadastrar vendedora ou supervisor');
+    const p = placement(v, req.user.network_id, await networkUnits(req.user.network_id)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor)');
+    const isPin = p.login_kind === 'pin';
+    if (!isPin && !v.email) return bad(res, 400, 'Informe o e-mail do supervisor');
+    const pin = v.pin || (isPin ? tempPin() : null), temp = isPin ? null : tempPassword();
+    try {
+      const r = await q(`INSERT INTO users(name, email, password_hash, role, tenant_id, network_id, network_access, network_unit_ids, access_level, active, login_kind, pin_hash)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$11) RETURNING *`, [v.name, isPin ? pinEmail() : v.email, await bcrypt.hash(temp || crypto.randomBytes(24).toString('hex'), 12),
+        p.role, p.tenant_id, p.network_id, p.network_access, p.network_unit_ids, p.access_level, p.login_kind, pin ? await bcrypt.hash(pin, 10) : null]);
+      await audit(req, 'create', 'user', r.rows[0].id, p.tenant_id);
+      // Supervisor: recebe por e-mail o link para criar a senha; sem e-mail configurado, a senha temporária aparece uma vez.
+      let linkSent = false;
+      if (!isPin) linkSent = await sendPasswordLink?.(r.rows[0].id, req, req.user.id).catch(() => false);
+      res.status(201).json({ ...personOut(r.rows[0]), ...(pin && !v.pin ? { temporary_pin: pin } : {}), ...(!isPin ? (linkSent ? { password_link_sent: true } : { temporary_password: temp }) : {}) });
+    } catch (e) { if (!uniqueError(e, res, 'E-mail')) throw e; }
+  }));
+  app.patch('/api/network/people/:id', auth, roles('network'), route(async (req, res) => {
+    if (req.user.network_access !== 'owner') return bad(res, 403, 'Só o dono da rede altera pessoas');
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const v = valid(z.object({ name: z.string().trim().min(2).max(120).optional(), active: z.boolean().optional(), unit_id: uuid.optional(), unit_ids: z.array(uuid).max(50).optional() }).strict(), req, res); if (!v) return;
+    const cur = (await q(`SELECT u.*, coalesce(u.network_id, t.network_id) net FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.login_kind <> 'kiosk'`, [req.params.id])).rows[0];
+    if (!cur || cur.net !== req.user.network_id) return bad(res, 404, 'Pessoa não encontrada nesta rede');
+    const f = funcOf(cur);
+    if (!SELF_FUNCS.includes(f)) return bad(res, 403, 'Dono e gerente só pela central');
+    const merged = { function: f, unit_id: v.unit_id ?? cur.tenant_id, unit_ids: v.unit_ids ?? cur.network_unit_ids };
+    const p = placement(merged, cur.net, await networkUnits(cur.net)); if (!p) return bad(res, 400, 'Escolha a unidade (ou as unidades do supervisor)');
+    const r = await q(`UPDATE users SET name = coalesce($2, name), active = coalesce($3, active), tenant_id = $4, network_unit_ids = $5,
+      password_changed_at = CASE WHEN $3 IS FALSE THEN now() ELSE password_changed_at END WHERE id = $1 RETURNING *`,
+      [cur.id, v.name ?? null, v.active ?? null, p.tenant_id, p.network_unit_ids]);
+    await audit(req, v.active === false ? 'deactivate' : 'update', 'user', cur.id, p.tenant_id);
+    res.json(personOut(r.rows[0]));
+  }));
+  // Reenviar o link de senha para um supervisor da rede.
+  app.post('/api/network/people/:id/password-link', auth, roles('network'), route(async (req, res) => {
+    if (req.user.network_access !== 'owner') return bad(res, 403, 'Só o dono da rede');
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
+    const u = (await q("SELECT id FROM users WHERE id=$1 AND network_id=$2 AND active AND login_kind='email'", [req.params.id, req.user.network_id])).rows[0];
+    if (!u) return bad(res, 404, 'Pessoa não encontrada');
+    const ok = await sendPasswordLink?.(u.id, req, req.user.id).catch(() => false);
+    if (!ok) return bad(res, 502, 'O e-mail não foi enviado');
+    await audit(req, 'send_password_link', 'user', u.id); res.json({ sent: true });
   }));
 
   // ---- Dono da rede e supervisores ----

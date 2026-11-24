@@ -98,7 +98,7 @@
       <button type="button" data-view="stock"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Estoque</button>
       <button type="button" data-view="sales"><svg viewBox="0 0 24 24"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h6"/></svg>Vendas e caixa</button>
     </nav>
-    <div class="foot"><strong id="footName">Caixa do quiosque</strong>Sistema FicouPronto<br><button type="button" id="leave">Sair do quiosque</button></div>
+    <div class="foot"><strong id="footName">Caixa do quiosque</strong>Sistema FicouPronto<br><button type="button" id="myPin" style="margin-bottom:6px">Trocar meu PIN</button><br><button type="button" id="leave">Sair do quiosque</button></div>
   </aside>
 
   <main>
@@ -232,6 +232,15 @@
   </main>
 </div>
 
+<dialog id="cpDlg" style="border:0;border-radius:14px;padding:22px;max-width:360px;width:92%"><form method="dialog" id="cpForm">
+  <h2 style="margin:0 0 10px;font-size:18px">Trocar meu PIN</h2>
+  <label class="sub" style="display:block;margin:8px 0 4px">Quem é você?</label><select class="field" id="cpWho"></select>
+  <label class="sub" style="display:block;margin:8px 0 4px">PIN atual</label><input class="field" id="cpOld" type="password" inputmode="numeric" maxlength="4" autocomplete="off">
+  <label class="sub" style="display:block;margin:8px 0 4px">PIN novo (4 números)</label><input class="field" id="cpNew" type="password" inputmode="numeric" maxlength="4" autocomplete="off">
+  <label class="sub" style="display:block;margin:8px 0 4px">Repita o PIN novo</label><input class="field" id="cpNew2" type="password" inputmode="numeric" maxlength="4" autocomplete="off">
+  <p class="msg" id="cpMsg"></p>
+  <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="go" id="cpSave" style="margin:0">Salvar</button><button type="button" class="linkbtn" id="cpCancel">Cancelar</button></div>
+  <p class="sub" style="margin-top:10px">Esqueceu o PIN? Peça um novo ao supervisor ou à gestão.</p></form></dialog>
 <dialog id="pinDlg">
   <h2 style="margin:0;font-size:18px;color:var(--ink)" id="pinTitle">PIN</h2>
   <p class="sub" style="margin:4px 0 0">Digite o seu PIN de 4 dígitos</p>
@@ -665,6 +674,18 @@
     if (b.dataset.view === 'sales') loadSales().catch(e => { $('salesSub').textContent = e.message; });
     if (b.dataset.view === 'cash') setTimeout(() => $('scan').focus(), 30);
   });
+  $('myPin').onclick = () => {
+    $('cpWho').innerHTML = sellers.map(x => '<option value="' + safe(x.id) + '">' + safe(x.name) + '</option>').join('');
+    ['cpOld', 'cpNew', 'cpNew2'].forEach(i => $(i).value = ''); $('cpMsg').textContent = ''; $('cpDlg').showModal();
+  };
+  $('cpCancel').onclick = () => $('cpDlg').close();
+  $('cpSave').onclick = async () => {
+    $('cpMsg').className = 'msg err';
+    if (!/^\d{4}$/.test($('cpNew').value)) { $('cpMsg').textContent = 'O PIN novo tem 4 números.'; return; }
+    if ($('cpNew').value !== $('cpNew2').value) { $('cpMsg').textContent = 'Os dois PINs novos não são iguais.'; return; }
+    try { await api('/store/kiosk/change-pin', 'POST', { seller_id: $('cpWho').value, current_pin: $('cpOld').value, new_pin: $('cpNew').value }); $('cpMsg').className = 'msg ok'; $('cpMsg').textContent = 'PIN trocado.'; setTimeout(() => $('cpDlg').close(), 1000); }
+    catch (e) { $('cpMsg').textContent = e.message; }
+  };
   $('leave').onclick = () => { if (!confirm('Sair do quiosque? Para abrir de novo, será preciso a senha da unidade.')) return; try { localStorage.removeItem('fp_kiosk_token'); } catch { } sessionStorage.removeItem('nv_token'); location.replace('/acesso'); };
 
   // ---------- Início ----------

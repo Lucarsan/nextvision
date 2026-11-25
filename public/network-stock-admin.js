@@ -26,9 +26,12 @@
   };
   const famList = () => '<datalist id="nsFams">' + (meta.families || []).map(f => '<option value="' + safe(f) + '">').join('') + '</datalist>';
   // Busca de peça (bipar ou digitar): código exato entra direto; senão mostra opções.
+  // 000573 bipado = 573 cadastrado (só códigos numéricos).
+  const sameCode = (a, b) => { a = String(a ?? '').trim(); b = String(b ?? '').trim(); if (!a || !b) return false; if (a === b) return true; const n = /^0*[1-9]\d*$/; return n.test(a) && n.test(b) && a.replace(/^0+/, '') === b.replace(/^0+/, ''); };
   async function findPiece(term) {
     const d = await api('/network/catalog?' + new URLSearchParams({ q: term, limit: 12 }));
-    const exact = d.items.filter(i => i.key === term || i.code === term || i.barcode === term);
+    let exact = d.items.filter(i => i.key === term || i.code === term || i.barcode === term);
+    if (!exact.length) exact = d.items.filter(i => sameCode(i.key, term) || sameCode(i.code, term) || sameCode(i.barcode, term));
     return { exact: exact.length === 1 ? exact[0] : null, items: d.items };
   }
   function scanBox(inputId, sugId, onPick, statusEl) {

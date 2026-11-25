@@ -8,6 +8,7 @@
 //   mudar nome, família ou preço muda em todas.
 // - Supervisor só dá entrada, imprime etiqueta, vê reposição e histórico das unidades dele.
 // - Valor do estoque: só o dono. Custo aparece só para o dono (o supervisor pode informar o custo na entrada).
+import { codeEq } from './code-match.js';
 import { z } from 'zod';
 import { newPrice } from './store-admin.js';
 
@@ -50,7 +51,7 @@ export function registerNetworkCatalog(app, { q, db, auth, roles, route, bad, va
       SELECT k "key", max(code) code, max(name) name, max(family) family, max(barcode) barcode, max(price_cents) price_cents,
         min(price_cents) <> max(price_cents) prices_differ, max(cost_cents) cost_cents, sum(greatest(coalesce(stock_qty, 0), 0))::int total,
         count(DISTINCT tenant_id)::int units, bool_or(generated_barcode) generated, count(*) OVER() n
-        FROM p WHERE ($2 = '' OR fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR code = $2 OR barcode = $2) AND ($3 = '' OR family = $3)
+        FROM p WHERE ($2 = '' OR fp_fold(name) LIKE '%'||fp_fold($2)||'%' OR ${codeEq('code','$2')} OR ${codeEq('barcode','$2')}) AND ($3 = '' OR family = $3)
        GROUP BY k HAVING NOT $4 OR bool_and(barcode IS NULL)
        ORDER BY lower(max(name)), k LIMIT $5 OFFSET $6`, [ids, term, family, noBarcode, limit, offset]);
     const families = (await q('SELECT DISTINCT family FROM products WHERE tenant_id = ANY($1::uuid[]) AND active AND family IS NOT NULL ORDER BY 1 LIMIT 300', [ids])).rows.map(x => x.family);
@@ -217,7 +218,7 @@ export function registerNetworkCatalog(app, { q, db, auth, roles, route, bad, va
       FROM stock_movements m JOIN products p ON p.id = m.product_id JOIN tenants t ON t.id = m.tenant_id
       LEFT JOIN sales x ON x.id = m.sale_id LEFT JOIN users u ON u.id = m.created_by
       WHERE m.tenant_id = ANY($1::uuid[]) AND ($2 = '' OR m.kind = $2)
-        AND ($3 = '' OR fp_fold(p.name) LIKE '%'||fp_fold($3)||'%' OR p.code = $3 OR p.barcode = $3)
+        AND ($3 = '' OR fp_fold(p.name) LIKE '%'||fp_fold($3)||'%' OR ${codeEq('p.code','$3')} OR ${codeEq('p.barcode','$3')})
         AND ($4 = '' OR m.created_at >= ($4::date)::timestamp AT TIME ZONE $7) AND ($5 = '' OR m.created_at < ($5::date + 1)::timestamp AT TIME ZONE $7)
         AND ($6 = '' OR m.created_at < $6::timestamptz)
       ORDER BY m.created_at DESC, m.id DESC LIMIT $8`, [uid ? [uid] : units.map(u => u.id), kind, term, dayOf(req.query.from), dayOf(req.query.to), before, TZ, limit]);

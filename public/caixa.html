@@ -84,6 +84,12 @@
   #viewSales .people button,#viewWarranty .people button,#viewStock .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
   .cancelbtn{border:1px solid #e6c9c2;background:#fff;color:var(--red);border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
   tr.canceled td{color:var(--muted);text-decoration:line-through}
+  .tefbox{margin:10px 0 0;padding:12px;border-radius:10px;background:#f6f3ec;border:1px solid #e8dfcc;font-size:13px}
+  .tefbox code{display:block;word-break:break-all;font-size:11px;margin-top:6px;color:var(--muted)}
+  .tefbox img{display:block;width:180px;height:180px;margin:8px auto}
+  .tefpend{border:1px solid #e6c9c2;background:#fff7f5;border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:13px}
+  .tefpend p{margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .tefpend button{border:1px solid #d9c6a6;background:#fff;border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
   #stTabs .chip{border:0;cursor:pointer}
   .ncgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.ncgrid .full{grid-column:1/-1}
   .ncgrid label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
@@ -157,9 +163,11 @@
             </div>
           </div>
           <div class="card">
+            <div class="tefpend" id="tefPend" hidden></div>
             <p class="label">Pagamento</p>
             <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button></div>
             <label class="disc" id="discRow" hidden><input type="checkbox" id="disc"> <span id="discLabel"></span></label>
+            <label class="disc" id="instRow" hidden>Parcelas no crédito <select class="field" id="inst" style="width:auto;margin-left:6px"></select></label>
             <div id="offRow" hidden><label class="disc"><input type="checkbox" id="offline"> Pinpad fora do ar: cobrei na maquininha avulsa</label>
               <input class="field" id="offAuth" maxlength="40" placeholder="Autorização do comprovante (AUT/NSU)" hidden style="margin-top:6px"></div>
             <div class="who"><div style="display:flex;align-items:center"><span style="font-size:13px;font-weight:600;color:var(--ink)">Quem está vendendo?</span><span class="pinok" id="pinOk" hidden>✓ PIN confirmado</span></div><div class="people" id="sellers"></div></div>
@@ -169,6 +177,7 @@
               <div class="step" id="st2"><i>2</i><div><b>Cupom fiscal (NFC-e)</b><small>Em implantação: emita o cupom no sistema atual</small></div></div>
               <div class="step" id="st3"><i>3</i><div><b id="st3t">Cashback pelo WhatsApp</b><small>Junto com a garantia, depois de finalizar</small></div></div>
             </div>
+            <div class="tefbox" id="tefBox" hidden></div>
             <button type="button" class="go" id="finish" disabled>Finalizar venda</button>
             <p class="msg" id="saleMsg"></p>
             <div class="done" id="doneBox" hidden></div>
@@ -302,6 +311,7 @@
   <button type="button" class="linkbtn" id="pinCancel" style="display:block;margin:6px auto 0">Cancelar</button>
 </dialog>
 
+<script src="/tef-client.js?v=1"></script>
 <script>
 (() => {
   let token = ''; try { token = localStorage.getItem('fp_kiosk_token') || ''; } catch { }
@@ -322,6 +332,8 @@
 
   // ---------- Estado ----------
   let brandName = '';
+  // TEF Stone (AutoTEF): tef = cliente do pinpad (null = sem TEF); paidTx = cobrança aprovada ainda sem venda gravada.
+  let tef = null, tefCfg = { mode: 'off' }, paidTx = null;
   let isKiosk = false, unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
   const subtotal = () => items.reduce((a, x) => a + x.price_cents * x.qty, 0);
   const discountCents = () => !$('disc').checked ? 0 : Math.round(subtotal() * (method === 'cash' ? 0.10 : method === 'pix' ? 0.05 : 0));
@@ -347,7 +359,11 @@
     else $('disc').checked = false;
     $('offRow').hidden = method === 'cash'; if (method === 'cash') $('offline').checked = false;
     $('offAuth').hidden = !$('offline').checked;
-    $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)' : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
+    $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)'
+      : method === 'cash' ? 'Dinheiro: não usa o pinpad'
+      : tef ? (paidTx ? 'Já cobrado no pinpad: ' + brl(paidTx.amount_cents) + '. Finalize para gravar a venda.' : 'Ao finalizar, o valor vai direto para o pinpad' + (tef.mode === 'simulator' ? ' (SIMULADOR: não cobra de verdade)' : tef.mode === 'sandbox' ? ' (Stone de teste)' : ''))
+      : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
+    $('instRow').hidden = !(tef && method === 'credit' && !$('offline').checked);
     $('sellers').innerHTML = sellers.map(s => '<button type="button" data-s="' + safe(s.id) + '"' + (seller?.id === s.id ? ' class="on"' : '') + '>' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada nesta unidade.</span>';
     $('sellers').querySelectorAll('[data-s]').forEach(b => b.onclick = () => askPin(sellers.find(s => s.id === b.dataset.s), pin => { seller = sellers.find(s => s.id === b.dataset.s); sellerPin = pin; draw(); }));
     $('pinOk').hidden = !seller;
@@ -469,6 +485,30 @@
       body.new_customer = f.data;
     }
     else body.anonymous = true;
+    if (tef && method !== 'cash' && !body.offline_payment) {
+      // Cobra no pinpad antes de gravar. Cobrança já aprovada (venda não gravou antes) é reaproveitada, nunca cobrada de novo.
+      if (paidTx && (paidTx.method !== method || paidTx.amount_cents !== total())) {
+        $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Já foi cobrado ' + brl(paidTx.amount_cents) + ' no pinpad e a venda mudou. Estorne essa cobrança em "Pendências do pinpad" e cobre de novo.';
+        paidTx = null; loadTefPending(); draw(); return;
+      }
+      if (!paidTx) {
+        const box = $('tefBox'), step = t => { box.hidden = false; box.innerHTML = '<strong>Pinpad</strong><div>' + safe(t) + '</div>'; };
+        try {
+          const tx = method === 'pix'
+            ? await tef.payPix(total(), (img, text) => { box.hidden = false; box.innerHTML = '<strong>Pix: ' + brl(total()) + '</strong><div>QR Code no pinpad' + (img ? ' e aqui:' : '') + '</div>' + (img ? '<img alt="QR Code do Pix" src="data:image/png;base64,' + safe(img) + '">' : '') + (text ? '<code>' + safe(text) + '</code>' : '') + '<div class="sub">Aguardando o pagamento…</div>'; }, step)
+            : await tef.payCard(method, total(), Number($('inst').value) || 1, step);
+          if (tx.warnings?.length) alert(tx.warnings.join('\n'));
+          if (tx.status !== 'approved') {
+            box.hidden = true; $('saleMsg').className = 'msg err';
+            $('saleMsg').textContent = tx.status === 'unknown' || tx.status === 'pending' ? 'O pinpad não respondeu. NÃO cobre de novo antes de conferir no app da Stone; a cobrança ficou em "Pendências do pinpad".'
+              : (tx.status === 'declined' ? 'Pagamento recusado: ' : tx.status === 'expired' ? 'Pix expirado: ' : 'Erro no pinpad: ') + (tx.message || '') + '. Tente de novo ou use outra forma.';
+            loadTefPending(); draw(); return;
+          }
+          paidTx = tx; step('Aprovado' + (tx.brand_name ? ' · ' + tx.brand_name : '') + (tx.auth_code ? ' · aut. ' + tx.auth_code : '') + '. Gravando a venda…');
+        } catch (e) { box.hidden = true; $('saleMsg').className = 'msg err'; $('saleMsg').textContent = e.message; draw(); return; }
+      }
+      body.tef_transaction_ids = [paidTx.id];
+    }
     try {
       const r = await api('/store/sales', 'POST', body);
       const c = r.customer || customer;
@@ -494,9 +534,12 @@
         }).catch(() => {});
       }
       $('newSale').onclick = resetSale;
-      items = []; seller = null; sellerPin = ''; $('disc').checked = false; $('offline').checked = false; $('offAuth').value = '';
+      items = []; seller = null; sellerPin = ''; $('disc').checked = false; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
       draw(); $('finish').disabled = true;
-    } catch (e) { $('saleMsg').textContent = e.message; $('saleMsg').className = 'msg err'; draw(); }
+    } catch (e) {
+      $('saleMsg').textContent = (paidTx ? 'O pagamento foi APROVADO no pinpad, mas a venda não gravou: ' : '') + e.message + (paidTx ? ' Corrija e toque em Finalizar de novo (não cobra outra vez).' : '');
+      $('saleMsg').className = 'msg err'; draw();
+    }
   };
   function resetSale() {
     items = []; seller = null; sellerPin = ''; method = 'credit'; $('disc').checked = false; $('doneBox').hidden = true; $('st1').classList.remove('done');
@@ -595,10 +638,37 @@
     const sellerP = sellers.find(s => s.name === x.seller_name);
     const ask = sellerP || { id: null, name: x.seller_name || 'Quem vendeu' };
     askPin(ask, sPin => {
-      askPin({ name: 'Supervisor, gerente ou dono' }, () => loadSales(), async supPin => {
-        await api('/store/sales/' + x.id + '/cancel', 'POST', { reason: reason.trim(), seller_pin: sPin, supervisor_pin: supPin });
+      let done = null;
+      askPin({ name: 'Supervisor, gerente ou dono' }, async () => { loadSales(); await reverseAfterCancel(done?.tef_to_reverse || []); }, async supPin => {
+        done = await api('/store/sales/' + x.id + '/cancel', 'POST', { reason: reason.trim(), seller_pin: sPin, supervisor_pin: supPin });
       });
     }, sellerP ? undefined : async () => {});
+  }
+  // ---------- Pendências do pinpad (TEF) ----------
+  async function reverseOne(id, method, cents) {
+    if (method === 'pix') { alert('Pix de ' + brl(cents) + ': a devolução é feita pelo app da Stone. Depois, marque como resolvido em "Pendências do pinpad".'); return false; }
+    if (!tef) { alert('O TEF não está ligado nesta unidade.'); return false; }
+    if (!confirm('Estornar ' + brl(cents) + ' no pinpad agora? Precisa do MESMO cartão da compra.')) return false;
+    try { await tef.reverse(id, t => { $('tefPend').hidden = false; $('tefPend').innerHTML = '<strong>' + safe(t) + '</strong>'; }); alert('Estorno de ' + brl(cents) + ' feito.'); return true; }
+    catch (e) { alert(e.message); return false; } finally { loadTefPending(); }
+  }
+  async function reverseAfterCancel(list) { for (const t of list) await reverseOne(t.id, t.method, t.amount_cents); }
+  const PEND = { no_sale: 'aprovada sem venda gravada', sale_canceled: 'de venda cancelada', no_answer: 'sem resposta do pinpad' };
+  async function loadTefPending() {
+    if (!tef) return;
+    let d; try { d = await api('/store/tef/pending'); } catch { return; }
+    const box = $('tefPend'); box.hidden = !d.items.length; if (!d.items.length) return;
+    box.innerHTML = '<strong>Pendências do pinpad</strong>' + d.items.map(t => '<p><span>' + new Date(t.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' })
+      + ' · ' + brl(t.amount_cents) + ' · ' + safe(METHOD[t.method] || t.method) + (t.card_mask ? ' ' + safe(t.card_mask.slice(-4)) : '') + ' · ' + PEND[t.reason] + (t.sale_number ? ' (venda nº ' + t.sale_number + ')' : '') + '</span>'
+      + (t.reason !== 'no_answer' && t.method !== 'pix' ? '<button type="button" data-rv="' + safe(t.id) + '">Estornar no pinpad</button>' : '')
+      + '<button type="button" data-rs="' + safe(t.id) + '">Resolvido</button></p>').join('')
+      + '<div class="sub">"Sem resposta": confira no app da Stone se a cobrança passou antes de cobrar de novo.</div>';
+    box.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { const t = d.items.find(x => x.id === b.dataset.rv); if (paidTx?.id === t.id) paidTx = null; reverseOne(t.id, t.method, t.amount_cents); });
+    box.querySelectorAll('[data-rs]').forEach(b => b.onclick = async () => {
+      const note = prompt('O que foi conferido? (ex.: "não passou no app da Stone" ou "Pix devolvido pelo app")'); if (!note || note.trim().length < 3) return;
+      try { await api('/store/tef/transactions/' + b.dataset.rs + '/resolve', 'POST', { note: note.trim() }); if (paidTx?.id === b.dataset.rs) paidTx = null; } catch (e) { alert(e.message); }
+      loadTefPending(); draw();
+    });
   }
   function refreshWho() {
   whoButtons('sgWho', s => {
@@ -871,6 +941,9 @@
       if (b?.network) brandName = b.name;
       if (b?.network) { const [first, ...rest] = b.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) document.documentElement.style.setProperty('--gold', b.brand_color); }
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;
+      try { tefCfg = await api('/store/tef/config'); if (tefCfg.mode !== 'off' && window.FpTef) tef = window.FpTef(tefCfg, api); } catch { }
+      $('inst').innerHTML = Array.from({ length: 12 }, (_, i) => '<option value="' + (i + 1) + '">' + (i + 1) + 'x' + (i ? ' sem juros' : ' (à vista)') + '</option>').join('');
+      if (tef) { $('st1').querySelector('b').textContent = 'Cobrar no pinpad Stone' + (tef.mode === 'simulator' ? ' · SIMULADOR' : ''); loadTefPending(); setInterval(loadTefPending, 60000); }
       draw(); await loadCash(); refreshWho(); refreshStockWho();
       if (unit.depot) document.querySelector('[data-view="stock"]').click();
       msgBadge(); setInterval(msgBadge, 10 * 60000);

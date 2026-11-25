@@ -88,3 +88,20 @@ test('painel: botão Valor do estoque pede login e mostra os totais', {
     assert.deepEqual(errors, []);
   } finally { await browser?.close(); await f.cleanup(); }
 });
+
+// Produto com modelos e estoque contado no total (película/capa: pergunta o modelo na venda, mas o
+// estoque é um número só no produto). Antes ficava fora do valor do estoque.
+test('valor do estoque inclui produto com modelos contado no total', { skip }, async () => {
+  const f = await createStoreFixture();
+  try {
+    await f.api('/master/tenants/' + f.tenant, { method: 'PATCH', token: f.masterToken, body: { sales_enabled: true } });
+    await f.api('/store/products', { method: 'POST', body: { name: 'Capa Android', price_cents: 2000, cost_cents: 450, ask_variant: true, variant_stock: 'total', stock_qty: 10 } }, 201);
+    await f.api('/store/products', { method: 'POST', body: { name: 'Cabo', price_cents: 1500, cost_cents: 400, stock_qty: 2 } }, 201);
+    const d = await f.api('/store/stock/value', { method: 'POST', body: { login: 'admin', password: 'senha-de-teste-1' } });
+    assert.equal(d.products.units, 12);
+    assert.equal(d.products.cost_cents, 10 * 450 + 2 * 400);
+    assert.equal(d.products.sale_cents, 10 * 2000 + 2 * 1500);
+    const capa = d.top.find(r => r.name === 'Capa Android');
+    assert.ok(capa && capa.qty === 10 && capa.variant == null, 'uma linha com o estoque total');
+  } finally { await f.cleanup(); }
+});

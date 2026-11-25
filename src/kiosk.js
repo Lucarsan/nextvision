@@ -5,6 +5,7 @@ import { tierFor, tiersForTenant } from './commission-tiers.js';
 // - Na mesma tela, a senha de um dono (ou de um supervisor daquela unidade) abre direto o painel da rede.
 // - Cancelar venda no quiosque pede o PIN de quem vendeu e o PIN de um supervisor, dono ou gerente.
 import crypto from 'node:crypto';
+import { passwordMatches } from './password-input.js';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
@@ -62,7 +63,7 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
       WHERE u.active AND ((u.login_kind = 'kiosk' AND u.tenant_id = $1) OR (u.role = 'network' AND u.network_id = $2 AND u.login_kind = 'email'))
       ORDER BY (u.login_kind = 'kiosk') DESC`, [unit.id, unit.network_id]);
     for (const u of people.rows) {
-      if (!(await bcrypt.compare(v.password, u.password_hash))) continue;
+      if (!(await passwordMatches(v.password, u.password_hash))) continue;
       if (u.login_kind === 'kiosk') {
         if (!['trial', 'active'].includes(unit.status)) return bad(res, 403, 'Unidade bloqueada. Fale com a central.');
         const token = jwt.sign({ id: u.id, tenant_id: u.tenant_id, role: u.role }, secret, { algorithm: 'HS256', expiresIn: '16h' });

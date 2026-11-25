@@ -114,7 +114,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const cb = (await client.query(`SELECT coalesce(sum(cashback_used_cents),0)::bigint used,coalesce(sum(cashback_earned_cents),0)::bigint earned
       FROM sales WHERE session_id=$1 AND tenant_id=$2 AND canceled_at IS NULL`, [sessionId, tenant])).rows[0];
     // Custos: preço de custo das mercadorias e peças vendidas (e brindes) — o que vai precisar ser reposto.
-    const cost = (await client.query(`SELECT coalesce(sum(i.unit_cost_cents*i.quantity),0)::bigint cost,count(*) FILTER (WHERE i.unit_cost_cents IS NULL AND (i.product_id IS NOT NULL OR NOT i.service))::int unknown
+    const cost = (await client.query(`SELECT coalesce(sum(coalesce(i.unit_cost_cents*i.quantity,0)+coalesce(i.ride_cost_cents,0)),0)::bigint cost,count(*) FILTER (WHERE i.unit_cost_cents IS NULL AND (i.product_id IS NOT NULL OR NOT i.service))::int unknown
       FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.session_id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL`, [sessionId, tenant])).rows[0];
     const by = Object.fromEntries(totals.rows.map(r => [r.payment_method, { count: r.n, total_cents: Number(r.total) }]));
     const sum = kind => moves.rows.filter(r => r.kind === kind).reduce((a, r) => a + Number(r.total), 0);
@@ -141,7 +141,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const sales = await q(`SELECT x.id,x.sale_number,x.total_cents,x.cashback_used_cents,x.cashback_earned_cents,x.payment_method,x.payments,x.description,x.created_at,x.canceled_at,x.cancel_reason,
         x.customer_id,c.name customer_name,c.phone customer_phone,o.order_number,u.name created_by_name,uc.name canceled_by_name,COALESCE(sl.name,u.name) seller_name,
         COALESCE((SELECT json_agg(json_build_object('name',i.name || COALESCE(' ' || i.variant_name,''),'barcode',i.barcode,'quantity',i.quantity,'unit_price_cents',i.unit_price_cents,'total_cents',i.total_cents,
-            'service',i.service,'gift',i.gift,'device_model',i.device_model,'supplier_name',i.supplier_name,'unit_cost_cents',i.unit_cost_cents,'warranty_days',i.warranty_days) ORDER BY i.position)
+            'service',i.service,'gift',i.gift,'device_model',i.device_model,'supplier_name',i.supplier_name,'unit_cost_cents',i.unit_cost_cents,'ride_cost_cents',i.ride_cost_cents,'warranty_days',i.warranty_days) ORDER BY i.position)
           FROM sale_items i WHERE i.sale_id=x.id),'[]'::json) items
       FROM sales x LEFT JOIN customers c ON c.id=x.customer_id LEFT JOIN orders o ON o.id=x.order_id JOIN users u ON u.id=x.created_by LEFT JOIN users uc ON uc.id=x.canceled_by LEFT JOIN users sl ON sl.id=x.seller_id
       WHERE x.session_id=$1 AND x.tenant_id=$2 ORDER BY x.created_at DESC,x.sale_number DESC`, [sessionId, tenant]);
@@ -159,7 +159,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // ---------- Configuração ----------
   app.get('/api/store/sales/config', ...staff, route(async (req, res) => {
     const r = await q(`SELECT sales_enabled,google_review_url,loyalty_enabled,loyalty_target,loyalty_reward,loyalty_rules,
-      loyalty_min_sale_cents,status_message,offer_message,name,slug,niche,${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)]);
+      loyalty_min_sale_cents,status_message,offer_message,name,slug,niche,ride_cost_enabled,${CB_CONFIG} FROM tenants WHERE id=$1`, [tid(req)]);
     const t = r.rows[0] || {};
     if (!t.sales_enabled) return res.json({ enabled: false });
     const { sales_enabled, ...rest } = t;
@@ -1071,7 +1071,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         // Serviço: preço cobrado, custo, fornecedor, aparelho e garantia. part_id = peça do estoque usada (baixa 1).
         // catalog_id: serviço cadastrado (pet shop: adicional ou principal, para comissão e metas).
         z.object({ service: z.string().trim().min(2).max(120), unit_price_cents: cents, cost_cents: cents.nullable().optional(), supplier: z.string().trim().max(80).optional(),
-          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), part_none: z.boolean().optional(), warranty_days: z.number().int().min(0).max(3650).optional(), catalog_id: uuid.optional() }).strict()
+          device_model: z.string().trim().max(80).optional(), part_id: uuid.optional(), part_none: z.boolean().optional(), warranty_days: z.number().int().min(0).max(3650).optional(), catalog_id: uuid.optional(),
+          // Custo do Uber moto/motoboy deste serviço (gasto da loja; só abate do lucro).
+          ride_cost_cents: cents.max(10000000).nullable().optional() }).strict()
       ])).min(1).max(200).optional(),
       discount_cents: cents.optional(),
       seller_id: uuid.optional(),
@@ -1401,7 +1403,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
             merged.set('s:' + n, { id: part?.id || null, service: true, name: it.service.replace(/\s+/g, ' '), barcode: null,
               cost_cents: it.cost_cents !== undefined && it.cost_cents !== null ? it.cost_cents : part?.cost_cents ?? null,
               supplier: cleanName(it.supplier) || part?.supplier_name || null, device_model: cleanName(it.device_model) || part?.device_model || null,
-              warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1,
+              warranty_days: it.warranty_days ?? null, list_price_cents: null, unit_price_cents: it.unit_price_cents, quantity: 1, ride_cost_cents: it.ride_cost_cents || null,
               catalog_id: it.catalog_id || null, addon: !!(it.catalog_id && catById.get(it.catalog_id)?.addon), part_none: !part && !!it.part_none });
             continue;
           }
@@ -1516,9 +1518,9 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const cq = (sql, params) => c.query(sql, params);
       for (const x of items) {
         const vr = x.vid ? { id: x.vid } : null;
-        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift,catalog_id,addon,part_none)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
-          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift, x.catalog_id || null, !!x.addon, !!x.part_none]);
+        await c.query(`INSERT INTO sale_items(tenant_id,sale_id,product_id,name,barcode,quantity,unit_price_cents,total_cents,position,unit_cost_cents,list_price_cents,variant_id,variant_name,service,supplier_name,device_model,warranty_days,gift,catalog_id,addon,part_none,ride_cost_cents)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, [tid(req), sale.id, x.id, x.name, x.barcode, x.quantity, x.unit_price_cents, x.total_cents, x.position, x.cost_cents, x.list_price_cents, vr?.id || null, x.variant || null,
+          !!x.service, x.service ? x.supplier : null, x.service ? x.device_model : null, x.service ? x.warranty_days : null, !!x.gift, x.catalog_id || null, !!x.addon, !!x.part_none, x.service ? x.ride_cost_cents || null : null]);
         if (!x.id) continue;
         // Baixa no estoque (do modelo, ou do produto quando controla estoque) e marca para reposição.
         // Modelo contado no total: o modelo só marca a reposição; a baixa é no produto.
@@ -1527,8 +1529,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         else if (!vr) await c.query('UPDATE products SET stock_qty=CASE WHEN stock_qty IS NULL THEN NULL ELSE GREATEST(-999999,stock_qty-$1) END,restock_pending=restock_pending+$1,updated_at=now() WHERE id=$2 AND tenant_id=$3', [x.quantity, x.id, tid(req)]);
         await ledger(cq, tid(req), x.id, vr?.id || null, 'sale', -x.quantity, x.cost_cents, sale.id, req.user.id);
       }
-      sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents, service, supplier, device_model, warranty_days, cost_cents, gift }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents, ...(gift ? { gift: true } : {}),
-        ...(service ? { service: true, supplier_name: supplier, device_model, warranty_days, unit_cost_cents: cost_cents } : {}) }));
+      sale.items = items.map(({ id, name, variant, barcode, quantity, unit_price_cents, list_price_cents, total_cents, service, supplier, device_model, warranty_days, cost_cents, gift, ride_cost_cents }) => ({ product_id: id, name, variant_name: variant || null, barcode, quantity, unit_price_cents, list_price_cents, total_cents, ...(gift ? { gift: true } : {}),
+        ...(service ? { service: true, supplier_name: supplier, device_model, warranty_days, unit_cost_cents: cost_cents, ride_cost_cents: ride_cost_cents || null } : {}) }));
       if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && (cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) sale.cashback_off_today = true;
       else if (customerId && cbCfg.cashback_enabled && !sale.cashback_earned_cents && v.items && items.some(x => x.no_cb) && !cbBase) sale.cashback_no_products = true;
       // Pagamento de um pedido de serviço não soma de novo: o pedido já conta ao ser concluído.

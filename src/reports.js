@@ -63,7 +63,7 @@ export async function watchedSales(q, range, inRange) {
          COALESCE(sl.name,u.name) seller,COALESCE(it.items,'[]') items
        FROM sales x JOIN customers c ON c.id=x.customer_id JOIN users u ON u.id=x.created_by LEFT JOIN users sl ON sl.id=x.seller_id
        LEFT JOIN LATERAL (SELECT json_agg(json_build_object('name',CASE WHEN i.gift THEN 'Brinde: ' ELSE '' END || i.name || COALESCE(' ' || i.variant_name,'') || COALESCE(' · ' || i.device_model,''),
-           'qty',i.quantity,'total',i.total_cents,'list',i.list_price_cents*i.quantity,'cost',i.unit_cost_cents*i.quantity,'service',i.service) ORDER BY i.position) items
+           'qty',i.quantity,'total',i.total_cents,'list',i.list_price_cents*i.quantity,'cost',CASE WHEN i.unit_cost_cents IS NULL AND i.ride_cost_cents IS NULL THEN NULL ELSE COALESCE(i.unit_cost_cents*i.quantity,0)+COALESCE(i.ride_cost_cents,0) END,'service',i.service) ORDER BY i.position) items
          FROM sale_items i WHERE i.sale_id=x.id) it ON true
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND right(c.phone_key,8)=ANY($5) AND ${inRange('x.created_at')} ORDER BY x.created_at`, args),
     q(`SELECT right(c.phone_key,8) k,c.name customer,c.phone,p.number,p.created_at,p.total_cents,p.description,COALESCE(sl.name,u.name) seller
@@ -122,10 +122,12 @@ export async function reportData(q, tenantId, kind, day) {
        WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND ${inRange('x.created_at')} GROUP BY 1 ORDER BY 1`, range),
     // Serviços: agrupados por serviço, aparelho e fornecedor, com custo (peça) e lucro.
     q(`SELECT min(i.name) name,i.device_model model,i.supplier_name supplier,count(*)::int qty,sum(i.total_cents)::int total,
-         sum(i.unit_cost_cents)::int cost,bool_and(i.unit_cost_cents IS NOT NULL) known
+         sum(i.unit_cost_cents)::int part_cost,COALESCE(sum(i.ride_cost_cents),0)::int ride,bool_and(i.unit_cost_cents IS NOT NULL) known
        FROM sale_items i JOIN sales x ON x.id=i.sale_id WHERE x.tenant_id=$1 AND x.canceled_at IS NULL AND i.service AND ${inRange('x.created_at')}
        GROUP BY lower(i.name),i.device_model,i.supplier_name ORDER BY 5 DESC,1`, range)
   ]);
+  // Custo do serviço = peça + Uber moto (gasto da loja). O fornecedor só conta a peça.
+  for (const x of services.rows) x.cost = x.part_cost == null ? null : x.part_cost + x.ride;
   const byMethod = {};
   for (const s of sales.rows) for (const p of payParts(s)) { const m = byMethod[p.method] ||= { n: 0, total: 0 }; m.n++; m.total += p.amount_cents; }
   const expByCat = {};
@@ -135,12 +137,12 @@ export async function reportData(q, tenantId, kind, day) {
   const itemsTotal = items.rows.reduce((a, i) => a + i.total, 0), itemsCost = items.rows.reduce((a, i) => a + (i.cost || 0), 0);
   const costKnown = items.rows.every(i => i.known);
   // Custos: preço de custo do que foi vendido (mercadorias, brindes e peças dos serviços). É o que gira para reposição.
-  const servicesCost = services.rows.reduce((a, x) => a + (x.cost || 0), 0);
+  const servicesCost = services.rows.reduce((a, x) => a + (x.part_cost || 0) + (x.ride || 0), 0);
   const costsTotal = itemsCost + servicesCost;
   // Gasto por fornecedor: custo das peças usadas nos serviços + compras de estoque com fornecedor cadastrado.
   const bySupplier = new Map();
   const sup = name => { if (!bySupplier.has(name)) bySupplier.set(name, { name, services: 0, services_cost: 0, purchases: 0 }); return bySupplier.get(name); };
-  for (const sv of services.rows) if (sv.supplier) { const x = sup(sv.supplier); x.services += sv.qty; x.services_cost += sv.cost || 0; }
+  for (const sv of services.rows) if (sv.supplier) { const x = sup(sv.supplier); x.services += sv.qty; x.services_cost += sv.part_cost || 0; }
   for (const b of buys.rows) if (b.supplier) sup(b.supplier).purchases += b.total;
   // Acompanhamento dos clientes (links abertos, vídeo assistido). Se falhar, o relatório sai sem esta parte.
   const engagement = await linkStats(q, { from: per.from, to: per.to, tenantId }).then(x => x.stores[0] || null).catch(() => null);
@@ -245,7 +247,7 @@ ${table(['Item', R('Qtd'), R('Total'), R('Custo')], d.items.map(i => [esc(i.name
 ${d.typed.n ? `<p style="font-size:12px;color:#6b7280">Mais ${d.typed.n} venda(s) lançada(s) só com valor digitado, sem itens: ${brl(d.typed.total)}.</p>` : ''}
 
 ${services.length ? h2(`Serviços realizados (${brl(d.services_total)})`) + table(['Serviço', 'Aparelho', 'Fornecedor', R('Qtd'), R('Total'), R('Custo'), R('Lucro')],
-    services.map(x => [esc(x.name), esc(x.model || '—'), esc(x.supplier || '—'), x.qty, brl(x.total), x.known ? brl(x.cost) : '—', x.known ? `<span style="color:${x.total - x.cost < 0 ? '#b42318' : '#027a48'}">${brl(x.total - x.cost)}</span>` : '—']), '') : ''}
+    services.map(x => [esc(x.name), esc(x.model || '—'), esc(x.supplier || '—'), x.qty, brl(x.total), x.known ? brl(x.cost) + (x.ride ? `<br><small>inclui Uber ${brl(x.ride)}</small>` : '') : (x.ride ? `Uber ${brl(x.ride)}` : '—'), x.known ? `<span style="color:${x.total - x.cost < 0 ? '#b42318' : '#027a48'}">${brl(x.total - x.cost)}</span>` : '—']), '') : ''}
 ${(d.by_supplier || []).length ? h2('Por fornecedor') + table(['Fornecedor', R('Serviços'), R('Custo das peças nos serviços'), R('Compras de estoque')], d.by_supplier.map(x => [esc(x.name), x.services || '—', brl(x.services_cost), brl(x.purchases)]), '') : ''}
 
 ${h2(`Despesas lançadas (${brl(d.expenses_total)})`)}

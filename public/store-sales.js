@@ -1173,6 +1173,7 @@
       <div class="fs-row"><label class="nv-field fs-grow">Preço de venda<input id="fsSvcPrice" inputmode="decimal" placeholder="0,00" value="${esc(svc.price || '')}"></label>
         <label class="nv-field fs-grow">Preço de custo<input id="fsSvcCost" inputmode="decimal" placeholder="0,00" value="${esc(svc.cost || '')}"></label>
         <label class="nv-field"${hide}>Garantia<select id="fsSvcWarranty">${WARRANTY.map(([v, t]) => `<option value="${v}"${String(svc.warranty || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
+      ${config?.ride_cost_enabled && !pet ? `<div class="fs-row"><label class="nv-field fs-grow">Uber moto (custo) <small class="nv-help">opcional · gasto da loja, não soma no valor do cliente</small><input id="fsSvcRide" inputmode="decimal" placeholder="0,00" value="${esc(svc.ride || '')}"></label></div>` : ''}
       ${pet && svc.calc ? `<p class="nv-help fs-svc-calc" id="fsSvcCalc">${esc(svc.calc)}</p>` : ''}<p class="nv-help" id="fsSvcProfit"></p>
       <div class="nv-field fs-gift"${hide}>Brinde <small class="nv-help">opcional · ex.: película aplicada de graça; sai do estoque e o custo entra nos custos</small><div id="fsSvcGift"></div></div>
       <label class="nv-field">Observação (opcional)<input id="fsSvcNote" maxlength="200" placeholder="Ex.: ${svcEx('note')}" value="${esc(svc.note || '')}"></label>
@@ -1184,7 +1185,7 @@
       if ($('fsSvcModel').value !== (svc.model || '')) { svc.noAutoPart = false;
         if (svc.part && svc.partAuto) { if (svc.priceFromPart) { $('fsSvcPrice').value = ''; svc.priceFromPart = false; } $('fsSvcCost').value = ''; svc.part = null; svc.partAuto = false; drawPartPicker(); } }
       if (svc.catalog_id && normName($('fsSvcName').value) !== normName(svc.name)) { svc.catalog_id = null; svc.autoPrice = false; }
-      svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value }; profit(); };
+      svc = { ...svc, name: $('fsSvcName').value, model: $('fsSvcModel').value, supplier: $('fsSvcSupplier').value, price: $('fsSvcPrice').value, cost: $('fsSvcCost').value, warranty: $('fsSvcWarranty').value, note: $('fsSvcNote').value, ride: $('fsSvcRide') ? $('fsSvcRide').value : (svc.ride || '') }; profit(); };
     const profit = profitNote;
     box.oninput = box.onchange = read;
     suggestField($('fsSvcModel'), '/store/device-models', () => { read(); modelHits(true); });
@@ -1229,9 +1230,11 @@
   // Lucro do serviço já descontando o custo do brinde.
   function profitNote() {
     const p = parseMoney(svc.price), c = parseMoney(svc.cost), g = svc.gift?.product?.cost_cents || 0, out = $('fsSvcProfit'); if (!out) return;
-    if (!(Number.isFinite(p) && (Number.isFinite(c) || g))) { out.innerHTML = ''; return; }
-    const cost = (Number.isFinite(c) ? c : 0) + g;
-    out.innerHTML = `Lucro do serviço${g ? ' (já com o brinde)' : ''}: <b class="${p - cost < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - cost)}</b>${p > 0 ? ` (${margin(p, cost)}% do preço)` : ''}`;
+    const rd = String(svc.ride || '').trim() ? parseMoney(svc.ride) : NaN, r = Number.isFinite(rd) && rd > 0 ? rd : 0;
+    if (!(Number.isFinite(p) && (Number.isFinite(c) || g || r))) { out.innerHTML = ''; return; }
+    const cost = (Number.isFinite(c) ? c : 0) + g + r;
+    const extra = [g ? 'o brinde' : '', r ? 'o Uber' : ''].filter(Boolean).join(' e ');
+    out.innerHTML = `Lucro do serviço${extra ? ` (já com ${extra})` : ''}: <b class="${p - cost < 0 ? 'fs-neg' : 'fs-pos'}">${brl(p - cost)}</b>${p > 0 ? ` (${margin(p, cost)}% do preço)` : ''}`;
   }
   function drawPartPicker() {
     const box = $('fsSvcPart'); if (!box) return;
@@ -1286,11 +1289,14 @@
     if (String(svc.name || '').trim().length < 2) return `Informe o serviço (ex.: ${svcEx('one')}).`;
     const c = String(svc.cost || '').trim();
     if (c && (!Number.isFinite(parseMoney(c)) || parseMoney(c) < 0)) return 'Preço de custo inválido.';
+    const rd = String(svc.ride || '').trim();
+    if (rd && (!Number.isFinite(parseMoney(rd)) || parseMoney(rd) < 0)) return 'Valor do Uber moto inválido.';
     return '';
   }
   function svcItems(x) {
     const item = { service: x.name.trim(), unit_price_cents: svcPrice(x) };
     const c = String(x.cost || '').trim(); if (c) item.cost_cents = parseMoney(c);
+    const rd = String(x.ride || '').trim(); if (rd && parseMoney(rd) > 0) item.ride_cost_cents = parseMoney(rd);
     if (String(x.supplier || '').trim()) item.supplier = x.supplier.trim();
     if (String(x.model || '').trim()) item.device_model = x.model.trim();
     if (x.part) item.part_id = x.part.id;
@@ -2633,11 +2639,14 @@
       const c = costMap.get(k) || { name, kind, qty: 0, cost: 0, unknown: i.unit_cost_cents == null };
       c.qty += i.quantity || 1; c.cost += (i.unit_cost_cents || 0) * (i.quantity || 1); costMap.set(k, c);
     }
+    // Uber moto dos serviços (gasto da loja): uma linha só no custo.
+    { const rides = sales.flatMap(x => x.items || []).filter(i => i.service && i.ride_cost_cents > 0);
+      if (rides.length) costMap.set('uber', { name: 'Uber moto (serviços)', kind: '', qty: rides.length, cost: rides.reduce((a, i) => a + i.ride_cost_cents, 0), unknown: false }); }
     const costRows = [...costMap.values()].sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name, 'pt-BR'));
     // Serviços do caixa: preço, custo (peça) e lucro, com aparelho e fornecedor.
     const svcs = sales.flatMap(x => (x.items || []).filter(i => i.service).map(i => ({ ...i, sale_number: x.sale_number })));
     const svcTotal = svcs.reduce((a, i) => a + i.total_cents, 0), svcKnown = svcs.filter(i => i.unit_cost_cents != null);
-    const svcProfit = svcKnown.reduce((a, i) => a + i.total_cents - i.unit_cost_cents, 0);
+    const svcProfit = svcKnown.reduce((a, i) => a + i.total_cents - i.unit_cost_cents - (i.ride_cost_cents || 0), 0);
     const table = (head, rows, empty) => rows.length ? `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>` : `<p class="muted">${empty}</p>`;
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de caixa · ${esc(s.store_name)} · ${dmy(s.opened_at)}</title><style>
       @page{size:A4;margin:14mm}*{box-sizing:border-box}body{font:12px/1.4 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:#111;margin:0;padding:16px}
@@ -2667,7 +2676,7 @@
       ${transfers.length ? `<h2>Sangrias e suprimentos</h2>${table(['Hora', 'Tipo', 'Motivo', 'Lançado por', '<span class="n">Valor</span>'], transfers.map(m => `<tr><td>${hhmm(m.created_at)}</td><td>${MOVE_LABEL[m.kind]}</td><td>${esc(m.note)}</td><td>${esc(m.created_by_name)}</td><td class="n">${m.kind === 'deposit' ? '+' : '−'}${brl(m.amount_cents)}</td></tr>`), '')}` : ''}
       <h2>Vendas (${sales.length}${sales.length ? ` · ${Math.round(100 * linked / sales.length)}% com cliente identificado` : ''})</h2>
       ${table(['Nº', 'Hora', 'Vendedor', 'Cliente', 'Descrição', 'Forma', '<span class="n">Valor</span>'], sales.map(x => `<tr><td>${x.sale_number}</td><td>${hhmm(x.created_at)}</td><td>${esc(x.seller_name || '')}</td><td>${esc(x.customer_name || 'Sem cliente')}</td><td>${esc(x.description)}${x.order_number ? ' (pedido ' + esc(x.order_number) + ')' : ''}</td><td>${payLabel(x)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), 'Nenhuma venda.')}
-      ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', (window.__fpNiche === 'pet' ? 'Pet' : window.__fpNiche === 'electronics' ? 'Aparelho' : 'Item'), 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents) : '—'}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents) : '—'}</td></tr>`), '')}` : ''}
+      ${svcs.length ? `<h2>Serviços (${svcs.length} · ${brl(svcTotal)}${svcKnown.length ? ` · lucro ${brl(svcProfit)}` : ''})</h2>${table(['Nº', 'Serviço', (window.__fpNiche === 'pet' ? 'Pet' : window.__fpNiche === 'electronics' ? 'Aparelho' : 'Item'), 'Fornecedor', '<span class="n">Preço</span>', '<span class="n">Custo</span>', '<span class="n">Lucro</span>'], svcs.map(i => `<tr><td>${i.sale_number}</td><td>${esc(i.name)}${i.warranty_days ? ` <span class="muted">(garantia ${i.warranty_days}d)</span>` : ''}</td><td>${esc(i.device_model || '—')}</td><td>${esc(i.supplier_name || '—')}</td><td class="n">${brl(i.total_cents)}</td><td class="n">${i.unit_cost_cents != null ? brl(i.unit_cost_cents + (i.ride_cost_cents || 0)) : '—'}${i.ride_cost_cents ? ` <span class="muted">(Uber ${brl(i.ride_cost_cents)})</span>` : ''}</td><td class="n ${i.unit_cost_cents != null && i.total_cents < i.unit_cost_cents + (i.ride_cost_cents || 0) ? 'neg' : ''}">${i.unit_cost_cents != null ? brl(i.total_cents - i.unit_cost_cents - (i.ride_cost_cents || 0)) : '—'}</td></tr>`), '')}` : ''}
       ${salesCanceled.length || movesCanceled.length ? `<h2>Cancelamentos</h2>${table(['Item', 'Cancelado por', 'Quando', 'Motivo', '<span class="n">Valor</span>'], [...salesCanceled.map(x => `<tr><td>Venda ${x.sale_number}${x.customer_name ? ' · ' + esc(x.customer_name) : ''}</td><td>${esc(x.canceled_by_name || '—')}</td><td>${hhmm(x.canceled_at)}</td><td>${esc(x.cancel_reason)}</td><td class="n">${brl(x.total_cents)}</td></tr>`), ...movesCanceled.map(m => `<tr><td>${MOVE_LABEL[m.kind]}${m.category ? ' · ' + esc(m.category) : ''}</td><td>${esc(m.canceled_by_name || '—')}</td><td>${hhmm(m.canceled_at)}</td><td>${esc(m.cancel_reason)}</td><td class="n">${brl(m.amount_cents)}</td></tr>`)], '')}` : ''}
       <div class="sign"><div>Responsável pelo caixa</div><div>Conferido por</div></div>
     </body></html>`;

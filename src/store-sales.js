@@ -5,6 +5,7 @@ import { tefForSale } from './tef.js';
 // - Venda com cliente soma no mesmo cartão fidelidade dos pedidos concluídos.
 // - O envio é feito pelo próprio WhatsApp da loja (link wa.me); aqui só registramos
 //   quem já recebeu, para a lista do dia mostrar o que falta enviar.
+import { codeEq } from './code-match.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { reviewLinkBase } from './review-links.js';
@@ -525,8 +526,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     const words = term ? term.split(' ').filter(Boolean).slice(0, 8) : [];
     const deleted = !!term && req.query.include_deleted === '1';
     const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND (active OR $5) AND kind=$3 AND
-        ($2='' OR barcode=$2 OR fp_fold(name || ' ' || coalesce(device_model,'') || ' ' || coalesce(location,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
-      ORDER BY (barcode=$2) DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,
+        ($2='' OR ${codeEq('barcode','$2')} OR fp_fold(name || ' ' || coalesce(device_model,'') || ' ' || coalesce(location,'')) LIKE ALL (SELECT '%'||fp_fold(w)||'%' FROM unnest($4::text[]) w))
+      ORDER BY (barcode=$2) DESC NULLS LAST,${codeEq('barcode','$2')} DESC NULLS LAST,active DESC,(fp_fold(name) LIKE fp_fold($2)||'%') DESC,
         CASE WHEN $3='part' THEN coalesce(location,'~') END,CASE WHEN $3='part' THEN fp_fold(coalesce(device_model,'')) END,name,device_model,updated_at DESC LIMIT 500`, [tid(req), term, kind, words, deleted]);
     res.set('Cache-Control', 'no-store'); res.json(req.user.kiosk ? r.rows.map(({ cost_cents, ...x }) => x) : r.rows);
   }));
@@ -546,8 +547,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.get('/api/store/products/barcode/:code', ...guard, route(async (req, res) => {
     const code = String(req.params.code || '').trim();
     if (!/^[!-~]{1,64}$/.test(code)) return bad(res, 400, 'Código de barras inválido');
-    const r = await q(`SELECT ${productFields} FROM products WHERE tenant_id=$1 AND active AND barcode=$2 AND kind='product'`, [tid(req), code]);
+    // Exato primeiro. Sem os zeros à esquerda (etiqueta 000573 x cadastro 573) só quando sobra um produto:
+    // na Audace "0796" e "796" são peças diferentes, e aí a vendedora escolhe pela lista.
+    const r = await q(`SELECT ${productFields}, barcode=$2 exact FROM products WHERE tenant_id=$1 AND active AND ${codeEq('barcode','$2')} AND kind='product' ORDER BY (barcode=$2) DESC, name LIMIT 5`, [tid(req), code]);
     if (!r.rowCount) return bad(res, 404, 'Produto não cadastrado');
+    if (!r.rows[0].exact && r.rowCount > 1) return bad(res, 409, `O código ${code} serve para mais de um produto (${r.rows.map(x => x.barcode + ' ' + x.name).join('; ')}). Busque pelo nome ou digite o código exato.`);
+    delete r.rows[0].exact;
     const { cost_cents, ...noCost } = r.rows[0];
     res.set('Cache-Control', 'no-store'); res.json(req.user.kiosk ? noCost : r.rows[0]);
   }));
@@ -918,7 +923,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       FROM stock_movements m JOIN products p ON p.id=m.product_id LEFT JOIN product_variants v ON v.id=m.variant_id
       LEFT JOIN sales x ON x.id=m.sale_id LEFT JOIN users u ON u.id=m.created_by
       WHERE m.tenant_id=$1 AND ($2='' OR m.product_id=$2::uuid) AND ($3='' OR m.kind=$3)
-        AND ($4='' OR fp_fold(p.name || ' ' || COALESCE(v.name,'') || ' ' || COALESCE(p.device_model,'')) LIKE '%'||fp_fold($4)||'%' OR p.barcode=$4)
+        AND ($4='' OR fp_fold(p.name || ' ' || COALESCE(v.name,'') || ' ' || COALESCE(p.device_model,'')) LIKE '%'||fp_fold($4)||'%' OR ${codeEq('p.barcode','$4')})
         AND ($5='' OR m.created_at >= ($5::date)::timestamp AT TIME ZONE $8) AND ($6='' OR m.created_at < ($6::date + 1)::timestamp AT TIME ZONE $8)
         AND ($7='' OR m.created_at < $7::timestamptz)
       ORDER BY m.created_at DESC,m.id DESC LIMIT $9`, [tid(req), pid, kind, term, from, to, before, TZ, limit]);

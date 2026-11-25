@@ -2256,9 +2256,11 @@
     };
     const cancel = () => { current = null; formBox.innerHTML = ''; scan.value = ''; sug.innerHTML = ''; scan.focus(); };
     // Leitor bipado com um formulário aberto: o mesmo produto soma 1; outro produto pede para terminar antes.
+    // 000573 bipado = 573 cadastrado (só códigos numéricos).
+    const sameCode = (a, b) => { a = String(a ?? '').trim(); b = String(b ?? '').trim(); if (!a || !b) return false; if (a === b) return true; const n = /^0*[1-9]\d*$/; return n.test(a) && n.test(b) && a.replace(/^0+/, '') === b.replace(/^0+/, ''); };
     const scannedWhileOpen = code => {
       const qty = formBox.querySelector('[name=n]'), st = formBox.querySelector('[role=status]');
-      if (current && (current.barcode === code || current.product?.barcode === code) && qty) { qty.value = String((Number(qty.value) || 0) + 1); beep(true); if (st) st.textContent = ''; return true; }
+      if (current && (sameCode(current.barcode, code) || sameCode(current.product?.barcode, code)) && qty) { qty.value = String((Number(qty.value) || 0) + 1); beep(true); if (st) st.textContent = ''; return true; }
       if (st) st.textContent = `Termine este produto (botão verde) ou cancele antes de bipar outro. Código lido: ${code}`; beep(false); return true;
     };
     // Quantidade nunca tem 8+ caracteres: é o leitor bipando um produto com o cursor neste campo.
@@ -2282,7 +2284,7 @@
     // Produto já cadastrado: quantidade + custo (+ preço de venda, se mudou). Código bipado vai junto quando o produto não tinha.
     const stockForm = (p, code = '') => {
       current = { product: p, barcode: code || p.barcode || '' }; sug.innerHTML = '';
-      const attach = code && code !== p.barcode;
+      const attach = code && !sameCode(code, p.barcode);
       formBox.innerHTML = `<form id="fsEnStock" class="fs-picked" style="display:block;margin-top:10px" autocomplete="off">
         <div class="fs-row"><p class="fs-grow"><b>${esc(p.name)}</b>${p.ask_variant && p.variant_stock !== 'total' ? '' : ` · estoque atual: <b>${p.stock_qty ?? 'não controla'}</b>`}${p.barcode ? `<br><small>${esc(p.barcode)}</small>` : ''}</p><button type="button" class="nv-button secondary fs-small" id="fsEnEdit" title="Editar nome, preços, código e estoque (senha do admin)">${FPIcon('lock')}Editar produto</button></div>
         ${attach ? `<p class="nv-help fs-warn">${p.barcode ? `Este produto tem o código <b>${esc(p.barcode)}</b>. Ao salvar, passa a usar <b>${esc(code)}</b>.` : `O código <b>${esc(code)}</b> será salvo neste produto: da próxima vez o leitor já reconhece.`}</p>` : ''}
@@ -2376,7 +2378,7 @@
         if (!confirm(`"${p.name}" foi excluído antes. Reativar com o cadastro antigo e dar entrada?`)) return;
         try { p = await api(`/store/products/${p.id}/restore`, 'POST', {}); } catch (err) { feedback(err.message, true); return; }
       }
-      stockForm(p, code && code !== p.barcode ? code : '');
+      stockForm(p, code && !sameCode(code, p.barcode) ? code : '');
     };
     const handleCode = async code => {
       if (current) { scannedWhileOpen(code); scan.value = ''; return; }

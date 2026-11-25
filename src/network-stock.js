@@ -1,5 +1,6 @@
 // Estoque da rede: consulta entre unidades, contagem, transferências bipadas (envio e recebimento com PIN)
 // e depósito central (unidade marcada como depósito). As peças casam entre unidades pelo código da loja.
+import { codeEq } from './code-match.js';
 import { z } from 'zod';
 import { pinOk } from './kiosk.js';
 
@@ -30,7 +31,7 @@ export function registerNetworkStock(app, { q, db, auth, roles, route, bad, vali
   app.get('/api/store/stock/network', ...staff, route(async (req, res) => {
     const term = String(req.query.q || '').trim().slice(0, 80); if (term.length < 2) return res.json([]);
     const m = await me(req); if (!m?.network_id) return res.json([]);
-    const codes = (await q(`SELECT DISTINCT p.code FROM products p WHERE p.tenant_id = $1 AND p.active AND p.code IS NOT NULL AND (p.code = $2 OR p.barcode = $2 OR fp_fold(p.name) LIKE '%'||fp_fold($2)||'%') LIMIT 15`, [m.id, term])).rows.map(r => r.code);
+    const codes = (await q(`SELECT DISTINCT p.code FROM products p WHERE p.tenant_id = $1 AND p.active AND p.code IS NOT NULL AND (${codeEq('p.code','$2')} OR ${codeEq('p.barcode','$2')} OR fp_fold(p.name) LIKE '%'||fp_fold($2)||'%') LIMIT 15`, [m.id, term])).rows.map(r => r.code);
     if (!codes.length) return res.json([]);
     const r = await q(`SELECT p.code, max(p.name) FILTER (WHERE p.tenant_id = $3) name, max(p.price_cents) FILTER (WHERE p.tenant_id = $3) price_cents,
         json_agg(json_build_object('unit', coalesce(t.unit_label, t.name), 'depot', t.depot, 'stock', coalesce(p.stock_qty, 0), 'mine', t.id = $3) ORDER BY t.depot DESC, coalesce(t.unit_label, t.name)) units

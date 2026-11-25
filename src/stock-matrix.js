@@ -1,3 +1,4 @@
+import { codeEq } from './code-match.js';
 // Estoque centralizado: lista completa das peças da rede com a quantidade em cada unidade,
 // já aberta (sem precisar digitar). Vendedora (quiosque), supervisor e dono veem a mesma lista.
 // As peças casam entre unidades pelo código da loja; sem código, a peça aparece só na unidade dela.
@@ -17,7 +18,7 @@ export async function stockMatrix(q, networkId, mineId, opts = {}) {
         coalesce(max(name) FILTER (WHERE tenant_id = $2), max(name)) name,
         coalesce(max(price_cents) FILTER (WHERE tenant_id = $2), max(price_cents)) price_cents,
         max(family) family, jsonb_object_agg(tenant_id, qty) stock, sum(greatest(qty,0))::int total,
-        coalesce(sum(qty) FILTER (WHERE tenant_id = $2), 0)::int mine, bool_or(fp_fold(name) LIKE '%'||fp_fold($3)||'%' OR code = $3 OR barcode = $3) hit
+        coalesce(sum(qty) FILTER (WHERE tenant_id = $2), 0)::int mine, bool_or(fp_fold(name) LIKE '%'||fp_fold($3)||'%' OR ${codeEq('code','$3')} OR ${codeEq('barcode','$3')}) hit
       FROM p GROUP BY k)
     SELECT k, code, name, price_cents, family, stock, total, mine, count(*) OVER() n FROM g
      WHERE ($3 = '' OR hit) AND ($4 = '' OR family = $4)

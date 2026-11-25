@@ -30,8 +30,8 @@ test('quiosque: cadastro completo da cliente, aba Clientes da rede e fechamento 
     const kt = (await unitLogin(base, { unit_id: tenant, password: 'senha-maracanau' })).token;
     const kc = (await unitLogin(base, { unit_id: cascavel.id, password: 'senha-cascavel' })).token;
     assert.ok(kt && kc);
-    await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0 } }, 201);
-    await api('/store/cash/open', { method: 'POST', token: kc, body: { opening_cents: 0 } }, 201);
+    await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0, seller_id: ana.id, seller_pin: '1234' } }, 201);
+    await api('/store/cash/open', { method: 'POST', token: kc, body: { opening_cents: 0, seller_id: bia.id, seller_pin: '4321' } }, 201);
     const prod = (await f.db.query("INSERT INTO products(tenant_id,name,barcode,price_cents,stock_qty) VALUES($1,'Brinco Gota','003622',5000,5) RETURNING id", [tenant])).rows[0].id;
     const sale = extra => ({ items: [{ product_id: prod, quantity: 1 }], payment_method: 'pix', seller_id: ana.id, seller_pin: '1234', ...extra });
 

@@ -31,7 +31,6 @@ test('quiosque: cadastro completo, aba Clientes, Fechar caixa no topo e unidade 
     await api(`/master/networks/${net.id}/people`, { method: 'POST', token: masterToken, body: { name: 'Bia Souza', function: 'vendedora', unit_id: tenant, pin: '4321' } }, 201);
     for (const t of [tenant, aquiraz.id]) await f.db.query("INSERT INTO products(tenant_id,name,barcode,code,price_cents,stock_qty) VALUES($1,'Brinco Gota','003622','003622',5000,$2)", [t, t === tenant ? 3 : 7]);
     const kt = (await unitLogin(base, { unit_id: tenant, password: 'senha-cascavel' })).token; assert.ok(kt);
-    await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0 } }, 201);
 
     const require = createRequire(import.meta.url);
     let pw; try { pw = require('playwright'); } catch { pw = require('playwright-core'); }
@@ -41,7 +40,15 @@ test('quiosque: cadastro completo, aba Clientes, Fechar caixa no topo e unidade 
     const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => d.accept());
     await page.goto(base + '/caixa');
+    // Abrir o caixa: escolhe quem abre e digita o PIN.
+    await page.waitForSelector('#closedBox:not([hidden])');
+    await page.fill('#openCash', '0'); await page.click('#openBtn');
+    await page.locator('#openWho [data-w]').first().click();
+    await page.waitForSelector('#pinDlg[open]');
+    await page.screenshot(shot('kiosk-open-pin'));
+    for (const k of '4321') await page.click(`#keys [data-k="${k}"]`);
     await page.waitForSelector('#topClose:not([hidden])');
+    assert.equal((await f.db.query("SELECT u.name FROM cash_sessions c JOIN users u ON u.id=c.opened_by WHERE c.tenant_id=$1 AND c.status='open'", [tenant])).rows[0].name, 'Bia Souza');
 
     // Venda com cadastro completo.
     await page.fill('#scan', '003622'); await page.press('#scan', 'Enter');

@@ -71,7 +71,7 @@
   .done a,.done button{display:inline-block;margin:8px 8px 0 0;padding:8px 12px;border-radius:8px;border:0;background:var(--ink);color:#fff;text-decoration:none;font-weight:600;cursor:pointer;font-size:13px}
   .note{font-size:12px;color:var(--muted);margin-top:14px}
   .closed{max-width:440px;margin:60px auto;text-align:center}
-  .closed input{margin:14px 0}
+  .closed input{margin:14px 0}.closed .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
   dialog{border:0;border-radius:16px;padding:22px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
   dialog::backdrop{background:rgba(23,24,29,.55)}
   .dots{display:flex;justify-content:center;gap:12px;margin:14px 0}.dots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--ink)}.dots i.f{background:var(--ink)}
@@ -130,6 +130,7 @@
         <p class="sub">Para começar o dia, informe o dinheiro que está na gaveta.</p>
         <input class="field" id="openCash" inputmode="decimal" placeholder="Dinheiro na gaveta (R$)">
         <button type="button" class="go" id="openBtn" style="margin-top:0">Abrir o caixa</button>
+        <div id="openWhoBox" hidden style="margin-top:10px"><p class="label" style="margin:0">Quem está abrindo? (vai pedir o PIN)</p><div class="people" id="openWho" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px"></div></div>
         <p class="msg err" id="openMsg"></p>
       </div>
       <div class="grid" id="cashBox" hidden>
@@ -321,7 +322,7 @@
 
   // ---------- Estado ----------
   let brandName = '';
-  let unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
+  let isKiosk = false, unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
   const subtotal = () => items.reduce((a, x) => a + x.price_cents * x.qty, 0);
   const discountCents = () => !$('disc').checked ? 0 : Math.round(subtotal() * (method === 'cash' ? 0.10 : method === 'pix' ? 0.05 : 0));
   const cbAvailable = () => customer?.cashback?.balance_cents || 0;
@@ -534,9 +535,15 @@
     } catch (e) { $('cdInfo').textContent = e.message; }
   };
   $('cdCancel').onclick = () => $('clDlg').close();
+  // Abrir o caixa: no quiosque, quem abre escolhe o nome e confirma com o PIN.
+  const doOpen = async extra => { await api('/store/cash/open', 'POST', { opening_cents: toCents($('openCash').value), ...extra }); $('openMsg').textContent = ''; $('closedInfo').hidden = true; $('openWhoBox').hidden = true; await loadCash(); };
   $('openBtn').onclick = async () => {
-    try { await api('/store/cash/open', 'POST', { opening_cents: toCents($('openCash').value) }); $('openMsg').textContent = ''; $('closedInfo').hidden = true; await loadCash(); }
-    catch (e) { $('openMsg').textContent = e.message; }
+    $('openMsg').className = 'msg err'; $('openMsg').textContent = '';
+    if ($('openCash').value.trim() === '') { $('openMsg').textContent = 'Informe o dinheiro que está na gaveta (0 se estiver vazia).'; $('openCash').focus(); return; }
+    if (!isKiosk) { try { await doOpen({}); } catch (e) { $('openMsg').textContent = e.message; } return; }
+    if (!sellers.length) { $('openMsg').textContent = 'Nenhuma pessoa com PIN nesta unidade. Peça ao supervisor para cadastrar.'; return; }
+    $('openWhoBox').hidden = false;
+    whoButtons('openWho', s => askPin(s, () => {}, async pin => { await doOpen({ seller_id: s.id, seller_pin: pin }); }));
   };
 
   // ---------- Meu dia ----------
@@ -860,7 +867,7 @@
   (async () => {
     try {
       const [k, c, b] = await Promise.all([api('/store/kiosk/sellers'), api('/store/sales/config'), fetch('/api/public/brand').then(r => r.json()).catch(() => ({}))]);
-      unit = k.unit; sellers = k.sellers; cfg = c;
+      unit = k.unit; sellers = k.sellers; cfg = c; isKiosk = !!k.kiosk;
       if (b?.network) brandName = b.name;
       if (b?.network) { const [first, ...rest] = b.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) document.documentElement.style.setProperty('--gold', b.brand_color); }
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;

@@ -212,9 +212,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   app.post('/api/store/cash/open', ...guard, route(async (req, res) => {
-    const v = valid(z.object({ opening_cents: cents.default(0) }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ opening_cents: cents.default(0), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
+    // Quiosque: quem abre o caixa confirma com o próprio PIN e fica registrado como responsável pela abertura.
+    let openerId = req.user.id;
+    if (req.user.kiosk) {
+      const who = v.seller_id ? (await q("SELECT id FROM users WHERE id=$1 AND tenant_id=$2 AND active", [v.seller_id, tid(req)])).rows[0] : null;
+      if (!who || !(await pinOk({ query: q }, bcrypt, who.id, v.seller_pin))) return bad(res, 401, 'PIN incorreto');
+      openerId = who.id;
+    }
     try {
-      const r = await q(`INSERT INTO cash_sessions(tenant_id,opening_cents,opened_by) VALUES($1,$2,$3) RETURNING *`, [tid(req), v.opening_cents, req.user.id]);
+      const r = await q(`INSERT INTO cash_sessions(tenant_id,opening_cents,opened_by) VALUES($1,$2,$3) RETURNING *`, [tid(req), v.opening_cents, openerId]);
       await audit(req, 'open', 'cash_session', r.rows[0].id); res.status(201).json(r.rows[0]);
     } catch (e) { if (e.code === '23505') return bad(res, 409, 'O caixa já está aberto'); throw e; }
   }));

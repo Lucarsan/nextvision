@@ -4,7 +4,8 @@
 // - "Aguardando a rede": item nosso ou conjunto parado por falta de algo da rede (dados, equipamento,
 //   internet, presença no treinamento). Não conta contra o nosso prazo nem impede a cobrança.
 // - Nossa parte 100% (itens FicouPronto e conjuntos feitos, sem aplicação ou aguardando a rede) = pronta para cobrar.
-// - Aceite: dono ou supervisor da unidade confirma com o login dele quando TODOS os itens estão feitos.
+// - Aceite: dono ou supervisor da unidade confirma com o login dele quando todos os itens estão feitos
+//   (itens recomendados, como a contagem de estoque, não travam o aceite).
 import { z } from 'zod';
 
 export const ONBOARDING_SECTIONS = ['Dados e cadastro', 'Equipamentos e internet', 'Nota fiscal (NFC-e)', 'Pagamento (TEF Stone)', 'Treinamento', 'Venda real assistida'];
@@ -13,7 +14,7 @@ export const ONBOARDING_SECTIONS = ['Dados e cadastro', 'Equipamentos e internet
 export const ONBOARDING_ITEMS = [
   { key: 'products', sec: 0, who: 'fp', auto: true, title: 'Peças importadas da planilha, com código, preço, NCM e estoque' },
   { key: 'customers', sec: 0, who: 'fp', auto: true, title: 'Clientes importados da planilha' },
-  { key: 'stock_count', sec: 0, who: 'rede', title: 'Contagem de estoque da unidade conferida, sem estoque negativo' },
+  { key: 'stock_count', sec: 0, who: 'rede', optional: true, title: 'Contagem de estoque da unidade conferida, sem estoque negativo' },
   { key: 'people', sec: 0, who: 'fp', auto: true, title: 'Vendedoras com PIN; supervisor e dono com login próprio' },
   { key: 'kiosk_password', sec: 0, who: 'fp', auto: true, title: 'Senha do quiosque da unidade criada e entregue ao responsável' },
   { key: 'pc', sec: 1, who: 'both', auto: true, title: 'Computador do quiosque na internet, com o FicouPronto aberto e aparecendo na central' },
@@ -100,12 +101,13 @@ export function unitStatus(unit, f, marks) {
     let state = 'pending', source = null;
     if (a?.ok) { state = 'done'; source = 'auto'; }
     else if (m) { state = m.state; source = 'manual'; }
-    return { key: it.key, section: it.sec, who: it.who, auto: !!it.auto, title: it.title, state, source,
+    return { key: it.key, section: it.sec, who: it.who, auto: !!it.auto, optional: !!it.optional, title: it.title, state, source,
       detail: a ? a.detail : hint(it.key, f), note: m?.note || null, marked_by: m?.marked_by_name || null, marked_at: m?.marked_at || null };
   });
   const ours = items.filter(i => i.who !== 'rede');
   const oursOk = ours.filter(i => ['done', 'na', 'waiting'].includes(i.state)).length;
-  const missing = items.filter(i => !['done', 'na'].includes(i.state));
+  // Item recomendado (ex.: contagem de estoque) aparece, mas não trava o aceite.
+  const missing = items.filter(i => !i.optional && !['done', 'na'].includes(i.state));
   return {
     id: unit.id, name: unit.label, billing_since: unit.billing_since,
     accepted_at: unit.onboarding_accepted_at, accepted_by: unit.onboarding_accepted_name,

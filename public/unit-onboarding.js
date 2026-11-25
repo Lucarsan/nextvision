@@ -44,7 +44,7 @@
       }
       const by = it.source === 'manual' && it.marked_by ? STATE[it.state] + ' · ' + esc(it.marked_by) + ' em ' + day(it.marked_at) : it.source === 'auto' ? 'Conferido pelo sistema' : '';
       return '<div class="it" data-u="' + esc(u.id) + '" data-k="' + esc(it.key) + '"><div class="st ' + it.state + '" title="' + STATE[it.state] + '">' + ICON[it.state] + '</div>'
-        + '<div><div>' + esc(it.title) + '<span class="who">' + esc(WHO[it.who]) + '</span></div>'
+        + '<div><div>' + esc(it.title) + '<span class="who">' + esc(WHO[it.who]) + '</span>' + (it.optional ? '<span class="who">Recomendado · não trava o aceite</span>' : '') + '</div>'
         + (it.detail ? '<div class="soft">' + esc(it.detail) + '</div>' : '')
         + (it.note ? '<div class="soft">Obs.: ' + esc(it.note) + '</div>' : '')
         + (by ? '<div class="soft">' + by + '</div>' : '') + '</div>'
@@ -55,7 +55,7 @@
       let foot = '';
       if (u.accepted_at) foot += '<span>Aceite de <b>' + esc(u.accepted_by || '—') + '</b> em ' + day(u.accepted_at) + '.</span>';
       else if (mode === 'network') foot += u.complete ? '<button type="button" class="main" data-a="accept">Dar aceite desta unidade</button><span class="soft">Confirma que a unidade está operando conforme o checklist.</span>'
-        : '<span class="soft">O aceite libera quando todos os itens estiverem feitos.</span>';
+        : '<span class="soft">O aceite libera quando todos os itens estiverem feitos (os recomendados não travam).</span>';
       if (mode === 'master') {
         if (u.accepted_at) foot += '<button type="button" data-a="unaccept">Desfazer aceite</button>';
         if (u.billing_since) foot += '<span>Cobrança liberada desde <b>' + dayIso(u.billing_since) + '</b>.</span>';

@@ -58,10 +58,12 @@ test('implantação: checklist por unidade, aguardando a rede, pronta para cobra
     assert.equal((await request(`/network/onboarding/${tenant}/accept`, { method: 'POST', token: dono, body: { confirm: true } })).status, 409);
 
     // Tudo feito -> aceite do dono, registrado com nome; não repete; central desfaz.
-    for (const it of ONBOARDING_ITEMS) {
+    for (const it of ONBOARDING_ITEMS.filter(i => !i.optional)) {
       const cur = gs.items.find(i => i.key === it.key);
       if (cur.state !== 'done') await api(`/master/onboarding/${tenant}/items/${it.key}`, { method: 'PUT', token: masterToken, body: { state: 'done' } });
     }
+    // Contagem de estoque (recomendada) ainda pendente não trava o aceite.
+    assert.equal((await api('/network/onboarding', { token: dono })).units.find(u => u.id === tenant).items.find(i => i.key === 'stock_count').state, 'pending');
     await api(`/network/onboarding/${tenant}/accept`, { method: 'POST', token: dono, body: { confirm: true } });
     gs = (await api('/network/onboarding', { token: dono })).units.find(u => u.id === tenant);
     assert.equal(gs.complete, true); assert.ok(gs.accepted_at); assert.equal(gs.accepted_by, 'Gabriel');

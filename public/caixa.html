@@ -37,7 +37,7 @@
   .mxbar{display:flex;gap:8px;flex-wrap:wrap}.mxbar #sfQ{flex:1;min-width:240px}.mxbar select{width:auto}
   .mxwrap{overflow:auto;max-height:calc(100vh - 290px);margin-top:8px;border:1px solid var(--line);border-radius:10px}
   table.mx{margin:0}table.mx th{position:sticky;top:0;background:#faf9f6;z-index:1;white-space:nowrap}table.mx th.u,table.mx td.u{text-align:center;min-width:86px}
-  table.mx td{padding:9px 8px}table.mx th.me,table.mx td.me{background:var(--gold-soft)}table.mx td.u b{display:inline-block;min-width:30px;padding:2px 8px;border-radius:999px;background:var(--green-bg);color:var(--green)}
+  table.mx td{padding:9px 8px}table.mx th.me,table.mx td.me{background:var(--gold-soft)}table.mx th.me{color:var(--ink);font-weight:700;border-bottom:2px solid var(--gold)}table.mx td.me{border-left:1px solid #eadfc2;border-right:1px solid #eadfc2;font-size:15px}table.mx td.u b{display:inline-block;min-width:30px;padding:2px 8px;border-radius:999px;background:var(--green-bg);color:var(--green)}
   table.mx td.u .z{color:#b9b6ad}table.mx td.u .na{color:#d5d2ca}table.mx td.tot{font-weight:700;text-align:right}
   th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
   td{padding:11px 6px;border-bottom:1px solid var(--line);color:var(--ink)}
@@ -71,7 +71,7 @@
   .done a,.done button{display:inline-block;margin:8px 8px 0 0;padding:8px 12px;border-radius:8px;border:0;background:var(--ink);color:#fff;text-decoration:none;font-weight:600;cursor:pointer;font-size:13px}
   .note{font-size:12px;color:var(--muted);margin-top:14px}
   .closed{max-width:440px;margin:60px auto;text-align:center}
-  .closed input{margin:14px 0}
+  .closed input{margin:14px 0}.closed .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
   dialog{border:0;border-radius:16px;padding:22px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
   dialog::backdrop{background:rgba(23,24,29,.55)}
   .dots{display:flex;justify-content:center;gap:12px;margin:14px 0}.dots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--ink)}.dots i.f{background:var(--ink)}
@@ -85,6 +85,16 @@
   .cancelbtn{border:1px solid #e6c9c2;background:#fff;color:var(--red);border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
   tr.canceled td{color:var(--muted);text-decoration:line-through}
   #stTabs .chip{border:0;cursor:pointer}
+  .ncgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.ncgrid .full{grid-column:1/-1}
+  .ncgrid label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
+  .ncgrid label.chk{flex-direction:row;align-items:center;gap:6px;font-size:12px}
+  .closebtn{border:1.5px solid var(--ink);background:#fff;color:var(--ink);border-radius:9px;padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px}
+  .closebtn:hover{background:var(--ink);color:#fff}
+  #viewClients .people button,#clDlg .people button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:7px 12px;font-weight:600;cursor:pointer}
+  tr.clrow{cursor:pointer}tr.clrow:hover td{background:#faf8f3}tr.clrow td b{color:var(--ink)}
+  .ckpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.ckpis div{background:#faf9f6;border-radius:10px;padding:10px}.ckpis small{display:block;color:var(--muted);font-size:11px}.ckpis b{font-size:17px;color:var(--ink)}
+  .hsale{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px}.hsale.cx{opacity:.55}.hsale ul{margin:6px 0 0;padding-left:18px}.hsale .r{float:right}
+  #cuDlg,#chDlg,#clDlg{width:min(620px,94vw)}#chDlg{max-height:90vh}
   [hidden]{display:none!important}
   @media (max-width:1100px){.grid{grid-template-columns:1fr}}
   @media (max-width:760px){.shell{display:block}.side{position:static;height:auto;width:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;padding:14px}.wm{margin:0;flex:1}.unitbox{margin:0}.nav{display:flex;width:100%}.foot{display:none}main{padding:16px 12px}.kpis{grid-template-columns:1fr}}
@@ -98,6 +108,7 @@
     <nav class="nav">
       <button type="button" data-view="day"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Meu dia</button>
       <button type="button" data-view="cash" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></svg>Caixa</button>
+      <button type="button" data-view="clients"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 010 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/></svg>Clientes</button>
       <button type="button" data-view="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>Mensagens <span id="msgN" style="display:none;background:var(--gold);color:#fff;border-radius:99px;padding:0 7px;font-size:11px;margin-left:4px"></span></button>
       <button type="button" data-view="warranty"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Garantia</button>
       <button type="button" data-view="stock"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Estoque</button>
@@ -110,14 +121,16 @@
     <!-- ===== Caixa (proposta p. 8) ===== -->
     <section id="viewCash">
       <div class="top">
-        <div><h1>Caixa</h1><p class="sub" id="cashSub">Carregando…</p></div>
+        <div><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><h1>Caixa</h1><button type="button" class="closebtn" id="topClose" hidden>Fechar caixa</button></div><p class="sub" id="cashSub">Carregando…</p></div>
         <div class="chips"><span class="chip" id="chipStone">Stone: integração em implantação</span><span class="chip" id="chipNfce">NFC-e: em implantação</span></div>
       </div>
       <div class="card closed" id="closedBox" hidden>
         <h2 style="margin:0 0 6px;font-size:20px;color:var(--ink)">O caixa está fechado</h2>
+        <p class="msg ok" id="closedInfo" hidden></p>
         <p class="sub">Para começar o dia, informe o dinheiro que está na gaveta.</p>
         <input class="field" id="openCash" inputmode="decimal" placeholder="Dinheiro na gaveta (R$)">
         <button type="button" class="go" id="openBtn" style="margin-top:0">Abrir o caixa</button>
+        <div id="openWhoBox" hidden style="margin-top:10px"><p class="label" style="margin:0">Quem está abrindo? (vai pedir o PIN)</p><div class="people" id="openWho" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px"></div></div>
         <p class="msg err" id="openMsg"></p>
       </div>
       <div class="grid" id="cashBox" hidden>
@@ -135,7 +148,7 @@
               <input class="field" id="custQ" placeholder="Telefone ou nome da cliente" autocomplete="off">
               <div class="results" id="custResults" hidden></div>
               <div style="display:flex;gap:12px;margin-top:8px"><button type="button" class="linkbtn" id="newCustBtn">Cadastrar cliente</button><span class="sub" style="margin:0">ou venda sem cliente</span></div>
-              <div id="newCust" hidden style="margin-top:8px;display:flex;flex-direction:column;gap:6px"><input class="field" id="ncName" placeholder="Nome da cliente"><input class="field" id="ncPhone" placeholder="WhatsApp com DDD" inputmode="tel"></div>
+              <div id="newCust" hidden style="margin-top:8px"><div class="ncgrid" data-cf="nc"></div></div>
             </div>
             <div id="custSel" hidden class="cust">
               <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><strong id="custName"></strong><p id="custInfo"></p></div><button type="button" class="linkbtn" id="custClear">Trocar</button></div>
@@ -182,6 +195,18 @@
         <button type="button" class="linkbtn" id="dayLock" style="margin-top:12px">Sair do Meu dia</button>
       </div>
     </section>
+    <!-- ===== Clientes (cadastro único da rede) ===== -->
+    <section id="viewClients" hidden>
+      <div class="top"><div><h1>Clientes</h1><p class="sub" id="clSub">Clientes de todas as unidades. Toque no nome para ver o histórico.</p></div>
+        <button type="button" class="go" id="clNew" style="margin:0;width:auto;padding:10px 18px">+ Cadastrar cliente</button></div>
+      <div class="card">
+        <div class="mxbar"><input class="field" id="clQ" placeholder="Buscar por nome, WhatsApp, CPF ou e-mail" autocomplete="off" style="flex:1;min-width:240px">
+          <select class="field" id="clSort" style="width:auto"><option value="recent">Compraram por último</option><option value="name">Nome (A–Z)</option></select></div>
+        <table><thead><tr><th>Cliente</th><th>WhatsApp</th><th>Unidade do cadastro</th><th class="n">Compras</th><th class="n">Total</th><th>Última compra</th></tr></thead><tbody id="clRows"></tbody></table>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><span class="sub" id="clCount"></span><span><button type="button" class="linkbtn" id="clPrev">‹ Anteriores</button> &nbsp; <button type="button" class="linkbtn" id="clNext">Próximos ›</button></span></div>
+      </div>
+    </section>
+
     <!-- ===== Mensagens para clientes (proposta p. 10 e 16) ===== -->
     <section id="viewMsgs" hidden>
       <div class="top"><div><h1>Mensagens</h1><p class="sub" id="mgSub">Mensagens do dia para as clientes desta unidade. Confira o texto e envie pelo WhatsApp do quiosque.</p></div>
@@ -241,6 +266,24 @@
   </main>
 </div>
 
+<dialog id="cuDlg">
+  <h2 style="margin:0 0 10px;font-size:18px" id="cuTitle">Cadastrar cliente</h2>
+  <div class="ncgrid" data-cf="cu"></div>
+  <p class="msg err" id="cuMsg"></p>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="linkbtn" id="cuCancel">Cancelar</button><button type="button" class="go" id="cuSave" style="margin:0;width:auto;padding:10px 18px">Salvar</button></div>
+</dialog>
+<dialog id="chDlg"><div id="chBody"></div></dialog>
+<dialog id="clDlg">
+  <h2 style="margin:0 0 4px;font-size:18px">Fechar o caixa</h2>
+  <p class="sub" id="cdInfo" style="margin:0 0 10px">Carregando…</p>
+  <p class="sub" style="margin:0 0 6px">Dinheiro esperado na gaveta: <strong id="cdExp">—</strong></p>
+  <input class="field" id="cdCash" inputmode="decimal" placeholder="Dinheiro contado na gaveta (R$)">
+  <p class="label" style="margin:12px 0 0">Quem está fechando? (vai pedir o PIN)</p>
+  <div class="people" id="cdWho" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+  <p class="msg err" id="cdMsg"></p>
+  <div style="text-align:right"><button type="button" class="linkbtn" id="cdCancel">Cancelar</button></div>
+</dialog>
+
 <dialog id="cpDlg" style="border:0;border-radius:14px;padding:22px;max-width:360px;width:92%"><form method="dialog" id="cpForm">
   <h2 style="margin:0 0 10px;font-size:18px">Trocar meu PIN</h2>
   <label class="sub" style="display:block;margin:8px 0 4px">Quem é você?</label><select class="field" id="cpWho"></select>
@@ -279,7 +322,7 @@
 
   // ---------- Estado ----------
   let brandName = '';
-  let unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
+  let isKiosk = false, unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
   const subtotal = () => items.reduce((a, x) => a + x.price_cents * x.qty, 0);
   const discountCents = () => !$('disc').checked ? 0 : Math.round(subtotal() * (method === 'cash' ? 0.10 : method === 'pix' ? 0.05 : 0));
   const cbAvailable = () => customer?.cashback?.balance_cents || 0;
@@ -366,7 +409,28 @@
     $('cbUseRow').hidden = !cbAvailable(); $('cbUse').checked = false; draw();
   }
   $('custClear').onclick = () => { customer = null; $('custSel').hidden = true; $('custPick').hidden = false; $('custQ').value = ''; $('custResults').hidden = true; draw(); };
-  $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('ncName').focus(); };
+  // ---------- Formulário de cliente (venda e aba Clientes) ----------
+  const CF = [['name', 'Nome completo *', 'text', 'full'], ['phone', 'WhatsApp com DDD', 'tel'], ['cpf', 'CPF', 'text'], ['birth_date', 'Data de nascimento', 'date'],
+    ['email', 'E-mail', 'email'], ['postal_code', 'CEP', 'text'], ['address', 'Endereço (rua, número, bairro, cidade)', 'text', 'full']];
+  document.querySelectorAll('[data-cf]').forEach(box => {
+    const p = box.dataset.cf;
+    box.innerHTML = CF.map(([k, l, t, w]) => '<label class="' + (w || '') + '">' + l + '<input class="field" id="' + p + '_' + k + '" type="' + (t === 'tel' ? 'text' : t) + '"' + (t === 'tel' || k === 'cpf' || k === 'postal_code' ? ' inputmode="numeric"' : '') + (k === 'birth_date' ? ' max="' + new Date().toISOString().slice(0, 10) + '"' : '') + ' autocomplete="off"></label>').join('')
+      + '<label class="chk full"><input type="checkbox" id="' + p + '_offers_opt_out"> Não quer receber ofertas e campanhas pelo WhatsApp</label>';
+  });
+  const cpfOk = c => { if (!/^\d{11}$/.test(c) || /^(\d)\1{10}$/.test(c)) return false; const d = n => { let x = 0; for (let i = 0; i < n; i++) x += +c[i] * (n + 1 - i); const r = x * 10 % 11; return r === 10 ? 0 : r; }; return d(9) === +c[9] && d(10) === +c[10]; };
+  function cfRead(p) {
+    const g = k => $(p + '_' + k).value.trim();
+    const d = { name: g('name'), phone: g('phone'), cpf: g('cpf').replace(/\D/g, ''), birth_date: g('birth_date'), email: g('email').toLowerCase(), postal_code: g('postal_code').replace(/\D/g, ''), address: g('address'), offers_opt_out: $(p + '_offers_opt_out').checked };
+    if (d.name.length < 2) return { error: 'Informe o nome da cliente.' };
+    if (d.phone && d.phone.replace(/\D/g, '').length < 10) return { error: 'WhatsApp incompleto: use DDD + número.' };
+    if (d.cpf && !cpfOk(d.cpf)) return { error: 'CPF inválido. Confira os números.' };
+    if (d.birth_date && (d.birth_date < '1900-01-01' || d.birth_date > new Date().toISOString().slice(0, 10))) return { error: 'Data de nascimento inválida.' };
+    if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) return { error: 'E-mail inválido.' };
+    if (d.postal_code && d.postal_code.length !== 8) return { error: 'CEP tem 8 números.' };
+    return { data: d };
+  }
+  function cfFill(p, c = {}) { CF.forEach(([k]) => { $(p + '_' + k).value = c[k] || ''; }); $(p + '_offers_opt_out').checked = !!c.offers_opt_out; }
+  $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('nc_name').focus(); };
   $('cbUse').onchange = draw; $('disc').onchange = draw; $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
@@ -400,7 +464,10 @@
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
     if ($('offline').checked && method !== 'cash') { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
-    else if ($('ncName').value.trim().length >= 2) body.new_customer = { name: $('ncName').value.trim(), phone: $('ncPhone').value.trim() };
+    else if (!$('newCust').hidden && $('nc_name').value.trim()) {
+      const f = cfRead('nc'); if (f.error) { $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Cadastro da cliente: ' + f.error; $('finish').disabled = false; return; }
+      body.new_customer = f.data;
+    }
     else body.anonymous = true;
     try {
       const r = await api('/store/sales', 'POST', body);
@@ -433,21 +500,50 @@
   };
   function resetSale() {
     items = []; seller = null; sellerPin = ''; method = 'credit'; $('disc').checked = false; $('doneBox').hidden = true; $('st1').classList.remove('done');
-    $('custClear').onclick(); $('ncName').value = ''; $('ncPhone').value = ''; $('newCust').hidden = true; draw(); $('scan').focus();
+    $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); $('scan').focus();
   }
 
   // ---------- Caixa aberto/fechado ----------
   async function loadCash() {
     const c = await api('/store/cash');
     const open = !!c.session;
-    $('closedBox').hidden = open; $('cashBox').hidden = !open;
+    $('closedBox').hidden = open; $('cashBox').hidden = !open; $('topClose').hidden = !open;
     const when = open ? new Date(c.session.opened_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }).replace(':', 'h') : '';
     $('cashSub').textContent = (cfg.name || '') + (open ? ' · caixa aberto às ' + when : ' · caixa fechado');
     if (open) setTimeout(() => $('scan').focus(), 50); else setTimeout(() => $('openCash').focus(), 50);
   }
+  // Fechar o caixa pelo botão do topo: conta o dinheiro, escolhe quem fecha e confirma com o PIN dessa pessoa.
+  $('topClose').onclick = async () => {
+    $('cdMsg').textContent = ''; $('cdCash').value = ''; $('cdExp').textContent = '—'; $('cdInfo').textContent = 'Carregando…';
+    whoButtons('cdWho', s => {
+      $('cdMsg').className = 'msg err';
+      if ($('cdCash').value.trim() === '') { $('cdMsg').textContent = 'Informe o dinheiro contado na gaveta (0 se não tiver).'; $('cdCash').focus(); return; }
+      const counted = toCents($('cdCash').value); let r;
+      $('clDlg').close();
+      askPin(s, () => {
+        $('closedInfo').hidden = false;
+        $('closedInfo').textContent = 'Caixa fechado por ' + s.name + '. ' + (r.difference_cents ? 'Diferença de ' + brl(r.difference_cents) + ' (o supervisor confere no painel).' : 'Sem diferença no dinheiro.');
+        items = []; if (customer) $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); loadCash().catch(() => {});
+      }, async pin => { r = await api('/store/cash/close', 'POST', { counted_cash_cents: counted, seller_id: s.id, seller_pin: pin }); });
+    });
+    $('clDlg').showModal(); setTimeout(() => $('cdCash').focus(), 30);
+    try {
+      const d = await api('/store/kiosk/cash-today');
+      if (!d.session) { $('cdInfo').textContent = 'O caixa já está fechado.'; loadCash().catch(() => {}); return; }
+      $('cdExp').textContent = brl(d.expected_cash_cents);
+      $('cdInfo').textContent = 'Aberto às ' + hhmm(d.session.opened_at).replace(':', 'h') + ' · ' + ((n => n + (n === 1 ? ' venda' : ' vendas'))(d.sales.filter(x => !x.canceled_at).length)) + (items.length ? ' · atenção: há peças na venda em andamento, que será descartada' : '');
+    } catch (e) { $('cdInfo').textContent = e.message; }
+  };
+  $('cdCancel').onclick = () => $('clDlg').close();
+  // Abrir o caixa: no quiosque, quem abre escolhe o nome e confirma com o PIN.
+  const doOpen = async extra => { await api('/store/cash/open', 'POST', { opening_cents: toCents($('openCash').value), ...extra }); $('openMsg').textContent = ''; $('closedInfo').hidden = true; $('openWhoBox').hidden = true; await loadCash(); };
   $('openBtn').onclick = async () => {
-    try { await api('/store/cash/open', 'POST', { opening_cents: toCents($('openCash').value) }); $('openMsg').textContent = ''; await loadCash(); }
-    catch (e) { $('openMsg').textContent = e.message; }
+    $('openMsg').className = 'msg err'; $('openMsg').textContent = '';
+    if ($('openCash').value.trim() === '') { $('openMsg').textContent = 'Informe o dinheiro que está na gaveta (0 se estiver vazia).'; $('openCash').focus(); return; }
+    if (!isKiosk) { try { await doOpen({}); } catch (e) { $('openMsg').textContent = e.message; } return; }
+    if (!sellers.length) { $('openMsg').textContent = 'Nenhuma pessoa com PIN nesta unidade. Peça ao supervisor para cadastrar.'; return; }
+    $('openWhoBox').hidden = false;
+    whoButtons('openWho', s => askPin(s, () => {}, async pin => { await doOpen({ seller_id: s.id, seller_pin: pin }); }));
   };
 
   // ---------- Meu dia ----------
@@ -578,9 +674,11 @@
     const qs = new URLSearchParams({ q: $('sfQ').value.trim(), family: $('sfFam').value, only: $('sfOnly').value, offset: mxOff, limit: 300 });
     let d; try { d = await api('/store/stock/matrix?' + qs); } catch (e) { $('sfInfo').textContent = e.message; return; }
     if (!mxFams && d.families.length) { $('sfFam').innerHTML = '<option value="">Todas as famílias</option>' + d.families.map(f => '<option>' + safe(f) + '</option>').join(''); mxFams = true; }
-    $('sfHead').innerHTML = '<tr><th>Peça</th><th class="n">Preço</th>' + d.units.map(u => '<th class="u' + (u.mine ? ' me' : '') + '">' + safe(u.label) + (u.mine ? '<br><small>aqui</small>' : u.depot ? '<br><small>depósito</small>' : '') + '</th>').join('') + '<th class="n">Rede</th></tr>';
+    // A unidade aberta no quiosque vem primeiro, em destaque; as outras seguem na ordem da rede.
+    const ord = d.units.map((u, i) => i).sort((a, b) => (d.units[b].mine ? 1 : 0) - (d.units[a].mine ? 1 : 0));
+    $('sfHead').innerHTML = '<tr><th>Peça</th><th class="n">Preço</th>' + ord.map(i => d.units[i]).map(u => '<th class="u' + (u.mine ? ' me' : '') + '">' + safe(u.label) + (u.mine ? '<br><small>aqui</small>' : u.depot ? '<br><small>depósito</small>' : '') + '</th>').join('') + '<th class="n">Rede</th></tr>';
     const rows = d.items.map(p => '<tr><td><strong>' + safe(p.name) + '</strong><br><span class="code">' + safe(p.code || 'sem código') + (p.family ? ' · ' + safe(p.family) : '') + '</span></td><td class="n">' + brl(p.price_cents) + '</td>'
-      + p.stock.map((n, i) => '<td class="u' + (d.units[i].mine ? ' me' : '') + '">' + (!p.has[i] ? '<span class="na" title="Peça não cadastrada nesta unidade">—</span>' : n > 0 ? '<b>' + n + '</b>' : '<span class="z">0</span>') + '</td>').join('')
+      + ord.map(i => [p.stock[i], i]).map(([n, i]) => '<td class="u' + (d.units[i].mine ? ' me' : '') + '">' + (!p.has[i] ? '<span class="na" title="Peça não cadastrada nesta unidade">—</span>' : n > 0 ? '<b>' + n + '</b>' : '<span class="z">0</span>') + '</td>').join('')
       + '<td class="tot">' + p.total + '</td></tr>').join('');
     $('sfRes').innerHTML = more ? $('sfRes').innerHTML + rows : (rows || '<tr><td colspan="' + (d.units.length + 3) + '" class="sub">Nenhuma peça.</td></tr>');
     mxOff = d.offset + d.items.length;
@@ -683,10 +781,67 @@
   }
   const msgBadge = () => api('/store/kiosk/messages').then(d => { msgData = d; const n = d.items.length; $('msgN').textContent = n; $('msgN').style.display = n ? '' : 'none'; }).catch(() => {});
 
+  // ---------- Clientes ----------
+  let clOffset = 0, clTimer = null, clEditId = null;
+  const dmy = d => d ? new Date(String(d).length === 10 ? d + 'T12:00:00' : d).toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' }) : '—';
+  const fone = p => { const d = String(p || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, ''); return d.length === 11 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7) : d.length === 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6) : (p || ''); };
+  async function loadClients() {
+    const d = await api('/store/kiosk/customers?q=' + encodeURIComponent($('clQ').value.trim()) + '&sort=' + $('clSort').value + '&offset=' + clOffset);
+    $('clRows').innerHTML = d.customers.map(c => '<tr class="clrow" data-id="' + safe(c.id) + '"><td><b>' + safe(c.name) + '</b>' + (c.email ? '<br><span class="sub">' + safe(c.email) + '</span>' : '') + '</td><td>' + safe(fone(c.phone) || '—') + '</td><td>' + safe(c.unit) + '</td><td class="n">' + c.sales + '</td><td class="n">' + brl(c.spent_cents) + '</td><td>' + (c.last_at ? dmy(c.last_at) : '—') + '</td></tr>').join('')
+      || '<tr><td colspan="6" class="sub">Nenhuma cliente encontrada.</td></tr>';
+    $('clRows').querySelectorAll('[data-id]').forEach(r => r.onclick = () => openClient(r.dataset.id));
+    $('clCount').textContent = d.total ? (clOffset + 1) + '–' + (clOffset + d.customers.length) + ' de ' + d.total + ' clientes' : '';
+    $('clPrev').hidden = clOffset === 0; $('clNext').hidden = clOffset + d.customers.length >= d.total;
+  }
+  const reloadClients = () => loadClients().catch(e => { $('clSub').textContent = e.message; });
+  $('clQ').oninput = () => { clearTimeout(clTimer); clTimer = setTimeout(() => { clOffset = 0; reloadClients(); }, 300); };
+  $('clSort').onchange = () => { clOffset = 0; reloadClients(); };
+  $('clPrev').onclick = () => { clOffset = Math.max(0, clOffset - 50); reloadClients(); };
+  $('clNext').onclick = () => { clOffset += 50; reloadClients(); };
+  function editClient(c) {
+    clEditId = c?.id || null; $('cuTitle').textContent = c ? 'Editar cadastro' : 'Cadastrar cliente'; $('cuMsg').textContent = '';
+    cfFill('cu', c || {}); if ($('chDlg').open) $('chDlg').close(); $('cuDlg').showModal(); setTimeout(() => $('cu_name').focus(), 30);
+  }
+  $('clNew').onclick = () => editClient(null);
+  $('cuCancel').onclick = () => $('cuDlg').close();
+  $('cuSave').onclick = async () => {
+    const f = cfRead('cu'); $('cuMsg').className = 'msg err';
+    if (f.error) { $('cuMsg').textContent = f.error; return; }
+    $('cuSave').disabled = true;
+    try {
+      let id = clEditId;
+      if (id) await api('/store/kiosk/customers/' + id, 'PATCH', f.data);
+      else { const r = await api('/store/kiosk/customers', 'POST', f.data); id = r.id; if (!r.created) alert('Já existia uma cliente com esse WhatsApp ou CPF nesta unidade. Os dados que estavam em branco foram completados.'); }
+      $('cuDlg').close(); reloadClients(); openClient(id);
+    } catch (e) { $('cuMsg').textContent = e.message; } finally { $('cuSave').disabled = false; }
+  };
+  async function openClient(id) {
+    $('chBody').innerHTML = '<p class="sub">Carregando histórico…</p>'; if (!$('chDlg').open) $('chDlg').showModal();
+    let h; try { h = await api('/store/kiosk/customers/' + id); } catch (e) { $('chBody').innerHTML = '<p class="msg err">' + safe(e.message) + '</p><button type="button" class="linkbtn" id="chX">Fechar</button>'; $('chX').onclick = () => $('chDlg').close(); return; }
+    const c = h.customer, t = h.totals, wa = String(c.phone || '').replace(/\D/g, '');
+    const pay = x => Array.isArray(x.payments) && x.payments.length ? x.payments.map(p => (METHOD[p.method] || p.method) + ' ' + brl(p.amount_cents)).join(' + ') : (METHOD[x.payment_method] || x.payment_method);
+    $('chBody').innerHTML = '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div><h2 style="margin:0;font-size:20px;color:var(--ink)">' + safe(c.name) + '</h2>'
+      + '<p class="sub">' + [wa ? '<a href="https://wa.me/' + (wa.startsWith('55') ? '' : '55') + wa + '" target="_blank" rel="noopener">' + safe(fone(c.phone)) + '</a>' : 'sem WhatsApp', c.email ? safe(c.email) : '', c.cpf ? 'CPF ' + safe(c.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')) : '', c.birth_date ? 'nasc. ' + dmy(c.birth_date) : ''].filter(Boolean).join(' · ') + '</p>'
+      + '<p class="sub">' + [c.address ? safe(c.address) : '', c.postal_code ? 'CEP ' + safe(c.postal_code.replace(/(\d{5})(\d{3})/, '$1-$2')) : ''].filter(Boolean).join(' · ') + '</p>'
+      + '<p class="sub">Cadastro em ' + safe(c.unit) + ' · desde ' + dmy(c.created_at) + (c.offers_opt_out ? ' · <b>não quer ofertas</b>' : '') + '</p></div>'
+      + '<div style="display:flex;gap:10px;white-space:nowrap"><button type="button" class="linkbtn" id="chEdit">Editar cadastro</button><button type="button" class="linkbtn" id="chX">Fechar</button></div></div>'
+      + '<div class="ckpis"><div><small>Total gasto</small><b>' + brl(t.spent_cents) + '</b></div><div><small>Compras</small><b>' + t.sales + '</b></div><div><small>Ticket médio</small><b>' + brl(t.ticket_cents) + '</b></div><div><small>Última compra</small><b>' + (t.last_at ? dmy(t.last_at) : '—') + '</b></div></div>'
+      + (h.cashback?.balance_cents ? '<div class="cb" style="margin:0 0 10px"><span>Cashback disponível (vale em todas as unidades)' + (h.cashback.next_expires_on ? ' · vence ' + dmy(h.cashback.next_expires_on) : '') + '</span><strong>' + brl(h.cashback.balance_cents) + '</strong></div>' : '')
+      + (Object.keys(t.by_unit).length > 1 ? '<p class="sub">Por unidade: ' + Object.entries(t.by_unit).map(([u, v]) => safe(u) + ' ' + brl(v.total_cents) + ' (' + v.count + ')').join(' · ') + '</p>' : '')
+      + '<p class="label" style="margin-top:12px">Histórico de compras</p>'
+      + (h.sales.map(x => '<div class="hsale' + (x.canceled_at ? ' cx' : '') + '"><b>Venda nº ' + x.sale_number + '</b> · ' + safe(x.unit) + ' · ' + new Date(x.created_at).toLocaleString('pt-BR', { timeZone: 'America/Fortaleza', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + '<span class="r"><b>' + brl(x.total_cents) + '</b></span>'
+        + '<br><span class="sub">' + safe(pay(x)) + (x.seller_name ? ' · ' + safe(x.seller_name) : '') + (x.discount_cents ? ' · desconto ' + brl(x.discount_cents) : '') + (x.cashback_used_cents ? ' · cashback usado ' + brl(x.cashback_used_cents) : '') + (x.cashback_earned_cents ? ' · ganhou ' + brl(x.cashback_earned_cents) : '') + (x.receipt_code ? ' · comprovante ' + safe(x.receipt_code) : '') + (x.canceled_at ? ' · <b>cancelada</b>' + (x.cancel_reason ? ': ' + safe(x.cancel_reason) : '') : '') + '</span>'
+        + (x.items.length ? '<ul>' + x.items.map(i => '<li>' + (i.quantity > 1 ? i.quantity + 'x ' : '') + safe(i.name) + (i.variant ? ' ' + safe(i.variant) : '') + (i.code ? ' <span class="sub">(' + safe(i.code) + ')</span>' : '') + (i.gift ? ' · brinde' : '') + '<span class="r">' + brl(i.total_cents) + '</span></li>').join('') + '</ul>' : '') + '</div>').join('')
+        || '<p class="sub">Nenhuma compra registrada ainda.</p>');
+    $('chX').onclick = () => $('chDlg').close();
+    $('chEdit').onclick = () => editClient(c);
+  }
+
   // ---------- Navegação ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock'; $('viewMsgs').hidden = b.dataset.view !== 'msgs';
+    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock'; $('viewMsgs').hidden = b.dataset.view !== 'msgs'; $('viewClients').hidden = b.dataset.view !== 'clients';
+    if (b.dataset.view === 'clients') { reloadClients(); setTimeout(() => $('clQ').focus(), 30); }
     if (b.dataset.view === 'msgs') loadMsgs().catch(e => { $('mgSub').textContent = e.message; });
     if (b.dataset.view === 'stock') openStock().catch(e => { $('stSub').textContent = e.message; });
     if (b.dataset.view === 'warranty') setTimeout(() => $('wCode').focus(), 30);
@@ -712,7 +867,7 @@
   (async () => {
     try {
       const [k, c, b] = await Promise.all([api('/store/kiosk/sellers'), api('/store/sales/config'), fetch('/api/public/brand').then(r => r.json()).catch(() => ({}))]);
-      unit = k.unit; sellers = k.sellers; cfg = c;
+      unit = k.unit; sellers = k.sellers; cfg = c; isKiosk = !!k.kiosk;
       if (b?.network) brandName = b.name;
       if (b?.network) { const [first, ...rest] = b.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); if (/^#[0-9a-f]{6}$/i.test(b.brand_color || '')) document.documentElement.style.setProperty('--gold', b.brand_color); }
       $('unitName').textContent = unit.label; $('footName').textContent = 'Caixa do quiosque ' + unit.label; document.title = 'Caixa · ' + unit.label;

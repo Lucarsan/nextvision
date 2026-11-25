@@ -73,7 +73,10 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     assert.equal((await api('/store/kiosk/check-pin', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234' } })).name, 'Ana Paula');
 
     // Venda no quiosque: sem vendedora/PIN ou com PIN errado não grava.
-    await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0 } }, 201);
+    assert.equal((await request('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0 } })).status, 401);
+    assert.equal((await request('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0, seller_id: ana.id, seller_pin: '0000' } })).status, 401);
+    const op = await api('/store/cash/open', { method: 'POST', token: kt, body: { opening_cents: 0, seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(op.opened_by, ana.id);
     const prod = (await f.db.query("INSERT INTO products(tenant_id, name, barcode, price_cents, stock_qty) VALUES($1, 'Corrente Aço Elo P', '003622', 4900, 5) RETURNING id", [tenant])).rows[0].id;
     const item = { items: [{ product_id: prod, quantity: 1 }] };
     assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit' } })).status, 400);

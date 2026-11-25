@@ -18,6 +18,7 @@ import bcrypt from 'bcryptjs';
 import { pinOk, authorizerByPin } from './kiosk.js';
 import { linkedIds, linkLocal, searchNetwork, adopt } from './network-customers.js';
 import { newReceiptCode } from './warranty.js';
+import { newCustomerSchema, saveNewCustomer, registerKioskCustomers } from './kiosk-customers.js';
 
 const TZ = process.env.STORE_TIMEZONE || 'America/Fortaleza';
 const cents = z.number().int().min(0).max(100000000);
@@ -47,6 +48,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   registerStorePerformance(app, { q, route, bad, valid, audit, guard, owner, tid, uuid });
   const { adminOnly } = registerStoreAdmin(app, { q, db, route, bad, valid, audit, guard, tid, uuid });
   registerServiceOrders(app, { q, db, route, bad, valid, audit, guard, owner, tid, uuid });
+  registerKioskCustomers(app, { q, db, route, bad, valid, audit, staff, tid, uuid, cashbackFor: (...a) => cashbackFor(...a) });
   // Operador novato (access_level 'basic') não cancela venda, não lança saídas/sangria/suprimento,
   // não fecha o caixa e não dá desconto nem muda preço.
   const fullOnly = (req, res, next) => req.user.access_level === 'basic' ? bad(res, 403, 'Seu acesso (operador novato) não permite esta ação. Peça a um operador livre ou ao dono.') : next();
@@ -210,9 +212,16 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   app.post('/api/store/cash/open', ...guard, route(async (req, res) => {
-    const v = valid(z.object({ opening_cents: cents.default(0) }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ opening_cents: cents.default(0), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
+    // Quiosque: quem abre o caixa confirma com o próprio PIN e fica registrado como responsável pela abertura.
+    let openerId = req.user.id;
+    if (req.user.kiosk) {
+      const who = v.seller_id ? (await q("SELECT id FROM users WHERE id=$1 AND tenant_id=$2 AND active", [v.seller_id, tid(req)])).rows[0] : null;
+      if (!who || !(await pinOk({ query: q }, bcrypt, who.id, v.seller_pin))) return bad(res, 401, 'PIN incorreto');
+      openerId = who.id;
+    }
     try {
-      const r = await q(`INSERT INTO cash_sessions(tenant_id,opening_cents,opened_by) VALUES($1,$2,$3) RETURNING *`, [tid(req), v.opening_cents, req.user.id]);
+      const r = await q(`INSERT INTO cash_sessions(tenant_id,opening_cents,opened_by) VALUES($1,$2,$3) RETURNING *`, [tid(req), v.opening_cents, openerId]);
       await audit(req, 'open', 'cash_session', r.rows[0].id); res.status(201).json(r.rows[0]);
     } catch (e) { if (e.code === '23505') return bad(res, 409, 'O caixa já está aberto'); throw e; }
   }));
@@ -276,10 +285,12 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
 
   app.post('/api/store/cash/close', ...full, route(async (req, res) => {
     const v = valid(z.object({ counted_cash_cents: cents, note: z.string().trim().max(400).default(''), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
+    let closerId = req.user.id;
     if (req.user.kiosk) {
       const who = v.seller_id ? (await q("SELECT id,name FROM users WHERE id=$1 AND tenant_id=$2 AND active", [v.seller_id, tid(req)])).rows[0] : null;
       if (!who || !(await pinOk({ query: q }, bcrypt, who.id, v.seller_pin))) return bad(res, 401, 'PIN incorreto');
       v.note = ((v.note ? v.note + ' · ' : '') + 'fechado por ' + who.name).slice(0, 400);
+      closerId = who.id; // quem digitou o PIN fica como responsável pelo fechamento
     }
     const c = await db.connect();
     try {
@@ -288,7 +299,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Não há caixa aberto'); }
       const summary = await cashSummary(tid(req), s.rows[0].id, c);
       const r = await c.query(`UPDATE cash_sessions SET status='closed',closed_at=now(),closed_by=$1,expected_cash_cents=$2,counted_cash_cents=$3,close_note=$4
-        WHERE id=$5 RETURNING *`, [req.user.id, summary.expected_cash_cents, v.counted_cash_cents, v.note || null, s.rows[0].id]);
+        WHERE id=$5 RETURNING *`, [closerId, summary.expected_cash_cents, v.counted_cash_cents, v.note || null, s.rows[0].id]);
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'close', 'cash_session', s.rows[0].id]);
       await c.query('COMMIT');
       res.json({ session: r.rows[0], summary, difference_cents: v.counted_cash_cents - summary.expected_cash_cents });
@@ -1048,7 +1059,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   // Corpo da venda (também guardado nas vendas "a receber", sem a forma de pagamento).
   const saleSchema = z.object({
       customer_id: uuid.optional(),
-      new_customer: z.object({ name: z.string().trim().min(2).max(120), phone: z.string().trim().max(30).default('') }).optional(),
+      new_customer: newCustomerSchema.optional(),
       anonymous: z.boolean().default(false),
       total_cents: cents.min(1).optional(),
       // Item de produto (preço do cadastro, ou unit_price_cents se o vendedor mudou) ou linha avulsa (nome + preço).
@@ -1108,10 +1119,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       let customerId = v.customer_id || null;
       if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
       if (v.new_customer) {
-        const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
-        const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
-        customerId = same.rowCount ? same.rows[0].id : (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id;
-        if (!same.rowCount) await linkLocal(c, tid(req), customerId);
+        customerId = (await saveNewCustomer(c, tid(req), v.new_customer)).id;
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
       let liveOrder = null;
@@ -1341,10 +1349,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       let customerId = v.customer_id || null, created = false;
       if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL', [customerId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Cliente inválido'); }
       if (v.new_customer) {
-        const phone = v.new_customer.phone ? phoneDigits(v.new_customer.phone) : '';
-        const same = phone ? await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND deleted_at IS NULL AND phone_key=fp_phone_key($2) ORDER BY created_at LIMIT 1', [tid(req), phone]) : { rowCount: 0 };
-        if (same.rowCount) customerId = same.rows[0].id;
-        else { customerId = (await c.query("INSERT INTO customers(tenant_id,name,phone,source) VALUES($1,$2,$3,'caixa') RETURNING id", [tid(req), v.new_customer.name, phone || null])).rows[0].id; created = true; await linkLocal(c, tid(req), customerId); }
+        const nc = await saveNewCustomer(c, tid(req), v.new_customer); customerId = nc.id; created = nc.created;
       }
       if (v.order_id && !(await c.query('SELECT 1 FROM orders WHERE id=$1 AND tenant_id=$2 AND customer_id=$3 AND deleted_at IS NULL', [v.order_id, tid(req), customerId])).rowCount) { await c.query('ROLLBACK'); return bad(res, 400, 'Pedido não pertence a este cliente'); }
       let liveOrder = null;

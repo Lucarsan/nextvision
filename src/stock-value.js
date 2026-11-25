@@ -28,13 +28,14 @@ export function registerStockValue(app, { q, route, bad, valid, audit, guard, ti
     }
 
     // Uma linha por item em estoque: produto simples (ou peça) ou cada modelo de um produto com modelos.
-    // O modelo usa o preço e o custo do produto.
+    // O modelo usa o preço e o custo do produto. Produto com modelos contado no total (películas, capas):
+    // o estoque está no produto, então entra como uma linha só.
     const rows = (await q(`SELECT p.id product_id,NULL::uuid variant_id,p.name,NULL::text variant,p.kind,p.barcode,p.stock_qty qty,p.cost_cents,p.price_cents
-        FROM products p WHERE p.tenant_id=$1 AND p.active AND NOT p.ask_variant AND p.stock_qty>0
+        FROM products p WHERE p.tenant_id=$1 AND p.active AND (NOT p.ask_variant OR p.variant_stock='total') AND p.stock_qty>0
       UNION ALL
       SELECT p.id,v.id,p.name,v.name,p.kind,p.barcode,v.stock_qty,p.cost_cents,p.price_cents
         FROM product_variants v JOIN products p ON p.id=v.product_id
-        WHERE p.tenant_id=$1 AND p.active AND v.active AND p.ask_variant AND v.stock_qty>0`, [tid(req)])).rows;
+        WHERE p.tenant_id=$1 AND p.active AND v.active AND p.ask_variant AND p.variant_stock<>'total' AND v.stock_qty>0`, [tid(req)])).rows;
 
     const sum = (list, f) => list.reduce((a, x) => a + f(x), 0);
     // Peça: o "preço" é o do serviço (mão de obra junto), não preço de revenda; entra só no custo.

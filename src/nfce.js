@@ -65,6 +65,7 @@ export function buildNfce({ tenant, network = null, sale, items, products = new 
       out.integration = 2; return out;
     }
     const t = p.tef;
+    if (t.simulated) problems.push('Pagamento no pinpad simulado (teste): não pode virar cupom fiscal');
     Object.assign(out, { integration: 1, acquirer_cnpj: digits(t.acquirer_cnpj) || null, brand: t.brand || null, auth: t.auth || null, terminal_id: t.terminal_id || tenant.payment_terminal_id || null });
     if (!out.acquirer_cnpj) problems.push('Pagamento eletrônico sem CNPJ da credenciadora');
     if (!out.auth) problems.push('Pagamento eletrônico sem código de autorização');

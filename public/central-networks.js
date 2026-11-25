@@ -96,6 +96,7 @@
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>Emissor<input id="fcProv" value="ACBr API" style="width:140px"></label><label>Operações<input id="fcOps" type="number" min="1" style="width:110px"></label><label>Valor (R$)<input id="fcPrice" inputmode="decimal" style="width:110px"></label><label>Data da compra<input id="fcDate" type="date"></label><button type="button" class="ct-btn" id="fcAdd">Registrar pacote</button></div>'
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:10px"><label>Usado segundo o painel do emissor<input id="fcUsed" type="number" min="0" style="width:140px"></label><button type="button" class="ct-btn ghost" id="fcAdj">Acertar usado</button></div></section>'
       + '<section id="acbrCard"></section>'
+      + '<section id="tefCard"></section>'
       + '<section><h2>Resumo diário por e-mail</h2><p class="ct-muted">Todo dia às 8h, o resumo do dia anterior (vendas por unidade, formas de pagamento, cancelamentos e diferença de caixa).</p><div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>E-mails (separados por vírgula)<input id="netRepEmails" style="width:420px" value="' + safe((net.report_emails || []).join(', ')) + '"></label><button type="button" class="ct-btn" id="netRepSave">Salvar</button></div></section>'
       + '<section><h2>Comissão por faixa</h2><p class="ct-muted">A faixa alcançada pelas vendas do mês da vendedora vale sobre o total do mês. Ex.: 2% a partir de R$ 0, 3% a partir de R$ 20.000, 4% a partir de R$ 30.000.</p>'
       + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">' + [0, 1, 2].map(i => { const t = (net.commission_tiers || [])[i] || {}; return '<label>A partir de (R$)<input class="tierMin" inputmode="decimal" style="width:120px" value="' + (t.min_cents != null ? (t.min_cents / 100).toFixed(2).replace('.', ',') : '') + '"></label><label>%<input class="tierPct" inputmode="decimal" style="width:70px" value="' + (t.percent != null ? String(t.percent).replace('.', ',') : ['2', '3', '4'][i]) + '"></label>'; }).join('<span style="width:12px"></span>')
@@ -173,6 +174,7 @@
     }));
     const fcShow = c => { el('fcNow').innerHTML = c.purchased ? '<b>' + c.used.toLocaleString('pt-BR') + ' de ' + c.purchased.toLocaleString('pt-BR') + '</b> usadas (' + c.percent.toLocaleString('pt-BR') + '%) · ' + c.packages.length + ' pacote(s)' : 'Nenhum pacote registrado.'; };
     window.acbrCard?.(el('acbrCard'), units);
+    window.tefCard?.(el('tefCard'), units);
     api('/master/networks/' + net.id + '/fiscal-credits').then(fcShow).catch(e => { el('fcNow').textContent = e.message; });
     el('fcDate').value = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
     el('fcAdd').onclick = act(async () => { const c = await api('/master/networks/' + net.id + '/fiscal-credits/packages', 'POST', { provider: el('fcProv').value.trim(), operations: Number(el('fcOps').value), price_cents: Math.round(Number((el('fcPrice').value || '0').replace(/\./g, '').replace(',', '.')) * 100), purchased_on: el('fcDate').value }); fcShow(c); return 'Pacote registrado.'; });

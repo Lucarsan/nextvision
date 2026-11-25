@@ -1,3 +1,4 @@
+import { tefForSale } from './tef.js';
 // Caixa diário, vendas ligadas a clientes, fidelidade por venda e mensagens do dia.
 // - Ligado por loja pela central (tenants.sales_enabled).
 // - Cada venda fica num caixa aberto; ao fechar, o sistema calcula o dinheiro esperado.
@@ -1079,6 +1080,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Pinpad fora do ar: pago na maquininha avulsa; fica pendente de conciliação (ECONF). offline_auth = autorização do comprovante.
       offline_payment: z.boolean().optional(),
       offline_auth: z.string().trim().max(40).optional(),
+      // TEF Stone (AutoTEF): cobranças aprovadas no pinpad (registradas antes em /api/store/tef/transactions).
+      tef_transaction_ids: z.array(uuid).min(1).max(5).optional(),
       payment_method: METHOD.optional(),
       // Pagamento dividido (2 a 5 formas diferentes); a soma tem que dar o total cobrado (já com desconto e cashback).
       payments: z.array(z.object({ method: METHOD, amount_cents: z.number().int().min(1).max(100000000) }).strict()).min(2).max(5).optional(),
@@ -1454,11 +1457,36 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         const paid = v.payments.reduce((a, p) => a + p.amount_cents, 0);
         if (paid !== total) { await c.query('ROLLBACK'); return bad(res, 400, `As formas de pagamento somam ${money(paid)}, mas o total a pagar é ${money(total)}. Confira os valores.`); }
       }
+      // TEF Stone: cada forma eletrônica paga no pinpad precisa de uma cobrança aprovada, da unidade, sem venda e com o mesmo valor.
+      const parts = v.payments || [{ method: v.payment_method, amount_cents: total }];
+      let tefRows = [];
+      if (v.tef_transaction_ids) {
+        if (v.offline_payment) { await c.query('ROLLBACK'); return bad(res, 400, 'Escolha só um: pinpad ou maquininha avulsa'); }
+        if (new Set(v.tef_transaction_ids).size !== v.tef_transaction_ids.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Cobrança repetida'); }
+        tefRows = (await c.query('SELECT * FROM tef_transactions WHERE id=ANY($1::uuid[]) AND tenant_id=$2 FOR UPDATE', [v.tef_transaction_ids, tid(req)])).rows;
+        const free = parts.map(p => ({ ...p }));
+        for (const t of v.tef_transaction_ids.map(i => tefRows.find(r => r.id === i))) {
+          if (!t || t.status !== 'approved' || t.sale_id || t.resolved_note) { await c.query('ROLLBACK'); return bad(res, 409, 'A cobrança do pinpad não está aprovada ou já foi usada em outra venda. Confira em Pendências do pinpad.'); }
+          const k = free.findIndex(p => p.method === t.method && p.amount_cents === t.amount_cents);
+          if (k < 0) { await c.query('ROLLBACK'); return bad(res, 409, `O valor cobrado no pinpad (${money(t.amount_cents)} no ${t.method === 'pix' ? 'Pix' : t.method === 'credit' ? 'crédito' : 'débito'}) não bate com a venda (${money(total)}). A cobrança ficou em Pendências do pinpad para estorno.`); }
+          free.splice(k, 1);
+        }
+      }
+      if (req.user.kiosk && !v.offline_payment && !opts.pixCharge) {
+        const mode = (await c.query('SELECT tef_mode FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.tef_mode || 'off';
+        const paid = tefRows.map(t => t.method);
+        if (mode !== 'off' && parts.some(p => ['credit', 'debit', 'pix'].includes(p.method) && !paid.includes(p.method))) { await c.query('ROLLBACK'); return bad(res, 400, 'Cobre no pinpad antes de finalizar (ou marque "Pinpad fora do ar" se cobrou na maquininha avulsa)'); }
+      }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
       sale.receipt_code = (await c.query('UPDATE sales SET receipt_code=$2 WHERE id=$1 RETURNING receipt_code', [sale.id, newReceiptCode()])).rows[0].receipt_code;
+      if (tefRows.length) {
+        await c.query('UPDATE tef_transactions SET sale_id=$1 WHERE id=ANY($2::uuid[]) AND tenant_id=$3', [sale.id, tefRows.map(t => t.id), tid(req)]);
+        sale.tef = tefRows.map(tefForSale);
+        await c.query('UPDATE sales SET tef=$2 WHERE id=$1', [sale.id, JSON.stringify(sale.tef)]);
+      }
       if (v.offline_payment && (v.payments ? v.payments.some(p => p.method !== 'cash') : v.payment_method !== 'cash')) {
         await c.query('UPDATE sales SET offline_payment=true,offline_auth=$2 WHERE id=$1', [sale.id, v.offline_auth || null]); sale.offline_payment = true; sale.offline_auth = v.offline_auth || null;
       }
@@ -1598,8 +1626,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const lot = (await c.query(`UPDATE cashback_lots n SET reversed_at=now(),remaining_cents=0 FROM cashback_lots o
         WHERE n.id=o.id AND n.sale_id=$1 AND n.reversed_at IS NULL RETURNING o.amount_cents,o.remaining_cents`, [req.params.id])).rows[0];
       await c.query('INSERT INTO audit_events(tenant_id,actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4,$5)', [tid(req), req.user.id, 'cancel', 'sale', req.params.id]);
+      // Pago no pinpad (TEF): o caixa estorna em seguida; até lá a cobrança aparece em Pendências do pinpad.
+      const tefReverse = (await c.query(`SELECT id,method,amount_cents FROM tef_transactions WHERE sale_id=$1 AND status='approved'`, [req.params.id])).rows;
       await c.query('COMMIT');
-      res.json({ canceled: true, loyalty_removed: removed.rowCount > 0, loyalty_already_redeemed: kept.rowCount > 0,
+      res.json({ canceled: true, tef_to_reverse: tefReverse, loyalty_removed: removed.rowCount > 0, loyalty_already_redeemed: kept.rowCount > 0,
         cashback_returned_cents: use?.amount_cents || 0, cashback_removed_cents: lot?.amount_cents || 0,
         cashback_already_spent_cents: lot ? lot.amount_cents - lot.remaining_cents : 0 });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }

@@ -114,6 +114,10 @@
   .gunit summary b{flex:1}.gunit summary input{width:150px}.gunit .gs{padding:4px 14px 12px}
   .gunit .gs .r{display:flex;align-items:center;gap:14px;padding:6px 0;border-top:1px solid var(--line)}.gunit .gs .r span{flex:1}.gunit .gs input{width:150px}
   .prog{font-size:12px;color:var(--muted);width:170px;text-align:right}
+  .nstabs{margin:-8px 0 4px}.nstabs button{margin-bottom:4px}
+  .nsCard .bh{cursor:default}.nsSugs{display:flex;flex-direction:column;gap:4px;margin-top:6px}.nsSugs:empty{display:none}
+  .nsSug{text-align:left;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 10px;font:inherit;cursor:pointer}.nsSug:hover{background:var(--gold-soft)}
+  tr.nsEdit td{background:#faf9f6}
   @media (max-width:1180px){.grid,.grid2{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.rangebox{align-items:flex-start}}
   @media (max-width:760px){
     .shell{display:block}.side{position:static;height:auto;width:auto;padding:18px 16px;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px}
@@ -173,7 +177,9 @@
     </div>
 
     <div class="page" data-page="estoque" hidden>
-      <div class="top"><div><h1>Estoque</h1><p class="sub">Quantidade de cada peça em cada unidade. A coluna destacada é a unidade escolhida no menu.</p></div></div>
+      <div class="top"><div><h1>Estoque</h1><p class="sub">Peças, entradas, etiquetas e preços da rede. Cadastro e preço valem em todas as unidades.</p></div></div>
+      <div class="range nstabs" id="nsTabs" role="tablist" aria-label="Partes do estoque"></div>
+      <div id="nsPanel" hidden></div>
       <section class="card block" id="bStock"><header class="bh"><button type="button" class="btog" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><h2>Peças da rede</h2><span class="hint" id="mxInfo"></span></header><div class="bb">
         <div class="row mxbar"><label class="grow">Filtrar (opcional)<input id="mxQ" placeholder="Código, código de barras ou nome" autocomplete="off"></label><label>Família<select id="mxFam"><option value="">Todas</option></select></label><label>Mostrar<select id="mxOnly"><option value="">Todas as peças</option><option value="in_stock">Com estoque na rede</option><option value="mine_zero">Zerada na unidade escolhida, com estoque em outra</option><option value="zero">Sem estoque em nenhuma</option></select></label></div>
         <div class="mxwrap"><table class="mx"><thead id="mxHead"></thead><tbody id="mxBody"></tbody></table></div>
@@ -243,6 +249,7 @@
   </main>
 </div>
 <script src="/billing-banner.js?v=1"></script>
+<script src="/label-print.js?v=1"></script>
 <script>
 (() => {
   const token = sessionStorage.getItem('nv_token');
@@ -518,7 +525,7 @@
     else { const [first, ...rest] = network.name.trim().split(/\s+/); $('wmName').textContent = first.toUpperCase(); $('wmSub').textContent = rest.join(' ').toUpperCase(); }
     if (/^#[0-9a-f]{6}$/i.test(network.brand_color || '')) document.documentElement.style.setProperty('--gold', network.brand_color);
     $('who').textContent = (user?.name ? user.name.split(' ')[0] + ' · ' : '') + (user?.access === 'supervisor' ? 'supervisão' : 'gestão');
-    meAccess = user?.access || 'owner'; loadPeople().catch(e => { $('pcMsg').textContent = e.message; });
+    meAccess = user?.access || 'owner'; window.fpNet?.stockTabs?.draw(); loadPeople().catch(e => { $('pcMsg').textContent = e.message; });
     if (user?.access !== 'supervisor') { window.fpBillingBanner?.({ path: '/network/billing', token, before: $('kpis') }); $('exCard').hidden = false; }
   }).catch(e => { if (!window.fpBlockedNotice?.($('kpis'), e)) $('feedback').textContent = e.message; });
   $('unitSel').onchange = () => { draw(); drawUnitList(); loadComm().catch(() => {}); loadNetGoalKpi().catch(() => {}); loadUnitDay().catch(e => { $('upMsg').textContent = e.message; }); if (page === 'estoque') loadMatrix().catch(() => { }); };
@@ -572,7 +579,7 @@
     document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.page === p));
     if (p === 'loja') loadUnitDay().catch(e => { $('upMsg').textContent = e.message; });
     if (p === 'metas') loadGoals().catch(e => { $('gMsg').textContent = e.message; });
-    if (p === 'estoque') loadMatrix().catch(e => { $('mxInfo').textContent = e.message; });
+    if (p === 'estoque') { if (window.fpNet.stockTabs) window.fpNet.stockTabs.show(); else loadMatrix().catch(e => { $('mxInfo').textContent = e.message; }); }
     window.scrollTo(0, 0);
   }
   document.querySelectorAll('#nav a').forEach(a => a.onclick = e => { e.preventDefault(); history.replaceState(null, '', '#' + a.dataset.page); showPage(a.dataset.page); });
@@ -616,11 +623,15 @@
     if (!g.network.goal_cents || $('unitSel').value) return;
     box.insertAdjacentHTML('beforeend', '<div class="card kpi kpiGoal"><span>Meta da rede no mês</span><strong>' + Math.round(g.network.sold_cents * 100 / g.network.goal_cents) + '%</strong><em>' + brl(g.network.sold_cents) + ' de ' + brl(g.network.goal_cents) + '</em></div>');
   }
+  // Abas de gestão do estoque (network-stock-admin.js)
+  window.fpNet = { api, safe, brl, unit: () => $('unitSel').value, access: () => meAccess || 'owner', loadMatrix: () => loadMatrix().catch(e => { $('mxInfo').textContent = e.message; }) };
   showPage((location.hash || '#overview').slice(1));
   $('logout').onclick = () => { sessionStorage.removeItem('nv_token'); location.replace('/entrar'); };
   refresh();
   setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
 })();
 </script>
+<script src="/network-stock-admin.js?v=1"></script>
+<script>if (!document.querySelector('.page[data-page="estoque"]').hidden) window.fpNet?.stockTabs?.show();</script>
 </body>
 </html>

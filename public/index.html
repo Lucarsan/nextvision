@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ficou Pronto — instale no seu petshop</title>
-<meta name="description" content="Câmeras instaladas, sistema completo da loja e o tutor acompanhando o pet ao vivo pelo celular. A gente instala e cuida da parte técnica.">
+<title>Ficou Pronto — sistema para pet shops, assistências e lojas</title>
+<meta name="description" content="Sistema da loja com acompanhamento pelo celular para pet shops, assistências técnicas, joalherias e quiosques. A gente instala, treina e cuida da parte técnica.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/home.css?v=15">
+<link rel="stylesheet" href="/home.css?v=16">
 </head>
 <body>
 <header class="st-head">
@@ -15,29 +15,115 @@
   <nav class="st-nav" aria-label="Páginas"><a href="/o-que-e">O que é o Ficou Pronto?</a><a href="/segmentos">Segmentos</a><a href="/privacidade">Privacidade</a><a href="/lojas">Lojas</a><a href="/planos">Planos</a><a href="/fale-conosco">Contato</a></nav>
   <a class="en-btn" id="enterBtn" href="/entrar">Entrar</a>
 </header>
-<section class="hb-hero" aria-labelledby="heroTitle">
-  <div class="hb-wrap">
-    <div class="hb-copy">
-      <h1 id="heroTitle">Instale no seu petshop.</h1>
-      <p class="hb-lead">Um conjunto só: câmeras instaladas, sistema da loja e o tutor acompanhando o pet ao vivo pelo celular.</p>
-      <div class="hb-ctas"><a class="en-btn hb-accent" id="ctaWhats" href="#contato">Quero no meu petshop</a><a class="en-btn light" href="/o-que-e">O que é o Ficou Pronto?</a></div>
-      <p class="en-small">Instalação e manutenção pela nossa equipe · Fortaleza, CE</p>
-      <dl id="facts" class="hb-facts" hidden>
-        <div><dt>vezes que um cliente abriu o acompanhamento</dt><dd id="fOpens">—</dd></div>
-        <div><dt>até abrir, depois de receber o link</dt><dd id="fOpen">—</dd></div>
-        <div><dt>pedidos acompanhados</dt><dd id="fLinks">—</dd></div>
-      </dl>
-      <p class="en-note" id="factsNote" hidden></p>
-    </div>
-    <div class="hb-stage">
-      <img class="hb-kit" src="/img/site/kit.webp" width="1024" height="572" alt="Kit de instalação: câmeras, cabos, fontes e acessórios (imagem ilustrativa)">
-      <div class="en-phone hb-phone">
-        <div class="en-island" aria-hidden="true"></div>
-        <div class="en-screen">
-          <iframe id="demoFrame" title="Demonstração: a página de acompanhamento que o cliente recebe" loading="lazy" src="/p/62fce6047564204fa4db22e8"></iframe>
+<section class="hb-hero" aria-roledescription="carrossel" aria-label="Segmentos atendidos">
+  <div class="hb-tabs" role="tablist" aria-label="Escolha o segmento">
+    <button role="tab" id="tab-pet" aria-controls="sl-pet" aria-selected="true" data-i="0"><span>Pet shop · banho e tosa</span><i aria-hidden="true"></i></button>
+    <button role="tab" id="tab-tec" aria-controls="sl-tec" aria-selected="false" tabindex="-1" data-i="1"><span>Assistência técnica</span><i aria-hidden="true"></i></button>
+    <button role="tab" id="tab-joia" aria-controls="sl-joia" aria-selected="false" tabindex="-1" data-i="2"><span>Joalherias e quiosques</span><i aria-hidden="true"></i></button>
+  </div>
+  <div class="hb-slides" id="slides">
+
+    <div class="hb-slide on" id="sl-pet" role="tabpanel" aria-labelledby="tab-pet" data-msg="Olá! Quero o Ficou Pronto no meu petshop.">
+      <div class="hb-wrap">
+        <div class="hb-copy">
+          <h1 id="heroTitle">Instale no seu petshop.</h1>
+          <p class="hb-lead">Um conjunto só: câmeras instaladas, sistema da loja e o tutor acompanhando o pet ao vivo pelo celular.</p>
+          <div class="hb-ctas"><a class="en-btn hb-accent js-whats" href="#contato">Quero no meu petshop</a><a class="en-btn light" href="/o-que-e">O que é o Ficou Pronto?</a></div>
+          <p class="en-small">Instalação e manutenção pela nossa equipe · Fortaleza, CE</p>
+        </div>
+        <div class="hb-stage">
+          <img class="hb-kit" src="/img/site/kit.webp" width="1024" height="572" alt="Kit de instalação: câmeras, cabos, fontes e acessórios (imagem ilustrativa)">
+          <div class="en-phone hb-phone">
+            <div class="en-island" aria-hidden="true"></div>
+            <div class="en-screen">
+              <iframe id="demoFrame" title="Demonstração: a página de acompanhamento que o cliente recebe" loading="lazy" src="/p/62fce6047564204fa4db22e8"></iframe>
+            </div>
+          </div>
         </div>
       </div>
     </div>
+
+    <div class="hb-slide" id="sl-tec" role="tabpanel" aria-labelledby="tab-tec" data-msg="Olá! Quero o Ficou Pronto na minha assistência técnica." hidden>
+      <div class="hb-wrap">
+        <div class="hb-copy">
+          <h2 class="hb-h">O cliente acompanha o conserto.</h2>
+          <p class="hb-lead">Ordem de serviço, peças, garantia e caixa no mesmo sistema. O cliente recebe um link e acompanha o conserto, da entrada ao teste.</p>
+          <div class="hb-ctas"><a class="en-btn hb-accent js-whats" href="#contato">Quero na minha assistência</a><a class="en-btn light" href="/segmentos">Ver segmentos</a></div>
+          <p class="en-small">Implantação e treinamento pela nossa equipe · Fortaleza, CE</p>
+        </div>
+        <div class="hb-stage" aria-hidden="true">
+          <div class="mk-panel mk-os">
+            <div class="mk-bar"><b>Ordens de serviço</b><span>Hoje · 4 abertas</span></div>
+            <div class="mk-row"><span class="mk-n">#1042</span><div><b>iPhone 11</b><small>Troca de tela · Marcos</small></div><em class="st-rep">Em reparo</em></div>
+            <div class="mk-row"><span class="mk-n">#1041</span><div><b>Galaxy A54</b><small>Bateria · Juliana</small></div><em class="st-wait">Aguardando peça</em></div>
+            <div class="mk-row"><span class="mk-n">#1040</span><div><b>Moto G84</b><small>Conector de carga · Renato</small></div><em class="st-ok">Pronto</em></div>
+            <div class="mk-row"><span class="mk-n">#1039</span><div><b>Redmi Note 13</b><small>Tela · Patrícia</small></div><em class="st-done">Entregue</em></div>
+            <div class="mk-foot"><span>Garantia de 90 dias registrada na entrega</span></div>
+          </div>
+          <div class="en-phone hb-phone">
+            <div class="en-island"></div>
+            <div class="en-screen">
+              <div class="mk-screen">
+                <div class="mk-store"><span class="mk-logo">AT</span><div><b>Assistência Exemplo</b><small>Assistência técnica · Fortaleza</small></div></div>
+                <div class="mk-card">
+                  <ol class="mk-steps"><li class="ok">Recebido</li><li class="ok">Análise</li><li class="cur">Reparo</li><li>Teste</li><li>Pronto</li></ol>
+                  <p class="mk-sub">iPhone 11 · troca de tela · OS 1042</p>
+                </div>
+                <div class="mk-card mk-now"><small>Etapa atual</small><b>Reparo em andamento</b><p>Previsão: hoje, até as 17h. Avisamos aqui quando ficar pronto.</p></div>
+                <div class="mk-card"><small>Como o aparelho chegou</small>
+                  <div class="mk-photos"><span><svg viewBox="0 0 40 70"><rect x="4" y="2" width="32" height="66" rx="6"/><path d="M10 18l9 12-6 8 14 18"/></svg></span><span><svg viewBox="0 0 40 70"><rect x="4" y="2" width="32" height="66" rx="6"/><circle cx="14" cy="12" r="4"/></svg></span></div>
+                </div>
+                <div class="mk-card"><small>Orçamento aprovado</small><b>R$ 389,00</b><p>Tela nova com 90 dias de garantia.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hb-slide" id="sl-joia" role="tabpanel" aria-labelledby="tab-joia" data-msg="Olá! Quero o Ficou Pronto na minha loja." hidden>
+      <div class="hb-wrap">
+        <div class="hb-copy">
+          <h2 class="hb-h">Todas as unidades num painel só.</h2>
+          <p class="hb-lead">Caixa com leitor de código de barras, estoque por unidade, cashback e nota fiscal. O valor vai direto para a maquininha, sem digitar de novo.</p>
+          <div class="hb-ctas"><a class="en-btn hb-accent js-whats" href="#contato">Quero na minha loja</a><a class="en-btn light" href="/o-que-e">O que é o Ficou Pronto?</a></div>
+          <p class="en-small">Implantação e treinamento pela nossa equipe · Fortaleza, CE</p>
+        </div>
+        <div class="hb-stage" aria-hidden="true">
+          <div class="mk-panel mk-pos">
+            <div class="mk-bar"><b>Caixa · Unidade Centro</b><span class="mk-units">3 unidades</span></div>
+            <div class="mk-scan"><i class="mk-code"></i>7898 4410 0127<span>bipado</span></div>
+            <div class="mk-item"><div><b>Anel prata 925 com zircônia</b><small>Estoque nesta unidade: 4</small></div><span>R$ 189,90</span></div>
+            <div class="mk-item"><div><b>Brinco ponto de luz</b><small>Estoque nesta unidade: 11</small></div><span>R$ 79,90</span></div>
+            <div class="mk-total"><span>Total</span><b>R$ 269,80</b></div>
+            <div class="mk-pay">
+              <div><small>Crédito · 3x</small><b>Enviado para a maquininha</b></div><em class="st-ok">Aprovado</em>
+            </div>
+            <div class="mk-chips"><span>NFC-e emitida</span><span>Cashback: R$ 13,49</span><span>Garantia registrada</span></div>
+          </div>
+          <div class="en-phone hb-phone mk-small">
+            <div class="en-island"></div>
+            <div class="en-screen">
+              <div class="mk-screen">
+                <div class="mk-store"><span class="mk-logo">JE</span><div><b>Joias Exemplo</b><small>Área do cliente</small></div></div>
+                <div class="mk-card mk-now"><small>Seu cashback</small><b class="mk-big">R$ 13,49</b><p>Use na próxima compra, em qualquer unidade.</p></div>
+                <div class="mk-card"><small>Última compra</small><b>Anel prata 925 + brinco</b><p>R$ 269,80 · Unidade Centro</p></div>
+                <div class="mk-card"><small>Garantia</small><b>Válida até 25/11/2027</b><p>Apresente este celular na loja.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hb-under">
+    <dl id="facts" class="hb-facts" hidden>
+      <div><dt>vezes que um cliente abriu o acompanhamento</dt><dd id="fOpens">—</dd></div>
+      <div><dt>até abrir, depois de receber o link</dt><dd id="fOpen">—</dd></div>
+      <div><dt>pedidos acompanhados</dt><dd id="fLinks">—</dd></div>
+    </dl>
+    <p class="en-note" id="factsNote" hidden></p>
+  </div>
   </div>
 </section>
 <section class="hb-kitlist" aria-labelledby="kitTitle">
@@ -54,7 +140,7 @@
 </section>
 <main class="en-more">
   <h2>Para quem</h2>
-  <p class="en-niches">Pet shops e banho e tosa, assistências técnicas, oficinas, funilarias, lava-jatos e cozinhas. Cada loja define as etapas do seu serviço e em quais delas a câmera aparece. A instalação das câmeras é feita pela nossa equipe.</p>
+  <p class="en-niches">Pet shops e banho e tosa, assistências técnicas, joalherias e quiosques, oficinas, funilarias, lava-jatos e cozinhas. Cada loja define as etapas do seu serviço e em quais delas a câmera aparece. A instalação das câmeras é feita pela nossa equipe.</p>
   <div class="en-contact" id="contato">
     <p><strong>Quer o Ficou Pronto na sua loja?</strong> Explicamos o funcionamento, os planos por quantidade de câmeras e agendamos a instalação.</p>
     <a class="en-btn" id="ctaWhats2" href="#contato">Conversar no WhatsApp</a>
@@ -74,9 +160,42 @@
   if (saved) fetch('/api/me', { headers: { Authorization: 'Bearer ' + saved } }).then(r => r.ok ? r.json() : null).then(u => { if (u) { $('enterBtn').href = panelFor(u.role); $('enterBtn').textContent = 'Abrir painel'; } }).catch(() => {});
   fetch('/api/public/contact').then(r => r.ok ? r.json() : {}).then(c => {
     if (!c.sales_whatsapp) return;
-    const href = 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent('Olá! Quero o Ficou Pronto no meu petshop.');
-    for (const id of ['ctaWhats', 'ctaWhats2']) { const a = $(id); a.href = href; a.target = '_blank'; a.rel = 'noopener'; }
+    const wa = msg => 'https://wa.me/' + c.sales_whatsapp + '?text=' + encodeURIComponent(msg);
+    for (const a of document.querySelectorAll('.js-whats')) { a.href = wa(a.closest('.hb-slide').dataset.msg); a.target = '_blank'; a.rel = 'noopener'; }
+    const a2 = $('ctaWhats2'); a2.href = wa('Olá! Quero conhecer o Ficou Pronto.'); a2.target = '_blank'; a2.rel = 'noopener';
   }).catch(() => {});
+  // Carrossel de segmentos: troca sozinho, para ao passar o mouse ou focar, e respeita "reduzir movimento".
+  (() => {
+    const tabs = [...document.querySelectorAll('.hb-tabs [role=tab]')], slides = [...document.querySelectorAll('.hb-slide')];
+    const box = $('slides'), DUR = 8000, still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let cur = 0, timer = null, paused = false;
+    const hash = { '#pet': 0, '#assistencia': 1, '#joias': 2 }[location.hash];
+    function show(i, focus) {
+      cur = (i + slides.length) % slides.length;
+      tabs.forEach((t, k) => { const on = k === cur; t.setAttribute('aria-selected', on); t.tabIndex = on ? 0 : -1; t.classList.remove('run'); });
+      slides.forEach((s, k) => { const on = k === cur; s.classList.toggle('on', on); if (on) s.hidden = false; else setTimeout(() => { if (!s.classList.contains('on')) s.hidden = true; }, 450); });
+      const bar = tabs[cur].parentElement; bar.scrollLeft = Math.max(0, tabs[cur].offsetLeft - 20);
+      if (focus) tabs[cur].focus();
+      arm();
+    }
+    function arm() {
+      clearTimeout(timer); tabs.forEach(t => t.classList.remove('run'));
+      if (still || paused || document.hidden) return;
+      void tabs[cur].offsetWidth; tabs[cur].classList.add('run');
+      timer = setTimeout(() => show(cur + 1), DUR);
+    }
+    const pause = v => { paused = v; if (v) { clearTimeout(timer); tabs.forEach(t => t.classList.add('hold')); } else { tabs.forEach(t => t.classList.remove('hold')); arm(); } };
+    tabs.forEach((t, k) => t.addEventListener('click', () => show(k)));
+    document.querySelector('.hb-tabs').addEventListener('keydown', e => { const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key]; if (d) { e.preventDefault(); show(cur + d, true); } });
+    const hero = document.querySelector('.hb-hero');
+    hero.addEventListener('mouseenter', () => pause(true)); hero.addEventListener('mouseleave', () => pause(false));
+    hero.addEventListener('focusin', () => pause(true)); hero.addEventListener('focusout', e => { if (!hero.contains(e.relatedTarget)) pause(false); });
+    let x0 = null;
+    box.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; pause(true); }, { passive: true });
+    box.addEventListener('touchend', e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 50) show(cur + (dx < 0 ? 1 : -1)); }, { passive: true });
+    document.addEventListener('visibilitychange', () => document.hidden ? clearTimeout(timer) : arm());
+    show(hash ?? 0);
+  })();
   // Números ao vivo (só aparecem se a central ligou os números públicos).
   const num = v => Number(v || 0).toLocaleString('pt-BR');
   const mins = s => s == null ? '—' : s < 60 ? Math.round(s) + ' s' : Math.round(s / 60) + ' min';

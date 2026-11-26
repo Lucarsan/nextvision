@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { pinOk } from './kiosk.js';
+import { manualReads, manualSummary } from './manual.js';
 
 export const BUCKET_S = 5;
 export const DONE_PERCENT = 95;
@@ -133,9 +134,11 @@ export function registerTraining(app, { q, db, auth, roles, route, bad, valid, a
       ORDER BY lower(u.name)`, [units.map(u => u.id), owner, req.user.network_id])).rows;
     const videos = (await videosFor(req.user.network_id, null)).rows;
     const views = (await viewsOf(people.map(p => p.id), videos)).rows;
+    const reads = await manualReads(q, people.map(p => p.id));
     res.set('Cache-Control', 'no-store').json({
       done_percent: DONE_PERCENT, bucket_s: BUCKET_S, units, videos: videos.map(pub),
       people: people.map(p => ({ id: p.id, name: p.name, kind: p.kind, unit_id: p.tenant_id, unit_ids: p.kind === 'supervisor' ? p.network_unit_ids || [] : [],
+        manual: manualSummary(p.kind, reads.filter(r => r.user_id === p.id)),
         views: Object.fromEntries(videos.filter(v => v.audiences.includes(p.kind)).map(v => [v.id, viewOut(views.find(w => w.user_id === p.id && w.video_id === v.id), v)])) }))
     });
   }));

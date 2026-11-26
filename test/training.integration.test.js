@@ -131,3 +131,97 @@ test('treinamento: quiosque com PIN, painel da rede e relatório de quem viu', {
     assert.deepEqual(errors, []);
   } finally { await browser?.close(); await f.cleanup(); }
 });
+
+test('manual: vendedora lê no quiosque com PIN, gestão e supervisor no painel, relatório mostra as páginas', {
+  skip: process.env.TEST_DATABASE_URL && process.env.BROWSER_EXECUTABLE ? false : 'Set TEST_DATABASE_URL and BROWSER_EXECUTABLE', timeout: 180000
+}, async () => {
+  const { MANUAL_PAGES } = await import('../src/manual-content.js');
+  const f = await createStoreFixture(); let browser;
+  const shot = name => process.env.SHOT_DIR ? { path: process.env.SHOT_DIR + '/' + name + '.png', fullPage: false } : {};
+  try {
+    const { api, request, tenant, foreignTenant, masterToken, base, db } = f;
+    const net = await api('/master/networks', { method: 'POST', token: masterToken, body: { name: 'Audace Joias', slug: 'aud-tr', hostname: 'aud-tr.example.test' } }, 201);
+    for (const [id, label] of [[tenant, 'Grand Shopping'], [foreignTenant, 'Sobral']]) await api(`/master/tenants/${id}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: label } });
+    const people = `/master/networks/${net.id}/people`;
+    await api(people, { method: 'POST', token: masterToken, body: { name: 'Gabriel', email: 'g@aud-tr.test', function: 'dono', password: 'senha-do-gabriel-123' } }, 201);
+    await api(people, { method: 'POST', token: masterToken, body: { name: 'Volney', email: 'v@aud-tr.test', function: 'supervisor', unit_ids: [tenant], password: 'senha-do-volney-123' } }, 201);
+    const ana = await api(people, { method: 'POST', token: masterToken, body: { name: 'Ana', function: 'vendedora', unit_id: tenant, pin: '1111' } }, 201);
+    const login = async (email, password) => (await request('/auth/login', { method: 'POST', token: null, body: { email, password } })).data.token;
+    const gabriel = await login('g@aud-tr.test', 'senha-do-gabriel-123'), volney = await login('v@aud-tr.test', 'senha-do-volney-123');
+    await api(`/master/tenants/${tenant}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'senha-grand' } });
+    const kt = (await unitLogin(base, { unit_id: tenant, password: 'senha-grand' })).token;
+    const nSeller = MANUAL_PAGES.filter(p => p.audiences.includes('seller')).length, nSup = MANUAL_PAGES.filter(p => p.audiences.includes('supervisor')).length, nAll = MANUAL_PAGES.length;
+
+    // Sem PIN certo não abre; com PIN, só as páginas da vendedora.
+    assert.equal((await request('/store/kiosk/manual/session', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '0000' } })).status, 401);
+    const ses = await api('/store/kiosk/manual/session', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1111' } });
+    assert.equal(ses.pages.length, nSeller);
+    assert.ok(ses.pages.every(p => p.key.startsWith('v-')));
+    assert.equal((await request('/manual/pages/g-config/open', { method: 'POST', token: kt, body: { session: ses.token } })).status, 404);
+    assert.equal((await request('/manual/pages/v-venda/open', { method: 'POST', token: kt, body: {} })).status, 410);
+    // Chegar ao fim cedo demais não conta.
+    await api('/manual/pages/v-venda/open', { method: 'POST', token: kt, body: { session: ses.token } });
+    const early = await api('/manual/pages/v-venda/done', { method: 'POST', token: kt, body: { session: ses.token } });
+    assert.equal(early.done_at, null); assert.ok(early.wait_s > 0);
+    await db.query("UPDATE manual_reads SET last_open_at = now() - interval '5 minutes' WHERE page_key = 'v-venda'");
+    assert.ok((await api('/manual/pages/v-venda/done', { method: 'POST', token: kt, body: { session: ses.token } })).done_at);
+
+    // Painel: gestão vê tudo; supervisor não vê páginas da gestão.
+    assert.equal((await api('/network/manual', { token: gabriel })).pages.length, nAll);
+    const vm = await api('/network/manual', { token: volney });
+    assert.equal(vm.pages.length, nSup); assert.ok(!vm.pages.some(p => p.key.startsWith('g-')));
+    assert.equal((await request('/manual/pages/g-pessoas/open', { method: 'POST', token: volney, body: {} })).status, 404);
+
+    // Relatório: Ana com 1 de N páginas.
+    const rep = await api('/network/training/report', { token: gabriel });
+    const a = rep.people.find(p => p.name === 'Ana');
+    assert.equal(a.manual.done, 1); assert.equal(a.manual.total, nSeller);
+    assert.equal(rep.people.find(p => p.name === 'Volney').manual.total, nSup);
+
+    // Navegador: quiosque abre o manual com PIN; a página conta como lida ao chegar ao fim (tempo mínimo encurtado no banco).
+    const require = createRequire(import.meta.url);
+    let pw; try { pw = require('playwright'); } catch { pw = require('playwright-core'); }
+    browser = await pw.chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE, headless: true, args: ['--no-sandbox'] });
+    const ctx = await browser.newContext({ viewport: { width: 1366, height: 800 } });
+    await ctx.addInitScript(v => localStorage.setItem('fp_kiosk_token', v), kt);
+    const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => d.accept());
+    await page.goto(base + '/caixa');
+    await page.click('[data-view="training"]');
+    await page.waitForSelector(`#trBox [data-m="${ana.id}"]`);
+    assert.match(await page.textContent(`#trBox [data-m="${ana.id}"]`), new RegExp('Ana · 1/' + nSeller));
+    await page.click(`#trBox [data-m="${ana.id}"]`);
+    await page.fill('dialog.trd input', '1111'); await page.click('dialog.trd .pin button');
+    await page.waitForSelector('dialog.trm .pg h1');
+    assert.equal(await page.$$eval('dialog.trm nav [data-k]', b => b.length), nSeller);
+    assert.equal(await page.textContent('dialog.trm .pg h1'), MANUAL_PAGES.find(p => p.audiences.includes('seller') && p.key !== 'v-venda').title);
+    await page.screenshot(shot('manual-quiosque'));
+    await page.click('dialog.trm nav [data-k="v-cashback"]');
+    await page.waitForFunction(() => /Cashback/.test(document.querySelector('dialog.trm .pg h1')?.textContent || ''));
+    await db.query("UPDATE manual_reads SET last_open_at = now() - interval '5 minutes' WHERE page_key = 'v-cashback'");
+    await page.$eval('dialog.trm .pg', el => { el.scrollTop = el.scrollHeight; });
+    await page.waitForFunction(() => /Página lida/.test(document.querySelector('dialog.trm .em')?.textContent || ''));
+    assert.match(await page.textContent('dialog.trm nav [data-k="v-cashback"]'), /✓/);
+    await page.click('dialog.trm [data-x]');
+    await page.waitForFunction(n => new RegExp('Ana · 2/' + n).test(document.getElementById('trBox').textContent), nSeller);
+
+    // Painel da rede (Gabriel): Meu manual e coluna Manual no relatório.
+    const g = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await g.addInitScript(v => sessionStorage.setItem('nv_token', v), gabriel);
+    const gp = await g.newPage(); gp.on('pageerror', e => errors.push(e.message));
+    await gp.goto(base + '/rede.html#treinamento');
+    await gp.waitForSelector('#trBox [data-mk]');
+    assert.equal(await gp.$$eval('#trBox [data-mk]', b => b.length), nAll);
+    assert.match(await gp.textContent('#trBox table'), new RegExp('2 de ' + nSeller + ' páginas'));
+    await gp.click(`#trBox tr.person[data-p="${ana.id}"]`);
+    assert.match(await gp.textContent(`#trBox tr[data-d="${ana.id}"]`), /✓ Fazer uma venda/);
+    await gp.selectOption('#trBox [data-f="state"]', 'mnone');
+    assert.doesNotMatch(await gp.textContent('#trBox tbody'), /Ana/);
+    await gp.screenshot(shot('manual-rede'));
+    await gp.click('#trBox [data-mk="g-config"]');
+    await gp.waitForSelector('dialog.trm .pg h1');
+    assert.equal(await gp.textContent('dialog.trm .pg h1'), 'Configurações da rede');
+    assert.ok(await gp.$('dialog.trm figure img'));
+    await gp.screenshot(shot('manual-leitor'));
+    assert.deepEqual(errors, []);
+  } finally { await browser?.close(); await f.cleanup(); }
+});

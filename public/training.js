@@ -16,7 +16,19 @@
   dialog.trd{width:min(980px,96vw);border:0;border-radius:14px;padding:0;background:#111;color:#eee}dialog.trd::backdrop{background:rgba(0,0,0,.65)}
   .trd .top{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px}.trd video{width:100%;max-height:68vh;background:#000;display:block}
   .trd .info{padding:10px 16px 14px;display:grid;gap:8px}.trd .chl{display:flex;flex-wrap:wrap;gap:6px}.trd .chl button{font-size:12px;padding:4px 9px;color:#eee;border-color:#555}
-  .trd button{color:#eee;border-color:#555}.trd .pin{padding:22px;display:grid;gap:12px;justify-items:center}.trd .pin input{font-size:28px;letter-spacing:12px;width:170px;text-align:center;padding:8px;border-radius:10px;border:1px solid #555;background:#000;color:#fff}`;
+  .trd button{color:#eee;border-color:#555}
+  dialog.trm{width:min(1180px,98vw);height:94vh;border:0;border-radius:14px;padding:0;background:#fbfaf7;color:#1f2328}dialog.trm::backdrop{background:rgba(0,0,0,.55)}
+  .trm .wrapm{display:grid;grid-template-columns:290px 1fr;height:100%}.trm nav{border-right:1px solid #e6e2da;overflow:auto;padding:14px 10px;background:#f4f2ec}
+  .trm nav h4{margin:14px 8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#6b6b70}.trm nav button{display:flex;gap:8px;width:100%;text-align:left;border:0;background:transparent;padding:8px 10px;border-radius:8px;font:inherit;font-size:14px;color:inherit;cursor:pointer}
+  .trm nav button.on{background:#fff;box-shadow:0 0 0 1px #e0dcd2;font-weight:600}.trm nav .st{width:16px;flex:none;color:#2e9d5b}.trm .pg{overflow:auto;padding:28px 40px 60px;scroll-behavior:smooth}
+  .trm .pgh{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;position:sticky;top:-28px;background:#fbfaf7;padding:6px 0 10px;margin-top:-6px;z-index:1}
+  .trm h1{font-size:26px;margin:0 0 6px}.trm h2{font-size:18px;margin:26px 0 8px}.trm .lead{color:#55565b;margin:0 0 6px;font-size:15px}.trm p,.trm li{font-size:15.5px;line-height:1.6}
+  .trm ol,.trm ul{padding-left:22px;margin:6px 0}.trm li{margin:4px 0}.trm .tip,.trm .warn{border-radius:10px;padding:10px 14px;margin:12px 0;font-size:15px;line-height:1.55}
+  .trm .tip{background:#eaf4ee;border-left:4px solid #2e9d5b}.trm .warn{background:#fdf1e3;border-left:4px solid #c27a12}.trm figure{margin:14px 0}.trm figure img{max-width:100%;border:1px solid #e0dcd2;border-radius:10px;display:block}
+  .trm figcaption{font-size:13px;color:#6b6b70;margin-top:4px}.trm .end{margin-top:30px;padding:14px 16px;border-radius:10px;background:#f1efe9;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:14.5px}
+  .trm button.b{font:inherit;font-size:14px;padding:8px 14px;border-radius:9px;border:1px solid #cfcac0;background:#fff;color:inherit;cursor:pointer}.trm button.main{background:#1f2937;color:#fff;border-color:#1f2937}
+  .trm .who{font-size:13px;color:#6b6b70;padding:2px 10px 8px}@media (max-width:820px){.trm .wrapm{grid-template-columns:1fr}.trm nav{display:none}.trm .pg{padding:20px}}
+  .tr .mbar{height:8px;border-radius:9px;background:rgba(127,127,127,.18);overflow:hidden;min-width:120px}.tr .mbar i{display:block;height:100%;background:#2e9d5b}.trd .pin{padding:22px;display:grid;gap:12px;justify-items:center}.trd .pin input{font-size:28px;letter-spacing:12px;width:170px;text-align:center;padding:8px;border-radius:10px;border:1px solid #555;background:#000;color:#fff}`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const mmss = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   const day = d => d ? new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Fortaleza', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -90,17 +102,78 @@
     })();
   }
 
+
+  // ---------- Manual (páginas) ----------
+  // list: { groups, pages } da pessoa; session: passe do quiosque (vendedora) ou nada (painel da rede).
+  function readManual({ api, list, session, who, startKey, onClose }) {
+    addCss();
+    const d = document.createElement('dialog'); d.className = 'trm';
+    const pages = list.pages, groups = list.groups;
+    let cur = null, timer = null, obs = null;
+    const body = extra => ({ ...(session ? { session } : {}), ...(extra || {}) });
+    d.innerHTML = '<div class="wrapm"><nav><div class="who">' + (who ? 'Manual de <b>' + esc(who) + '</b>' : 'Meu manual') + '</div>' + groups.map(g => '<h4>' + esc(g.title) + '</h4>' + pages.filter(p => p.group === g.key).map(p => '<button type="button" data-k="' + esc(p.key) + '"><span class="st">' + (p.done_at ? '✓' : '') + '</span><span>' + esc(p.title) + '</span></button>').join('')).join('') + '</nav><div class="pg"></div></div>';
+    document.body.appendChild(d); d.showModal();
+    const pg = d.querySelector('.pg');
+    const close = () => { clearTimeout(timer); obs?.disconnect(); d.close(); d.remove(); onClose?.(); };
+    d.addEventListener('cancel', e => { e.preventDefault(); close(); });
+    const mark = (key, done) => { const p = pages.find(x => x.key === key); if (p && done) p.done_at = done; const b = d.querySelector('nav [data-k="' + key + '"] .st'); if (b) b.textContent = p?.done_at ? '✓' : ''; };
+    const blockHtml = b => (b.h ? '<h2>' + esc(b.h) + '</h2>' : '') + (b.p ? '<p>' + esc(b.p) + '</p>' : '')
+      + (b.steps ? '<ol>' + b.steps.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol>' : '') + (b.list ? '<ul>' + b.list.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '')
+      + (b.img ? '<figure><img src="/manual/img/' + esc(b.img) + '" alt="' + esc(b.cap || '') + '" loading="lazy" onerror="this.closest(\'figure\').remove()"><figcaption>' + esc(b.cap || '') + '</figcaption></figure>' : '')
+      + (b.tip ? '<div class="tip"><b>Dica:</b> ' + esc(b.tip) + '</div>' : '') + (b.warn ? '<div class="warn"><b>Cuidado:</b> ' + esc(b.warn) + '</div>' : '');
+    async function open(key) {
+      clearTimeout(timer); obs?.disconnect();
+      d.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.k === key));
+      pg.innerHTML = '<p class="lead">Abrindo…</p>';
+      let r; try { r = await api('/manual/pages/' + key + '/open', 'POST', body()); } catch (e) { pg.innerHTML = '<p class="lead">' + esc(e.message) + '</p>'; return; }
+      cur = r.page; const i = pages.findIndex(p => p.key === key), next = pages[i + 1];
+      pg.innerHTML = '<div class="pgh"><div><h1>' + esc(cur.title) + '</h1><p class="lead">' + esc(cur.summary) + '</p></div><button type="button" class="b" data-x>Fechar</button></div>'
+        + cur.blocks.map(blockHtml).join('')
+        + '<div class="end" data-end><span class="em">' + (r.done_at ? '✓ Página lida.' : 'Lendo…') + '</span>' + (next ? '<button type="button" class="b main" data-next>Próxima: ' + esc(next.title) + '</button>' : '<button type="button" class="b main" data-x>Concluir</button>') + '</div>';
+      pg.scrollTop = 0;
+      pg.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
+      pg.querySelector('[data-next]')?.addEventListener('click', () => open(next.key));
+      if (r.done_at) return;
+      const em = pg.querySelector('.em'), end = pg.querySelector('[data-end]');
+      // Chegou ao fim da página: pede para contar como lida (o servidor confere o tempo mínimo de leitura).
+      const tryDone = async () => {
+        if (cur?.key !== key) return;
+        try {
+          const x = await api('/manual/pages/' + key + '/done', 'POST', body());
+          if (x.done_at) { em.textContent = '✓ Página lida.'; mark(key, x.done_at); obs?.disconnect(); }
+          else { em.textContent = 'Leia com calma: a página conta como lida em ' + x.wait_s + ' s.'; clearTimeout(timer); timer = setTimeout(() => { if (visible) tryDone(); }, x.wait_s * 1000 + 300); }
+        } catch (e) { em.textContent = e.message; }
+      };
+      let visible = false;
+      obs = new IntersectionObserver(es => { visible = es.some(e => e.isIntersecting); if (visible) tryDone(); }, { root: pg, threshold: 0.6 });
+      obs.observe(end);
+    }
+    d.querySelectorAll('nav [data-k]').forEach(b => b.onclick = () => open(b.dataset.k));
+    open(startKey || (pages.find(p => !p.done_at) || pages[0]).key);
+  }
+
   window.fpTraining = function fpTraining({ box, mode, api, networkId }) {
     if (!box) return;
     addCss();
     box.classList.add('tr');
-    let data = null, rep = null, unitF = '', stateF = '';
+    let data = null, rep = null, man = null, mstat = null, unitF = '', stateF = '';
     const ctl = { reload: () => load() };
 
     // ---------- Quiosque ----------
+    function askPinBox(body, name, label, go) {
+      body.innerHTML = '<div class="pin"><div>Digite o PIN de <b>' + esc(name) + '</b></div><input type="password" inputmode="numeric" maxlength="4" autocomplete="off"><div class="soft pm"></div><button type="button" class="main">' + label + '</button></div>';
+      const inp = body.querySelector('input'), run = async () => {
+        if (!/^\d{4}$/.test(inp.value)) { body.querySelector('.pm').textContent = 'O PIN tem 4 números.'; return; }
+        try { await go(inp.value); } catch (e) { body.querySelector('.pm').textContent = e.message; inp.value = ''; inp.focus(); }
+      };
+      body.querySelector('button').onclick = run; inp.onkeydown = e => { if (e.key === 'Enter') run(); }; setTimeout(() => inp.focus(), 30);
+    }
     function drawKiosk() {
-      if (!data.videos.length) { box.innerHTML = '<p class="soft">Nenhum vídeo de treinamento por enquanto.</p>'; return; }
-      box.innerHTML = data.videos.map(v => {
+      const man = mstat && mstat.total ? '<div class="vid"><div class="vh"><div><h3>Manual da vendedora</h3><div class="soft">' + mstat.total + ' páginas com o passo a passo do quiosque: venda, cliente, cashback, pinpad, garantia, estoque e fechamento.</div></div></div>'
+        + '<div class="soft">Toque no seu nome para ler. O número mostra quantas páginas você já leu até o fim.</div><div class="people">'
+        + (mstat.sellers.map(p => '<button type="button" class="chip" data-m="' + esc(p.id) + '">' + (p.done >= mstat.total ? '✓ ' : p.opened ? '◐ ' : '○ ') + esc(p.name) + ' · ' + p.done + '/' + mstat.total + '</button>').join('') || '<span class="soft">Nenhuma vendedora cadastrada nesta unidade.</span>') + '</div></div>' : '';
+      if (!data.videos.length) { box.innerHTML = man || '<p class="soft">Nenhum treinamento por enquanto.</p>'; bindKioskManual(); return; }
+      box.innerHTML = man + data.videos.map(v => {
         const people = data.sellers.map(p => { const w = p.views[v.id]; return '<button type="button" class="chip" data-v="' + esc(v.id) + '" data-s="' + esc(p.id) + '">' + (w?.completed_at ? '✓ ' : w ? '◐ ' : '○ ') + esc(p.name) + (w && !w.completed_at ? ' · ' + w.percent + '%' : '') + '</button>'; }).join('');
         return '<div class="vid"><div class="vh"><div><h3>' + esc(v.title) + '</h3><div class="soft">' + mmss(v.duration_s) + (v.chapters?.length ? ' · ' + v.chapters.length + ' partes' : '') + (v.description ? ' · ' + esc(v.description) : '') + '</div></div></div>'
           + '<div class="soft">Toque no seu nome para assistir. ✓ viu até o final · ◐ começou · ○ não assistiu</div><div class="people">' + (people || '<span class="soft">Nenhuma vendedora cadastrada nesta unidade.</span>') + '</div></div>';
@@ -117,6 +190,21 @@
           body.querySelector('button').onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); }; setTimeout(() => inp.focus(), 30);
         }) });
       });
+      bindKioskManual();
+    }
+    function bindKioskManual() {
+      box.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+        const p = mstat.sellers.find(x => x.id === b.dataset.m);
+        addCss(); const d = document.createElement('dialog'); d.className = 'trd';
+        d.innerHTML = '<div class="top"><strong>Manual · ' + esc(p.name) + '</strong><button type="button" data-x>Fechar</button></div><div class="body"></div>';
+        document.body.appendChild(d); d.showModal();
+        const shut = () => { d.close(); d.remove(); };
+        d.querySelector('[data-x]').onclick = shut; d.addEventListener('cancel', e => { e.preventDefault(); shut(); });
+        askPinBox(d.querySelector('.body'), p.name, 'Abrir o manual', async pin => {
+          const r = await api('/store/kiosk/manual/session', 'POST', { seller_id: p.id, pin });
+          shut(); readManual({ api, list: r, session: r.token, who: r.who.name, onClose: load });
+        });
+      });
     }
 
     // ---------- Painel da rede ----------
@@ -124,25 +212,31 @@
       const mine = data.videos.length ? data.videos.map(v => '<div class="vid"><div class="vh"><div><h3>' + esc(v.title) + '</h3><div class="soft">' + mmss(v.duration_s) + (v.description ? ' · ' + esc(v.description) : '') + '</div></div>'
         + '<div style="display:flex;gap:10px;align-items:center">' + status(v.view) + '<button type="button" class="main" data-play="' + esc(v.id) + '">' + (v.view && !v.view.completed_at ? 'Continuar' : 'Assistir') + '</button></div></div>' + (v.view ? segBar(v.view.seen) : '') + '</div>').join('')
         : '<p class="soft">Nenhum vídeo para você por enquanto.</p>';
+      const mp = man ? man.pages : [], mdone = mp.filter(p => p.done_at).length;
+      const manualHtml = mp.length ? '<section><h3>Meu manual</h3><p class="soft">' + mdone + ' de ' + mp.length + ' páginas lidas até o fim. O manual da vendedora também aparece aqui, para você saber o que ela faz no quiosque.</p><div class="mbar"><i style="width:' + Math.round(mdone * 100 / mp.length) + '%"></i></div>'
+        + '<div style="display:grid;gap:14px;margin-top:12px">' + man.groups.map(g => '<div><b>' + esc(g.title) + '</b><div class="people" style="margin-top:6px">' + mp.filter(p => p.group === g.key).map(p => '<button type="button" class="chip" data-mk="' + esc(p.key) + '">' + (p.done_at ? '✓ ' : p.opened_at ? '◐ ' : '○ ') + esc(p.title) + '</button>').join('') + '</div></div>').join('') + '</div></section>' : '';
       let report = '';
-      if (rep && rep.videos.length) {
+      if (rep && rep.people.length) {
         const units = new Map(rep.units.map(u => [u.id, u.label]));
         const unitOf = p => p.kind === 'seller' ? units.get(p.unit_id) || '' : p.kind === 'supervisor' ? (p.unit_ids || []).map(i => units.get(i)).filter(Boolean).join(', ') : 'Rede';
-        const people = rep.people.filter(p => (!unitF || p.unit_id === unitF || (p.unit_ids || []).includes(unitF)) && (!stateF || Object.values(p.views).some(w => stateF === 'done' ? w?.completed_at : stateF === 'wip' ? w && !w.completed_at : !w)));
+        const people = rep.people.filter(p => (!unitF || p.unit_id === unitF || (p.unit_ids || []).includes(unitF)) && (!stateF || (stateF[0] === 'm' ? (stateF === 'mnone' ? !p.manual.done : stateF === 'mdone' ? p.manual.done === p.manual.total : p.manual.done < p.manual.total) : Object.values(p.views).some(w => stateF === 'done' ? w?.completed_at : stateF === 'wip' ? w && !w.completed_at : !w))));
         const total = rep.people.reduce((a, p) => a + Object.keys(p.views).length, 0), done = rep.people.reduce((a, p) => a + Object.values(p.views).filter(w => w?.completed_at).length, 0);
-        report = '<section><h3>Quem já assistiu</h3><p class="soft">' + done + ' de ' + total + ' treinamentos concluídos. Clique na pessoa para ver quais partes ela viu. A barra verde mostra os trechos assistidos de verdade.</p>'
+        report = '<section><h3>Quem já assistiu e leu</h3><p class="soft">' + (rep.videos.length ? done + ' de ' + total + ' vídeos concluídos. Clique na pessoa para ver as partes do vídeo e as páginas do manual que ela viu. A barra verde do vídeo mostra os trechos assistidos de verdade.' : 'Clique na pessoa para ver as páginas do manual que ela leu.') + '</p>'
           + '<div class="filters"><select data-f="unit"><option value="">Todas as unidades</option>' + rep.units.map(u => '<option value="' + esc(u.id) + '"' + (u.id === unitF ? ' selected' : '') + '>' + esc(u.label) + '</option>').join('') + '</select>'
-          + '<select data-f="state"><option value="">Todas as situações</option><option value="none"' + (stateF === 'none' ? ' selected' : '') + '>Não assistiu</option><option value="wip"' + (stateF === 'wip' ? ' selected' : '') + '>Começou e parou</option><option value="done"' + (stateF === 'done' ? ' selected' : '') + '>Viu até o final</option></select></div>'
-          + '<div style="overflow:auto"><table><thead><tr><th>Pessoa</th><th>Unidade</th>' + rep.videos.map(v => '<th>' + esc(v.title) + '</th>').join('') + '</tr></thead><tbody>'
+          + '<select data-f="state"><option value="">Todas as situações</option><option value="none"' + (stateF === 'none' ? ' selected' : '') + '>Não assistiu</option><option value="wip"' + (stateF === 'wip' ? ' selected' : '') + '>Começou e parou</option><option value="done"' + (stateF === 'done' ? ' selected' : '') + '>Viu até o final</option><option value="mnone"' + (stateF === 'mnone' ? ' selected' : '') + '>Manual: não leu nada</option><option value="mwip"' + (stateF === 'mwip' ? ' selected' : '') + '>Manual: leitura incompleta</option><option value="mdone"' + (stateF === 'mdone' ? ' selected' : '') + '>Manual: leu tudo</option></select></div>'
+          + '<div style="overflow:auto"><table><thead><tr><th>Pessoa</th><th>Unidade</th>' + rep.videos.map(v => '<th>' + esc(v.title) + '</th>').join('') + '<th>Manual</th></tr></thead><tbody>'
           + (people.map(p => '<tr class="person" data-p="' + esc(p.id) + '"><td><b>' + esc(p.name) + '</b><div class="soft">' + KIND[p.kind] + '</div></td><td>' + esc(unitOf(p)) + '</td>'
-            + rep.videos.map(v => { if (!(v.id in p.views)) return '<td class="soft">—</td>'; const w = p.views[v.id]; return '<td>' + status(w) + (w ? segBar(w.seen) + '<div class="soft">' + (w.completed_at ? 'Concluiu ' + day(w.completed_at) : 'Última vez ' + day(w.last_at)) + '</div>' : '') + '</td>'; }).join('') + '</tr>'
-            + '<tr class="det" data-d="' + esc(p.id) + '" hidden><td colspan="' + (2 + rep.videos.length) + '">' + rep.videos.filter(v => p.views[v.id]?.chapters?.length).map(v => '<div style="margin:6px 0"><b>' + esc(v.title) + '</b><div class="chs">'
+            + rep.videos.map(v => { if (!(v.id in p.views)) return '<td class="soft">—</td>'; const w = p.views[v.id]; return '<td>' + status(w) + (w ? segBar(w.seen) + '<div class="soft">' + (w.completed_at ? 'Concluiu ' + day(w.completed_at) : 'Última vez ' + day(w.last_at)) + '</div>' : '') + '</td>'; }).join('')
+            + '<td><span class="pill ' + (p.manual.done === p.manual.total ? 'ok' : p.manual.opened ? 'wip' : 'no') + '">' + p.manual.done + ' de ' + p.manual.total + ' páginas</span><div class="mbar" style="margin-top:6px"><i style="width:' + Math.round(p.manual.done * 100 / (p.manual.total || 1)) + '%"></i></div></td></tr>'
+            + '<tr class="det" data-d="' + esc(p.id) + '" hidden><td colspan="' + (3 + rep.videos.length) + '">' + rep.videos.filter(v => p.views[v.id]?.chapters?.length).map(v => '<div style="margin:6px 0"><b>' + esc(v.title) + '</b><div class="chs">'
               + p.views[v.id].chapters.map(c => '<div>' + (c.percent >= 90 ? '✓' : c.percent ? '◐' : '○') + ' ' + mmss(c.t) + ' · ' + esc(c.title) + ' <span class="soft">' + c.percent + '%</span></div>').join('') + '</div></div>').join('')
-              + (rep.videos.some(v => p.views[v.id]?.chapters?.length) ? '' : '<span class="soft">' + (Object.values(p.views).some(Boolean) ? 'Este vídeo não tem partes cadastradas; a barra acima mostra os trechos vistos.' : 'Ainda não abriu nenhum vídeo.') + '</span>') + '</td></tr>').join('')
-            || '<tr><td colspan="' + (2 + rep.videos.length) + '" class="soft">Ninguém nesta seleção.</td></tr>')
+              + (rep.videos.some(v => p.views[v.id]?.chapters?.length) ? '' : '<span class="soft">' + (Object.values(p.views).some(Boolean) ? 'Este vídeo não tem partes cadastradas; a barra acima mostra os trechos vistos.' : 'Ainda não abriu nenhum vídeo.') + '</span>')
+              + '<div style="margin:10px 0 4px"><b>Manual</b> <span class="soft">' + p.manual.done + ' de ' + p.manual.total + ' páginas lidas até o fim</span><div class="chs">' + p.manual.pages.map(m => '<div>' + (m.done_at ? '✓' : m.opened ? '◐' : '○') + ' ' + esc(m.title) + (m.done_at ? ' <span class="soft">' + day(m.done_at) + '</span>' : '') + '</div>').join('') + '</div></div></td></tr>').join('')
+            || '<tr><td colspan="' + (3 + rep.videos.length) + '" class="soft">Ninguém nesta seleção.</td></tr>')
           + '</tbody></table></div></section>';
       }
-      box.innerHTML = '<section><h3>Meus treinamentos</h3><div style="display:grid;gap:10px">' + mine + '</div></section>' + report;
+      box.innerHTML = '<section><h3>Meus vídeos</h3><div style="display:grid;gap:10px">' + mine + '</div></section>' + manualHtml + report;
+      box.querySelectorAll('[data-mk]').forEach(b => b.onclick = () => readManual({ api, list: man, startKey: b.dataset.mk, onClose: load }));
       box.querySelectorAll('[data-play]').forEach(b => b.onclick = () => { const v = data.videos.find(x => x.id === b.dataset.play); play({ api, title: v.title, onClose: load, start: () => api('/network/training/' + v.id + '/start', 'POST', {}) }); });
       box.querySelectorAll('tr.person').forEach(r => r.onclick = () => { const det = box.querySelector('tr[data-d="' + r.dataset.p + '"]'); det.hidden = !det.hidden; });
       box.querySelector('[data-f="unit"]')?.addEventListener('change', e => { unitF = e.target.value; drawNetwork(); });
@@ -194,8 +288,8 @@
 
     async function load() {
       try {
-        if (mode === 'kiosk') { data = await api('/store/kiosk/training'); drawKiosk(); }
-        else if (mode === 'network') { [data, rep] = await Promise.all([api('/network/training'), api('/network/training/report')]); drawNetwork(); }
+        if (mode === 'kiosk') { [data, mstat] = await Promise.all([api('/store/kiosk/training'), api('/store/kiosk/manual/status')]); drawKiosk(); }
+        else if (mode === 'network') { [data, rep, man] = await Promise.all([api('/network/training'), api('/network/training/report'), api('/network/manual')]); drawNetwork(); }
         else { data = await api('/master/networks/' + networkId + '/training'); drawMaster(); }
       } catch (e) { box.innerHTML = '<p class="soft">' + esc(e.message) + '</p>'; }
     }
@@ -203,4 +297,5 @@
     return ctl;
   };
   window.fpTraining.play = play;
+  window.fpTraining.readManual = readManual;
 })();

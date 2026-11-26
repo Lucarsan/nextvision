@@ -95,6 +95,7 @@
       + '<section><h2>Créditos do emissor de NFC-e</h2><p class="ct-muted">Pacote de operações comprado do emissor (ex.: ACBr API). O dono da rede vê no painel; aviso por e-mail em 85% e 100%.</p><p id="fcNow" class="ct-muted">Carregando…</p>'
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>Emissor<input id="fcProv" value="ACBr API" style="width:140px"></label><label>Operações<input id="fcOps" type="number" min="1" style="width:110px"></label><label>Valor (R$)<input id="fcPrice" inputmode="decimal" style="width:110px"></label><label>Data da compra<input id="fcDate" type="date"></label><button type="button" class="ct-btn" id="fcAdd">Registrar pacote</button></div>'
       + '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:10px"><label>Usado segundo o painel do emissor<input id="fcUsed" type="number" min="0" style="width:140px"></label><button type="button" class="ct-btn ghost" id="fcAdj">Acertar usado</button></div></section>'
+      + '<section><h2>Vídeos de treinamento</h2><p class="ct-muted">Vídeo no Cloudflare R2. Vendedora assiste no quiosque com o PIN; supervisor e gestão no painel da rede, onde acompanham quem já viu.</p><div id="trCard"></div></section>'
       + '<section><h2>Implantação das unidades</h2><p class="ct-muted">Checklist "unidade pronta". A rede vê o mesmo quadro no painel dela (menu Implantação) e dá o aceite por lá.</p><div id="onbCard"></div></section>'
       + '<section id="acbrCard"></section>'
       + '<section id="tefCard"></section>'
@@ -174,6 +175,7 @@
       const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = net.slug + '-' + b.dataset.k + '.csv'; a.click(); return 'Planilha baixada.';
     }));
     const fcShow = c => { el('fcNow').innerHTML = c.purchased ? '<b>' + c.used.toLocaleString('pt-BR') + ' de ' + c.purchased.toLocaleString('pt-BR') + '</b> usadas (' + c.percent.toLocaleString('pt-BR') + '%) · ' + c.packages.length + ' pacote(s)' : 'Nenhum pacote registrado.'; };
+    window.fpTraining?.({ box: el('trCard'), mode: 'master', api, networkId: net.id });
     window.fpOnboarding?.({ box: el('onbCard'), mode: 'master', api, networkId: net.id, networkName: net.name.split(/\s+/)[0] });
     window.acbrCard?.(el('acbrCard'), units);
     window.tefCard?.(el('tefCard'), units);

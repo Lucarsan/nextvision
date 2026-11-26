@@ -118,6 +118,7 @@
       <button type="button" data-view="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>Mensagens <span id="msgN" style="display:none;background:var(--gold);color:#fff;border-radius:99px;padding:0 7px;font-size:11px;margin-left:4px"></span></button>
       <button type="button" data-view="warranty"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Garantia</button>
       <button type="button" data-view="stock"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Estoque</button>
+      <button type="button" data-view="training"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Treinamento</button>
       <button type="button" data-view="sales"><svg viewBox="0 0 24 24"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h6"/></svg>Vendas e caixa</button>
     </nav>
     <div class="foot"><strong id="footName">Caixa do quiosque</strong>Sistema FicouPronto<br><button type="button" id="myPin" style="margin-bottom:6px">Trocar meu PIN</button><br><button type="button" id="leave">Sair do quiosque</button></div>
@@ -203,6 +204,11 @@
         <div class="protect">A vendedora não vê custo, lucro nem a comissão das colegas.</div>
         <button type="button" class="linkbtn" id="dayLock" style="margin-top:12px">Sair do Meu dia</button>
       </div>
+    </section>
+    <!-- ===== Treinamento (vídeos; a vendedora assiste com o PIN) ===== -->
+    <section id="viewTraining" hidden>
+      <div class="top"><div><h1>Treinamento</h1><p class="sub">Vídeos do sistema. Toque no seu nome e digite o seu PIN para assistir.</p></div></div>
+      <div class="card" id="trBox"><p class="sub">Carregando…</p></div>
     </section>
     <!-- ===== Clientes (cadastro único da rede) ===== -->
     <section id="viewClients" hidden>
@@ -910,7 +916,8 @@
   // ---------- Navegação ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
     document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock'; $('viewMsgs').hidden = b.dataset.view !== 'msgs'; $('viewClients').hidden = b.dataset.view !== 'clients';
+    $('viewCash').hidden = b.dataset.view !== 'cash'; $('viewDay').hidden = b.dataset.view !== 'day'; $('viewSales').hidden = b.dataset.view !== 'sales'; $('viewWarranty').hidden = b.dataset.view !== 'warranty'; $('viewStock').hidden = b.dataset.view !== 'stock'; $('viewMsgs').hidden = b.dataset.view !== 'msgs'; $('viewClients').hidden = b.dataset.view !== 'clients'; $('viewTraining').hidden = b.dataset.view !== 'training';
+    if (b.dataset.view === 'training') { if (!window.fpTr) window.fpTr = window.fpTraining?.({ box: $('trBox'), mode: 'kiosk', api }); else window.fpTr.reload(); }
     if (b.dataset.view === 'clients') { reloadClients(); setTimeout(() => $('clQ').focus(), 30); }
     if (b.dataset.view === 'msgs') loadMsgs().catch(e => { $('mgSub').textContent = e.message; });
     if (b.dataset.view === 'stock') openStock().catch(e => { $('stSub').textContent = e.message; });
@@ -952,5 +959,6 @@
   setInterval(() => { if (!$('viewCash').hidden && !items.length) loadCash().catch(() => {}); }, 120000);
 })();
 </script>
+<script src="/training.js?v=1"></script>
 </body>
 </html>

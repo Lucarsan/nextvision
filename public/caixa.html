@@ -174,7 +174,7 @@
             <div class="disc" id="discRow">Desconto <input class="field" id="discPct" type="number" min="0" max="50" step="1" inputmode="numeric" placeholder="0" style="width:64px;padding:5px 8px"> %
               <span class="discq" id="discQuick"><button type="button" data-p="5">5%</button><button type="button" data-p="10">10%</button><button type="button" data-p="20">20%</button><button type="button" data-p="25">25%</button><button type="button" data-p="30">30%</button><button type="button" data-p="40">40%</button><button type="button" data-p="50">50%</button><button type="button" data-p="0">Sem</button></span>
               <span class="sub" id="discInfo" style="margin:0"></span></div>
-            <label class="disc" id="instRow" hidden>Parcelas no crédito <select class="field" id="inst" style="width:auto;margin-left:6px"></select></label>
+            <label class="disc" id="instRow" hidden><span id="instLabel">Parcelas no crédito</span> <select class="field" id="inst" style="width:auto;margin-left:6px"></select></label>
             <div id="offRow" hidden><label class="disc"><input type="checkbox" id="offline"> Pinpad fora do ar: cobrei na maquininha avulsa</label>
               <input class="field" id="offAuth" maxlength="40" placeholder="Autorização do comprovante (AUT/NSU)" hidden style="margin-top:6px"></div>
             <div class="who"><div style="display:flex;align-items:center"><span style="font-size:13px;font-weight:600;color:var(--ink)">Quem está vendendo?</span><span class="pinok" id="pinOk" hidden>✓ PIN confirmado</span></div><div class="people" id="sellers"></div></div>
@@ -391,7 +391,9 @@
       : method === 'cash' ? 'Dinheiro: não usa o pinpad'
       : tef ? (paidTx ? 'Já cobrado no pinpad: ' + brl(paidTx.amount_cents) + '. Finalize para gravar a venda.' : 'Ao finalizar, o valor vai direto para o pinpad' + (tef.mode === 'simulator' ? ' (SIMULADOR: não cobra de verdade)' : tef.mode === 'sandbox' ? ' (Stone de teste)' : ''))
       : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
-    $('instRow').hidden = !(tef && method === 'credit' && !$('offline').checked);
+    // Parcelas: com o pinpad vão para a cobrança; na maquininha avulsa, ficam registradas na venda (digite as mesmas na maquininha).
+    $('instRow').hidden = method !== 'credit';
+    $('instLabel').textContent = tef && !$('offline').checked ? 'Parcelas no crédito' : 'Parcelas (as mesmas da maquininha)';
     $('sellers').innerHTML = sellers.map(s => '<button type="button" data-s="' + safe(s.id) + '"' + (seller?.id === s.id ? ' class="on"' : '') + '>' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada nesta unidade.</span>';
     $('sellers').querySelectorAll('[data-s]').forEach(b => b.onclick = () => askPin(sellers.find(s => s.id === b.dataset.s), pin => { seller = sellers.find(s => s.id === b.dataset.s); sellerPin = pin; draw(); }));
     $('pinOk').hidden = !seller;
@@ -506,6 +508,7 @@
     const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
+    if (method === 'credit' && Number($('inst').value) > 1) body.installments = Number($('inst').value);
     if ($('offline').checked && method !== 'cash') { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
     else if (!$('newCust').hidden && $('nc_name').value.trim()) {
@@ -552,7 +555,7 @@
         wa = 'https://wa.me/' + (ph.length <= 11 ? '55' + ph : ph) + '?text=' + encodeURIComponent(text);
       }
       $('doneBox').innerHTML = '<strong>Venda nº ' + r.sale.sale_number + ' registrada · ' + brl(r.sale.total_cents) + '</strong><div class="sub" style="margin:2px 0 0">Vendida por ' + safe(seller.name.split(' ')[0]) + (earned ? ' · cashback de ' + brl(earned) : '') + '</div>'
-        + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + (soldTx ? '<button type="button" id="tefRcBtn">Comprovante do cartão</button>' : '') + '<button type="button" id="newSale">Nova venda</button>';
+        + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + '<button type="button" id="printRc">Imprimir comprovante</button>' + (soldTx ? '<button type="button" id="tefRcBtn">Comprovante do cartão</button>' : '') + '<button type="button" id="newSale">Nova venda</button>';
       $('doneBox').hidden = false; $('st1').classList.add('done');
       if (wa && c?.id) {
         api('/store/kiosk/messages').then(d => {
@@ -562,8 +565,8 @@
           a.addEventListener('click', () => { api('/store/kiosk/messages/log', 'POST', { type: 'thanks', customer_id: m.customer_id, sale_id: m.sale_id }).then(msgBadge).catch(() => {}); }, { once: true });
         }).catch(() => {});
       }
-      $('newSale').onclick = resetSale; if (soldTx) $('tefRcBtn').onclick = () => showTefReceipt(soldTx.id);
-      items = []; seller = null; sellerPin = ''; $('discPct').value = ''; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
+      $('printRc').onclick = () => printSale(r.sale.id); $('newSale').onclick = resetSale; if (soldTx) $('tefRcBtn').onclick = () => showTefReceipt(soldTx.id);
+      items = []; seller = null; sellerPin = ''; $('discPct').value = ''; $('inst').value = '1'; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
       draw(); $('finish').disabled = true;
     } catch (e) {
       $('saleMsg').textContent = (paidTx ? 'O pagamento foi APROVADO no pinpad, mas a venda não gravou: ' : '') + e.message + (paidTx ? ' Corrija e toque em Finalizar de novo (não cobra outra vez).' : '');
@@ -571,7 +574,7 @@
     }
   };
   function resetSale() {
-    items = []; seller = null; sellerPin = ''; method = 'credit'; $('discPct').value = ''; $('doneBox').hidden = true; $('st1').classList.remove('done');
+    items = []; seller = null; sellerPin = ''; method = 'credit'; $('discPct').value = ''; $('inst').value = '1'; $('doneBox').hidden = true; $('st1').classList.remove('done');
     $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); $('scan').focus();
   }
 
@@ -656,11 +659,39 @@
     if (!d.session) { $('salesSub').textContent = 'O caixa está fechado.'; $('tSales').innerHTML = ''; $('tMoves').innerHTML = ''; $('expCash').textContent = '—'; return; }
     $('salesSub').textContent = 'Caixa aberto às ' + hhmm(d.session.opened_at).replace(':', 'h') + ' · ' + d.sales.filter(x => !x.canceled_at).length + ' vendas';
     $('tSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled_at ? ' class="canceled"' : '') + '><td>' + x.sale_number + '</td><td>' + hhmm(x.created_at) + '</td><td>' + safe((x.seller_name || '').split(' ')[0]) + '</td><td>' + safe(x.customer_name || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + safe(METHOD[x.payment_method] || x.payment_method) + (x.offline_payment ? ' · avulsa' : '') + '</td><td>'
+      + '<button type="button" class="linkbtn" data-pr="' + safe(x.id) + '" style="margin-right:8px">Imprimir</button>'
       + (x.canceled_at ? '<span class="sub">cancelada</span>' : nfceLate(x) ? '<span class="sub" title="Passaram 30 minutos do cupom fiscal: a SEFAZ não aceita mais o cancelamento">só troca/devolução</span>'
         : '<button type="button" class="cancelbtn" data-cx="' + safe(x.id) + '"' + (x.nfce?.status === 'authorized' ? ' title="Cupom fiscal: dá para cancelar até ' + hhmm(x.nfce.cancel_until) + '"' : '') + '>Cancelar</button>' + (x.nfce?.status === 'authorized' ? '<br><span class="sub">até ' + hhmm(x.nfce.cancel_until) + '</span>' : '')) + '</td></tr>').join('') || '<tr><td colspan="7" class="sub">Nenhuma venda ainda.</td></tr>';
     $('tSales').querySelectorAll('[data-cx]').forEach(b => b.onclick = () => cancelSale(d.sales.find(x => x.id === b.dataset.cx)));
+    $('tSales').querySelectorAll('[data-pr]').forEach(b => b.onclick = () => printSale(b.dataset.pr));
     $('tMoves').innerHTML = d.movements.filter(m => !m.canceled_at).map(m => '<tr><td>' + hhmm(m.created_at) + '</td><td>' + (m.kind === 'withdrawal' ? 'Sangria' : m.kind === 'deposit' ? 'Suprimento' : 'Saída') + (m.note ? ' · ' + safe(m.note) : '') + '</td><td class="n">' + brl(m.amount_cents) + '</td></tr>').join('');
     $('expCash').textContent = brl(d.expected_cash_cents);
+  }
+  // ---------- Comprovante de venda impresso (não fiscal), em bobina de 80 mm ----------
+  const PAYNAME = { credit: 'Crédito', debit: 'Débito', pix: 'Pix', cash: 'Dinheiro', other: 'Outro', mixed: 'Dividido' };
+  async function printSale(id) {
+    let d; try { d = await api('/store/sales/' + id + '/print'); } catch (e) { alert(e.message); return; }
+    const row = (l, r, b) => '<tr' + (b ? ' class="b"' : '') + '><td>' + l + '</td><td class="r">' + r + '</td></tr>';
+    const pay = d.payments ? d.payments.map(p => (PAYNAME[p.method] || p.method) + ' ' + brl(p.amount_cents) + (p.method === 'credit' && d.installments > 1 ? ' (' + d.installments + 'x)' : '')).join(' + ')
+      : (PAYNAME[d.payment_method] || d.payment_method) + (d.payment_method === 'credit' ? (d.installments > 1 ? ' ' + d.installments + 'x de ' + brl(Math.floor(d.total_cents / d.installments)) : ' à vista') : '');
+    const fd = s => s ? s.split('-').reverse().join('/') : '';
+    const html = '<!doctype html><html><head><meta charset="utf-8"><title>Comprovante ' + d.sale_number + '</title><style>'
+      + '@page{size:80mm auto;margin:3mm}body{font:12px/1.35 Arial,sans-serif;width:72mm;margin:0;color:#000}h1{font-size:15px;margin:0;text-align:center;letter-spacing:2px}'
+      + '.c{text-align:center}.s{font-size:10.5px}hr{border:0;border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}td{vertical-align:top;padding:1px 0}.r{text-align:right;white-space:nowrap}.b td{font-weight:700;font-size:13px}.nf{border:1px solid #000;padding:3px;text-align:center;font-weight:700;font-size:11px;margin:6px 0}img{display:block;margin:4px auto;width:34mm;height:34mm}</style></head><body>'
+      + '<h1>' + safe(d.store.toUpperCase()) + '</h1><div class="c s">' + safe(d.unit) + (d.legal_name ? '<br>' + safe(d.legal_name) : '') + (d.cnpj ? '<br>CNPJ ' + safe(d.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')) : '') + (d.address ? '<br>' + safe(d.address) : '') + (d.whatsapp ? '<br>WhatsApp ' + safe(d.whatsapp) : '') + '</div>'
+      + '<div class="nf">COMPROVANTE DE VENDA<br>NÃO É DOCUMENTO FISCAL</div>'
+      + (d.canceled ? '<div class="nf">*** VENDA CANCELADA ***</div>' : '')
+      + '<div class="s">Venda nº ' + d.sale_number + ' · ' + safe(d.sold_at) + (d.seller ? '<br>Vendedora: ' + safe(d.seller) : '') + (d.customer ? '<br>Cliente: ' + safe(d.customer) : '') + '</div><hr>'
+      + '<table>' + d.items.map(i => '<tr><td colspan="2">' + safe(i.name) + (i.code ? ' <span class="s">(' + safe(i.code) + ')</span>' : '') + '</td></tr>' + row('<span class="s">' + i.quantity + ' x ' + brl(i.unit_price_cents) + '</span>', brl(i.unit_price_cents * i.quantity))).join('') + '</table><hr>'
+      + '<table>' + row('Subtotal', brl(d.subtotal_cents)) + (d.discount_cents ? row('Desconto (' + Math.round(d.discount_cents * 100 / d.subtotal_cents) + '%)', '− ' + brl(d.discount_cents)) : '') + (d.cashback_used_cents ? row('Cashback usado', '− ' + brl(d.cashback_used_cents)) : '')
+      + row('TOTAL', brl(d.total_cents), true) + row('Pagamento', safe(pay)) + (d.cashback_earned_cents ? row('Cashback ganho', brl(d.cashback_earned_cents)) : '') + '</table>'
+      + (d.warranties.length ? '<hr><div class="s"><b>Garantia</b><br>' + d.warranties.map(w => safe(w.label) + ': até ' + fd(w.until)).join('<br>') + '</div>' : '')
+      + (d.qr ? '<hr><div class="c s">Comprovante digital e garantia:</div><img src="' + d.qr + '" alt=""><div class="c s">Código ' + safe(d.receipt_code) + '</div>' : '')
+      + '<div class="c s" style="margin-top:6px">Obrigado pela preferência!</div></body></html>';
+    const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(f);
+    window.FPLastReceipt = html;
+    f.onload = () => { try { f.contentWindow.focus(); f.contentWindow.print(); } finally { setTimeout(() => f.remove(), 60000); } };
+    f.srcdoc = html;
   }
   // Venda com cupom fiscal: a SEFAZ só aceita cancelar até 30 minutos depois; passou disso, é troca ou devolução.
   const nfceLate = x => x.nfce?.status === 'authorized' && Date.now() > new Date(x.nfce.cancel_until).getTime();

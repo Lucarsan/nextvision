@@ -17,6 +17,7 @@
   h1{margin:0 0 4px;font-size:20px;color:var(--ink)}.sub{margin:0;color:var(--muted);font-size:13px}
   table{width:100%;border-collapse:collapse;margin-top:10px}td{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}td.n{text-align:right;white-space:nowrap}
   .code{color:var(--muted);font-size:12px}
+  .line{display:flex;justify-content:space-between;margin-top:6px;font-size:14px;color:var(--muted)}.nf{margin:12px 0 0;font-size:11.5px;color:var(--muted);text-align:center}
   .total{display:flex;justify-content:space-between;margin-top:10px;font-weight:600;color:var(--ink)}
   .w{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:10px;background:var(--green-bg);margin-top:8px}.w b{color:var(--green)}.w span{font-size:13px;color:var(--green)}
   .w.off{background:#efede8}.w.off b,.w.off span{color:var(--muted)}
@@ -45,11 +46,19 @@
   const [first, ...rest] = String(d.store || '').trim().split(/\s+/); $('bName').textContent = (first || '').toUpperCase(); $('bSub').textContent = rest.join(' ').toUpperCase();
   document.title = 'Comprovante e garantia · ' + d.store;
   const today = new Date().toISOString().slice(0, 10);
+  const PN = { credit: 'Crédito', debit: 'Débito', pix: 'Pix', cash: 'Dinheiro', other: 'Outro' };
+  const sub = (d.items || []).reduce((t, i) => t + (i.unit_price_cents != null ? i.unit_price_cents * i.quantity : i.total_cents), 0);
+  const pay = d.payments ? d.payments.map(p => (PN[p.method] || p.method) + ' ' + brl(p.amount_cents) + (p.method === 'credit' && d.installments > 1 ? ' (' + d.installments + 'x)' : '')).join(' + ')
+    : d.payment_method ? (PN[d.payment_method] || d.payment_method) + (d.payment_method === 'credit' ? (d.installments > 1 ? ' ' + d.installments + 'x de ' + brl(Math.floor(d.total_cents / d.installments)) : ' à vista') : '') : '';
   $('box').innerHTML = '<div class="card"><h1>' + (d.customer_first_name ? 'Olá, ' + safe(d.customer_first_name) + '!' : 'Comprovante da compra') + '</h1>'
     + '<p class="sub">Compra nº ' + d.sale_number + ' · ' + safe(d.unit) + ' · ' + safe(d.sold_at) + '</p>'
     + (d.canceled ? '<div class="bad">Esta compra foi cancelada.</div>' : '')
-    + '<table>' + d.items.map(i => '<tr><td>' + safe(i.name) + (i.code ? ' <span class="code">' + safe(i.code) + '</span>' : '') + (i.quantity > 1 ? ' × ' + i.quantity : '') + '</td><td class="n">' + brl(i.total_cents) + '</td></tr>').join('') + '</table>'
-    + '<div class="total"><span>Total pago</span><span>' + brl(d.total_cents) + '</span></div></div>'
+    + '<table>' + d.items.map(i => '<tr><td>' + safe(i.name) + (i.code ? ' <span class="code">' + safe(i.code) + '</span>' : '') + (i.quantity > 1 ? ' × ' + i.quantity : '') + '</td><td class="n">' + brl(i.unit_price_cents != null ? i.unit_price_cents * i.quantity : i.total_cents) + '</td></tr>').join('') + '</table>'
+    + (d.discount_cents ? '<div class="line"><span>Desconto' + (sub ? ' (' + Math.round(d.discount_cents * 100 / sub) + '%)' : '') + '</span><span>− ' + brl(d.discount_cents) + '</span></div>' : '')
+    + (d.cashback_used_cents ? '<div class="line"><span>Cashback usado</span><span>− ' + brl(d.cashback_used_cents) + '</span></div>' : '')
+    + '<div class="total"><span>Total pago</span><span>' + brl(d.total_cents) + '</span></div>'
+    + (pay ? '<div class="line"><span>Pagamento</span><span>' + safe(pay) + '</span></div>' : '')
+    + '<p class="nf">Comprovante de venda · não é documento fiscal' + (d.legal_name ? '<br>' + safe(d.legal_name) : '') + (d.cnpj ? ' · CNPJ ' + safe(d.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')) : '') + '</p></div>'
     + (d.canceled ? '' : '<div class="card"><h1>Sua garantia</h1>' + d.warranties.map(w => '<div class="w' + (w.until < today ? ' off' : '') + '"><b>' + safe(w.label) + '</b><span>' + (w.until < today ? 'encerrada em ' : 'válida até ') + br(w.until) + '</span></div>').join('') + '</div>')
     + (d.units.length > 1 ? '<div class="card"><h1>Nossas ' + d.units.length + ' lojas</h1><p class="sub">A garantia e o cashback valem em todas.</p><div class="units">' + d.units.map(u => '<span>' + safe(u) + '</span>').join('') + '</div></div>' : '')
     + (d.review_url ? '<a class="btn" href="' + safe(d.review_url) + '" target="_blank" rel="noopener">Avaliar no Google</a>' : '');

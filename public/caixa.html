@@ -50,7 +50,10 @@
   .cust strong{font-size:16px;color:var(--ink)}.cust p{margin:2px 0 0;color:var(--muted);font-size:12px}
   .cb{display:flex;justify-content:space-between;align-items:center;background:var(--gold-soft);border-radius:8px;padding:9px 12px;margin-top:10px;font-size:13px;color:#7a5a12}.cb strong{color:#7a5a12}
   .linkbtn{border:0;background:none;color:var(--blue);text-decoration:underline;cursor:pointer;padding:0;font-size:12px}
-  .pay{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .pay{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .split{margin-top:10px;border:1px solid #e6e2d8;border-radius:8px;padding:8px 10px}.split .sr{display:flex;gap:6px;align-items:center;margin:4px 0}.split select{width:auto;padding:5px 8px}.split input{width:110px;padding:5px 8px;text-align:right}
+  .splitfoot{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:13px}.splitfoot .ok{color:var(--green);font-weight:600}.splitfoot .bad{color:var(--red);font-weight:600}
+  .dmode{display:inline-flex;border:1px solid #dcd8cd;border-radius:6px;overflow:hidden}.dmode button{border:0;background:#fff;padding:4px 9px;font-size:12px;cursor:pointer;color:var(--ink)}.dmode button.on{background:var(--ink);color:#fff}
   .pay button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:12px 4px;font-weight:600;cursor:pointer;color:var(--ink)}
   .pay button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   .who{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:12px}
@@ -173,8 +176,12 @@
             <p class="label">Pagamento</p>
             <label class="disc backrow" id="backRow"><input type="checkbox" id="backOn"> Venda de outro dia (boleta) <input class="field" type="date" id="backDate" hidden style="width:auto;padding:4px 8px"></label>
             <div class="backwarn" id="backWarn" hidden></div>
-            <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button></div>
-            <div class="disc" id="discRow">Desconto <input class="field" id="discPct" type="number" min="0" max="50" step="1" inputmode="numeric" placeholder="0" style="width:64px;padding:5px 8px"> %
+            <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button><button type="button" data-m="split">Dividir</button></div>
+            <div class="split" id="splitBox" hidden><div id="splitRows"></div>
+              <div class="splitfoot"><button type="button" class="linkbtn" id="splitAdd">+ outra forma</button><span id="splitInfo"></span></div></div>
+            <div class="disc" id="discRow">Desconto <span class="dmode" id="discMode"><button type="button" data-d="pct" class="on">%</button><button type="button" data-d="brl">R$</button></span>
+              <input class="field" id="discPct" type="number" min="0" max="50" step="1" inputmode="numeric" placeholder="0" style="width:64px;padding:5px 8px"><span id="discPctSign">%</span>
+              <input class="field" id="discBrl" inputmode="decimal" placeholder="0,00" hidden style="width:90px;padding:5px 8px">
               <span class="discq" id="discQuick"><button type="button" data-p="5">5%</button><button type="button" data-p="10">10%</button><button type="button" data-p="20">20%</button><button type="button" data-p="25">25%</button><button type="button" data-p="30">30%</button><button type="button" data-p="40">40%</button><button type="button" data-p="50">50%</button><button type="button" data-p="0">Sem</button></span>
               <span class="sub" id="discInfo" style="margin:0"></span></div>
             <label class="disc" id="instRow" hidden><span id="instLabel">Parcelas no crédito</span> <select class="field" id="inst" style="width:auto;margin-left:6px"></select></label>
@@ -369,7 +376,11 @@
   // Desconto em % na hora do pagamento: até 50% em qualquer forma (o servidor confere o mesmo limite).
   const DISC_MAX = 50;
   const discPct = () => Math.max(0, Math.min(DISC_MAX, Math.floor(Number($('discPct').value) || 0)));
-  const discountCents = () => Math.floor(subtotal() * discPct() / 100);
+  let discMode = 'pct';
+  const discMax = () => Math.floor(subtotal() * DISC_MAX / 100);
+  const discBrlCents = () => Math.max(0, Math.round((Number(String($('discBrl').value).replace(/\./g, '').replace(',', '.')) || 0) * 100));
+  // Em R$: até 50% da venda (passou disso, vale o máximo e a tela avisa).
+  const discountCents = () => discMode === 'brl' ? Math.min(discBrlCents(), discMax()) : Math.floor(subtotal() * discPct() / 100);
   const cbAvailable = () => customer?.cashback?.balance_cents || 0;
   const cbUseCents = () => {
     if (!$('cbUse').checked || !cbAvailable()) return 0;
@@ -377,6 +388,29 @@
     return Math.max(0, Math.min(cbAvailable(), max, base - 1));
   };
   const total = () => subtotal() - discountCents() - cbUseCents();
+  // Pagamento dividido: várias formas que somam o total. A mesma forma em duas linhas é somada ao gravar.
+  let splitRows = [];
+  const toC = v => Math.max(0, Math.round((Number(String(v || '').replace(/\./g, '').replace(',', '.')) || 0) * 100));
+  const splitSum = () => splitRows.reduce((a, r) => a + r.cents, 0);
+  const splitMerged = () => { const m = new Map(); for (const r of splitRows) if (r.cents > 0) m.set(r.method, (m.get(r.method) || 0) + r.cents); return [...m].map(([method, amount_cents]) => ({ method, amount_cents })); };
+  const payMethods = () => method === 'split' ? splitMerged().map(p => p.method) : [method];
+  const splitOk = () => method !== 'split' || (splitSum() === total() && splitMerged().length >= 1);
+  function drawSplit() {
+    $('splitBox').hidden = method !== 'split'; if (method !== 'split') return;
+    if (!splitRows.length) splitRows = [{ method: 'cash', cents: 0 }, { method: 'debit', cents: 0 }];
+    $('splitRows').innerHTML = splitRows.map((r, i) => '<div class="sr"><select class="field" data-sm="' + i + '">' + ['cash', 'debit', 'credit', 'pix'].map(k => '<option value="' + k + '"' + (r.method === k ? ' selected' : '') + '>' + METHOD[k] + '</option>').join('') + '</select>'
+      + '<input class="field" data-sv="' + i + '" inputmode="decimal" placeholder="0,00" value="' + (r.cents ? (r.cents / 100).toFixed(2).replace('.', ',') : '') + '">'
+      + '<button type="button" class="linkbtn" data-sf="' + i + '" title="Colocar o que falta nesta forma">o que falta</button>' + (splitRows.length > 2 ? '<button type="button" class="x" data-sd="' + i + '">×</button>' : '') + '</div>').join('');
+    $('splitRows').querySelectorAll('[data-sm]').forEach(e => e.onchange = () => { splitRows[e.dataset.sm].method = e.value; draw(); });
+    $('splitRows').querySelectorAll('[data-sv]').forEach(e => { e.oninput = () => { splitRows[e.dataset.sv].cents = toC(e.value); drawSplitInfo(); drawFinish(); }; e.onchange = () => draw(); });
+    $('splitRows').querySelectorAll('[data-sf]').forEach(e => e.onclick = () => { const i = Number(e.dataset.sf); const rest = total() - splitSum() + splitRows[i].cents; splitRows[i].cents = Math.max(0, rest); draw(); });
+    $('splitRows').querySelectorAll('[data-sd]').forEach(e => e.onclick = () => { splitRows.splice(Number(e.dataset.sd), 1); draw(); });
+    drawSplitInfo();
+  }
+  function drawSplitInfo() {
+    const d = total() - splitSum();
+    $('splitInfo').innerHTML = d === 0 ? '<span class="ok">Fechou: ' + brl(total()) + '</span>' : d > 0 ? '<span class="bad">Falta ' + brl(d) + '</span>' : '<span class="bad">Passou ' + brl(-d) + '</span>';
+  }
   // Venda de outro dia (boleta do período sem sistema): data passada, fora do caixa de hoje, sem pinpad e sem cashback.
   const ymd = d => new Date(d.getTime() - 3 * 3600000).toISOString().slice(0, 10);
   const backOn = () => $('backOn').checked && !!$('backDate').value;
@@ -392,7 +426,12 @@
     document.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => { const x = items[+b.dataset.dec]; if (x.qty > 1) x.qty--; else items.splice(+b.dataset.dec, 1); draw(); });
     $('pay').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === method));
     if (Number($('discPct').value) > DISC_MAX) $('discPct').value = DISC_MAX;
-    $('discInfo').textContent = discountCents() ? '− ' + brl(discountCents()) + ' (de ' + brl(subtotal()) + ' para ' + brl(subtotal() - discountCents()) + ')' : 'até ' + DISC_MAX + '%';
+    $('discPct').hidden = discMode !== 'pct'; $('discPctSign').hidden = discMode !== 'pct'; $('discBrl').hidden = discMode !== 'brl';
+    $('splitAdd').onclick = () => { if (splitRows.length < 6) { splitRows.push({ method: 'credit', cents: 0 }); draw(); } };
+  $('discMode').querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', b.dataset.d === discMode));
+    const over = discMode === 'brl' && discBrlCents() > discMax();
+    $('discInfo').textContent = over ? 'Máximo de ' + DISC_MAX + '%: ' + brl(discMax()) : discountCents() ? '− ' + brl(discountCents()) + (discMode === 'brl' && subtotal() ? ' (' + (Math.round(discountCents() * 1000 / subtotal()) / 10).toString().replace('.', ',') + '%)' : '') + ' · de ' + brl(subtotal()) + ' para ' + brl(subtotal() - discountCents()) : 'até ' + DISC_MAX + '%';
+    $('discInfo').style.color = over ? 'var(--red)' : '';
     $('discQuick').querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', Number(b.dataset.p) === discPct() && (discPct() > 0 || $('discPct').value !== '')));
     const back = $('backOn').checked;
     $('backDate').hidden = !back;
@@ -401,27 +440,35 @@
     $('backWarn').textContent = !back ? '' : $('backDate').value ? 'Lançando venda do dia ' + dmyS($('backDate').value) + ': entra no faturamento e na comissão desse dia, baixa o estoque, fica fora do caixa de hoje, sem pinpad e sem cashback.' : 'Escolha a data em que a venda aconteceu (está na boleta).';
     if (back) { $('cbUse').checked = false; $('offline').checked = false; }
     $('cbUseRow').hidden = back || !cbAvailable();
-    $('offRow').hidden = method === 'cash' || back; if (method === 'cash') $('offline').checked = false;
+    drawSplit();
+    const nonCash = payMethods().some(m => m !== 'cash') || (method === 'split' && !splitMerged().length);
+    $('offRow').hidden = !nonCash || back; if (!nonCash) $('offline').checked = false;
     $('offAuth').hidden = !$('offline').checked;
     $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)'
       : method === 'cash' ? 'Dinheiro: não usa o pinpad'
+      : method === 'split' && tef ? 'Dividido: por enquanto, cobre as partes em cartão/Pix na maquininha avulsa (marque "Pinpad fora do ar")'
       : tef ? (paidTx ? 'Já cobrado no pinpad: ' + brl(paidTx.amount_cents) + '. Finalize para gravar a venda.' : 'Ao finalizar, o valor vai direto para o pinpad' + (tef.mode === 'simulator' ? ' (SIMULADOR: não cobra de verdade)' : tef.mode === 'sandbox' ? ' (Stone de teste)' : ''))
       : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
     // Parcelas: com o pinpad vão para a cobrança; na maquininha avulsa, ficam registradas na venda (digite as mesmas na maquininha).
-    $('instRow').hidden = method !== 'credit';
+    $('instRow').hidden = !payMethods().includes('credit');
     $('instLabel').textContent = tef && !$('offline').checked ? 'Parcelas no crédito' : 'Parcelas (as mesmas da maquininha)';
     $('sellers').innerHTML = sellers.map(s => '<button type="button" data-s="' + safe(s.id) + '"' + (seller?.id === s.id ? ' class="on"' : '') + '>' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada nesta unidade.</span>';
     $('sellers').querySelectorAll('[data-s]').forEach(b => b.onclick = () => askPin(sellers.find(s => s.id === b.dataset.s), pin => { seller = sellers.find(s => s.id === b.dataset.s); sellerPin = pin; draw(); }));
     $('pinOk').hidden = !seller;
     const cbu = cbUseCents();
     $('cbUseInfo').textContent = cbu ? '(− ' + brl(cbu) + ')' : '';
-    $('totalLabel').textContent = METHOD[method] + (discountCents() ? ' · desconto ' + brl(discountCents()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
+    $('totalLabel').textContent = (method === 'split' ? 'Dividido' : METHOD[method]) + (discountCents() ? ' · desconto ' + brl(discountCents()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
     $('total').textContent = brl(total());
     const earn = customer && cfg.cashback_enabled ? Math.round(total() * (Number(cfg.cashback_percent) || 0) / 100) : 0;
     $('st3t').textContent = earn ? 'Cashback de ' + brl(earn) + ' no WhatsApp' : 'Cashback pelo WhatsApp';
-    $('finish').disabled = !items.length || !seller || total() < 1 || ($('backOn').checked && !$('backDate').value);
+    drawFinish();
     $('finish').textContent = backOn() ? 'Lançar venda do dia ' + dmyS($('backDate').value) : 'Finalizar venda';
     if (back) $('st1').querySelector('small').textContent = 'Venda de outro dia: não passa pelo pinpad nem pelo caixa de hoje';
+  }
+  // Pinpad ligado + dividido com cartão/Pix: ainda não cobra em partes no pinpad; só com a maquininha avulsa.
+  function drawFinish() {
+    const tefSplit = method === 'split' && tef && !$('offline').checked && !backOn() && splitMerged().some(p => p.method !== 'cash');
+    $('finish').disabled = !items.length || !seller || total() < 1 || ($('backOn').checked && !$('backDate').value) || !splitOk() || tefSplit;
   }
 
   // ---------- Peças: leitor ou digitação ----------
@@ -495,7 +542,8 @@
   }
   function cfFill(p, c = {}) { CF.forEach(([k]) => { $(p + '_' + k).value = c[k] || ''; }); $(p + '_offers_opt_out').checked = !!c.offers_opt_out; }
   $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('nc_name').focus(); };
-  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('backOn').onchange = draw; $('backDate').onchange = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
+  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('discBrl').oninput = draw;
+  $('discMode').querySelectorAll('[data-d]').forEach(b => b.onclick = () => { discMode = b.dataset.d; $('discPct').value = ''; $('discBrl').value = ''; draw(); (discMode === 'brl' ? $('discBrl') : $('discPct')).focus(); }); $('backOn').onchange = draw; $('backDate').onchange = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { discMode = 'pct'; $('discBrl').value = ''; $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
   // ---------- PIN ----------
@@ -524,18 +572,19 @@
   $('finish').onclick = async () => {
     $('finish').disabled = true; $('saleMsg').textContent = ''; $('saleMsg').className = 'msg';
     const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
+    if (method === 'split') { const m = splitMerged(); delete body.payment_method; if (m.length === 1) body.payment_method = m[0].method; else body.payments = m; }
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
-    if (method === 'credit' && Number($('inst').value) > 1) body.installments = Number($('inst').value);
+    if (payMethods().includes('credit') && Number($('inst').value) > 1) body.installments = Number($('inst').value);
     if (backOn()) { body.sold_on = $('backDate').value; delete body.cashback_use_cents; }
-    if ($('offline').checked && method !== 'cash') { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
+    if ($('offline').checked && payMethods().some(m => m !== 'cash')) { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
     else if (!$('newCust').hidden && $('nc_name').value.trim()) {
       const f = cfRead('nc'); if (f.error) { $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Cadastro da cliente: ' + f.error; $('finish').disabled = false; return; }
       body.new_customer = f.data;
     }
     else body.anonymous = true;
-    if (tef && method !== 'cash' && !body.offline_payment && !body.sold_on) {
+    if (tef && method !== 'cash' && method !== 'split' && !body.offline_payment && !body.sold_on) {
       // Cobra no pinpad antes de gravar. Cobrança já aprovada (venda não gravou antes) é reaproveitada, nunca cobrada de novo.
       if (paidTx && (paidTx.method !== method || paidTx.amount_cents !== total())) {
         $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Já foi cobrado ' + brl(paidTx.amount_cents) + ' no pinpad e a venda mudou. Estorne essa cobrança em "Pendências do pinpad" e cobre de novo.';
@@ -585,7 +634,7 @@
         }).catch(() => {});
       }
       $('printRc').onclick = () => printSale(r.sale.id); $('newSale').onclick = resetSale; if (soldTx) $('tefRcBtn').onclick = () => showTefReceipt(soldTx.id);
-      items = []; seller = null; sellerPin = ''; $('discPct').value = ''; $('inst').value = '1'; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
+      items = []; seller = null; sellerPin = ''; splitRows = []; discMode = 'pct'; $('discBrl').value = ''; $('discPct').value = ''; $('inst').value = '1'; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
       draw(); $('finish').disabled = true;
     } catch (e) {
       $('saleMsg').textContent = (paidTx ? 'O pagamento foi APROVADO no pinpad, mas a venda não gravou: ' : '') + e.message + (paidTx ? ' Corrija e toque em Finalizar de novo (não cobra outra vez).' : '');
@@ -593,7 +642,7 @@
     }
   };
   function resetSale() {
-    items = []; seller = null; sellerPin = ''; method = 'credit'; $('discPct').value = ''; $('inst').value = '1'; $('doneBox').hidden = true; $('st1').classList.remove('done');
+    items = []; seller = null; sellerPin = ''; method = 'credit'; splitRows = []; discMode = 'pct'; $('discBrl').value = ''; $('discPct').value = ''; $('inst').value = '1'; $('doneBox').hidden = true; $('st1').classList.remove('done');
     $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); $('scan').focus();
   }
 

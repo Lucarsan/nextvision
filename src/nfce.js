@@ -30,6 +30,7 @@ export function buildNfce({ tenant, network = null, sale, items, products = new 
   if (!tenant.state_registration) problems.push('Unidade sem inscrição estadual (IE)');
   if (!tenant.legal_name) problems.push('Unidade sem razão social');
   if (sale.canceled_at) problems.push('Venda cancelada');
+  if (sale.backdated_at) problems.push('Venda de outro dia (lançada depois): não emite NFC-e');
 
   const det = [];
   for (const it of items) {

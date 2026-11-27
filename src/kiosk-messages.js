@@ -62,7 +62,7 @@ export async function messageQueue(q, tenantId, { limit = 40 } = {}) {
   const thanks = (await q(`SELECT c.id, c.name, c.phone, s.id sale_id, s.sale_number, s.receipt_code, s.cashback_earned_cents, ${BALANCE} balance,
       (SELECT min(l.expires_on) FROM cashback_lots l WHERE l.sale_id = s.id) exp
     FROM sales s JOIN customers c ON c.id = s.customer_id
-    WHERE s.tenant_id = $1 AND s.canceled_at IS NULL AND (s.created_at AT TIME ZONE '${TZ}')::date >= $2::date - 1 AND ${PHONE}
+    WHERE s.tenant_id = $1 AND s.canceled_at IS NULL AND s.backdated_at IS NULL AND (s.created_at AT TIME ZONE '${TZ}')::date >= $2::date - 1 AND ${PHONE}
       AND NOT EXISTS (SELECT 1 FROM customer_messages m WHERE m.sale_id = s.id AND m.campaign IN ('thanks','skip:thanks'))
     ORDER BY s.created_at DESC`, [tenantId, today])).rows;
   push('thanks', thanks, r => ({ sale_id: r.sale_id, ref: 'Venda nº ' + r.sale_number, text: fill(cfg.texts.thanks, { ...common(r),
@@ -73,7 +73,7 @@ export async function messageQueue(q, tenantId, { limit = 40 } = {}) {
   if (cfg.review_enabled && t.google_review_url) {
     const d = Math.max(0, Number(cfg.review_delay_days) || 0);
     const rows = (await q(`SELECT DISTINCT ON (c.id) c.id, c.name, c.phone, c.review_code FROM sales s JOIN customers c ON c.id = s.customer_id
-      WHERE s.tenant_id = $1 AND s.canceled_at IS NULL AND c.deleted_at IS NULL AND ${PHONE}
+      WHERE s.tenant_id = $1 AND s.canceled_at IS NULL AND s.backdated_at IS NULL AND c.deleted_at IS NULL AND ${PHONE}
         AND (s.created_at AT TIME ZONE '${TZ}')::date BETWEEN $2::date - ${d + 5} AND $2::date - ${d}
         AND NOT ${SENT("'review'", 180)} ORDER BY c.id`, [tenantId, today])).rows;
     push('review', rows, r => ({ text: fill(cfg.texts.review, { ...common(r), link_avaliacao: reviewLinkBase() + r.review_code }) }));

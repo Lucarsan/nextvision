@@ -274,6 +274,15 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   }));
 
   // Quiosque: vendas e lançamentos do caixa aberto, sem custo das peças (para cancelar e conferir).
+  // Vendas de outro dia lançadas na unidade (últimas 100), para conferir, imprimir ou cancelar.
+  app.get('/api/store/sales/backdated', ...guard, route(async (req, res) => {
+    const r = await q(`SELECT x.id, x.sale_number, x.total_cents, x.discount_cents, x.payment_method, x.installments, x.canceled_at, x.cancel_reason,
+        to_char(x.created_at AT TIME ZONE $2, 'YYYY-MM-DD') sold_on, x.backdated_at, sl.name seller_name, c.name customer_name, bu.name backdated_by_name,
+        coalesce((SELECT sum(i.quantity) FROM sale_items i WHERE i.sale_id = x.id), 0)::int pieces
+      FROM sales x LEFT JOIN users sl ON sl.id = x.seller_id LEFT JOIN customers c ON c.id = x.customer_id LEFT JOIN users bu ON bu.id = x.backdated_by
+      WHERE x.tenant_id = $1 AND x.backdated_at IS NOT NULL ORDER BY x.backdated_at DESC LIMIT 100`, [tid(req), TZ]);
+    res.set('Cache-Control', 'no-store').json({ items: r.rows });
+  }));
   app.get('/api/store/kiosk/cash-today', ...guard, route(async (req, res) => {
     const s = (await q("SELECT id,opened_at,opening_cents FROM cash_sessions WHERE tenant_id=$1 AND status='open'", [tid(req)])).rows[0];
     if (!s) return res.json({ session: null, sales: [], movements: [] });
@@ -1092,6 +1101,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       offline_auth: z.string().trim().max(40).optional(),
       // Parcelas no crédito (pinpad ou maquininha avulsa). Só vale quando há crédito na venda.
       installments: z.number().int().min(1).max(12).optional(),
+      // Venda de outro dia (boleta do período sem sistema): data em que aconteceu, até 60 dias atrás.
+      sold_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       // TEF Stone (AutoTEF): cobranças aprovadas no pinpad (registradas antes em /api/store/tef/transactions).
       tef_transaction_ids: z.array(uuid).min(1).max(5).optional(),
       payment_method: METHOD.optional(),
@@ -1346,11 +1357,18 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os produtos');
     if (v.discount_cents && !v.items) return bad(res, 400, 'Desconto é só para venda com produtos; sem produtos, digite o valor final');
     if (req.user.access_level === 'basic' && v.discount_cents) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
+    // Venda de outro dia: fora do caixa de hoje, sem pinpad, sem maquininha pendente, sem cashback e sem NFC-e.
+    const back = !!v.sold_on;
+    if (back) {
+      if (v.tef_transaction_ids || v.offline_payment || v.cashback_use_cents || v.order_id || v.live_order || pendingId || opts.pixCharge) return bad(res, 400, 'Venda de outro dia não usa pinpad, maquininha pendente, cashback, pedido nem venda a receber');
+      const ok = (await q(`SELECT $1::date < (now() AT TIME ZONE $2)::date AND $1::date >= (now() AT TIME ZONE $2)::date - 60 ok`, [v.sold_on, TZ]).catch(() => ({ rows: [{ ok: false }] }))).rows[0].ok;
+      if (!ok) return bad(res, 400, 'A data da venda de outro dia tem que ser de ontem para trás, até 60 dias');
+    }
     const c = await db.connect();
     try {
       await c.query('BEGIN');
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]);
-      const s = await c.query(`SELECT id FROM cash_sessions WHERE tenant_id=$1 AND status='open'`, [tid(req)]);
+      const s = back ? { rowCount: 1, rows: [{ id: null }] } : await c.query(`SELECT id FROM cash_sessions WHERE tenant_id=$1 AND status='open'`, [tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Abra o caixa antes de registrar vendas'); }
       if (pendingId && !(await c.query('SELECT 1 FROM pending_sales WHERE id=$1 AND tenant_id=$2 AND paid_sale_id IS NULL AND canceled_at IS NULL FOR UPDATE', [pendingId, tid(req)])).rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Esta venda já foi recebida ou cancelada. Atualize a lista.'); }
       const sellerId = v.seller_id || req.user.id;
@@ -1481,14 +1499,15 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           free.splice(k, 1);
         }
       }
-      if (req.user.kiosk && !v.offline_payment && !opts.pixCharge) {
+      if (req.user.kiosk && !v.offline_payment && !opts.pixCharge && !back) {
         const mode = (await c.query('SELECT tef_mode FROM tenants WHERE id=$1', [tid(req)])).rows[0]?.tef_mode || 'off';
         const paid = tefRows.map(t => t.method);
         if (mode !== 'off' && parts.some(p => ['credit', 'debit', 'pix'].includes(p.method) && !paid.includes(p.method))) { await c.query('ROLLBACK'); return bad(res, 400, 'Cobre no pinpad antes de finalizar (ou marque "Pinpad fora do ar" se cobrou na maquininha avulsa)'); }
       }
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
-      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`, [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed])).rows[0];
+      const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents,created_at,backdated_at,backdated_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $13::date IS NULL THEN now() ELSE ($13::date + time '12:00') AT TIME ZONE $14 END,CASE WHEN $13::date IS NULL THEN NULL ELSE now() END,CASE WHEN $13::date IS NULL THEN NULL ELSE $11::uuid END) RETURNING *`,
+        [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed, back ? v.sold_on : null, TZ])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
       sale.receipt_code = (await c.query('UPDATE sales SET receipt_code=$2 WHERE id=$1 RETURNING receipt_code', [sale.id, newReceiptCode()])).rows[0].receipt_code;
       if (tefRows.length) {
@@ -1517,7 +1536,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Dia da semana bloqueado (ex.: quarta da promoção): a venda não gera cashback (usar o saldo continua valendo).
       // Produto marcado "não gera cashback" no cadastro (troca de espécie por Pix, crédito de celular): fica fora da conta.
       const cbBase = v.items ? items.reduce((a, x) => a + (x.no_cb ? 0 : x.total_cents), 0) : total;
-      if (customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents && !(cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) {
+      if (!back && customerId && cbCfg.cashback_enabled && total >= cbCfg.cashback_min_sale_cents && !(cbCfg.cashback_off_weekdays || []).includes(weekdayNow())) {
         const earned = cbEarn(cbBase, cbCfg.cashback_percent);
         if (earned >= 1) {
           await c.query(`INSERT INTO cashback_lots(tenant_id,customer_id,sale_id,amount_cents,remaining_cents,percent_snapshot,expires_on)
@@ -1605,8 +1624,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     // Cupom fiscal: confere a venda e os PINs ANTES de cancelar o cupom na SEFAZ (o cancelamento lá não tem volta).
     // Passou de 30 minutos, a SEFAZ não aceita: a venda não se cancela (troca ou devolução).
     {
-      const pre = (await q(`SELECT x.id,x.seller_id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open'`, [req.params.id, tid(req)])).rows[0];
-      if (!pre) return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto');
+      const pre = (await q(`SELECT x.id,x.seller_id FROM sales x LEFT JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND (s.status='open' OR x.backdated_at IS NOT NULL)`, [req.params.id, tid(req)])).rows[0];
+      if (!pre) return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto (ou vendas de outro dia)');
       // Quiosque (decisão da Audace, 27/11): basta o PIN de quem vendeu; sem ele (vendedora fora), o de um supervisor, gerente ou dono.
       if (req.user.kiosk && !(await kioskCancelerFor({ query: q }, tid(req), pre.seller_id, v))) return bad(res, 401, v.seller_pin ? 'PIN de quem vendeu incorreto' : 'PIN do supervisor incorreto');
       const fx = await cancelSaleFiscal(q, req.params.id, v.reason);
@@ -1616,8 +1635,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     try {
       await c.query('BEGIN');
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]); // mesma fila das vendas (saldo de cashback)
-      const s = await c.query(`SELECT x.id,x.seller_id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open' FOR UPDATE OF x`, [req.params.id, tid(req)]);
-      if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto'); }
+      const s = await c.query(`SELECT x.id,x.seller_id FROM sales x LEFT JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND (s.status='open' OR x.backdated_at IS NOT NULL) FOR UPDATE OF x`, [req.params.id, tid(req)]);
+      if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto (ou vendas de outro dia)'); }
       // Quiosque: quem cancelou é a pessoa do PIN (aparece no painel da rede, em "vendas canceladas").
       let reason = v.reason, canceledBy = req.user.id;
       if (req.user.kiosk) {

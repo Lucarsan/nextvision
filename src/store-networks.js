@@ -349,6 +349,13 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users sl ON sl.id = s.seller_id
       WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NULL AND s.discount_cents > 0 AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY s.created_at DESC LIMIT 200`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
+    // Vendas de outro dia lançadas no período (boletas): para a supervisão acompanhar.
+    const backdated = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, s.sale_number, s.total_cents, s.canceled_at IS NOT NULL canceled, sl.name seller, bu.name launched_by,
+             to_char(s.created_at AT TIME ZONE $4, 'DD/MM') sold_on, to_char(s.backdated_at AT TIME ZONE $4, 'DD/MM HH24:MI') launched_at
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users sl ON sl.id = s.seller_id LEFT JOIN users bu ON bu.id = s.backdated_by
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.backdated_at IS NOT NULL AND (s.backdated_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY s.backdated_at DESC LIMIT 300`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Estoque baixo: peças com estoque controlado no mínimo da rede (padrão 1) ou menos, que venderam nos últimos 30 dias.
     const low = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
@@ -380,6 +387,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
       canceled: canceled.rows.map(c => ({ unit: c.unit, sale_number: c.sale_number, seller: c.seller || '', total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
       discounted: discounted.rows.map(d => ({ unit: d.unit, sale_number: d.sale_number, seller: d.seller || '', total_cents: d.total_cents, discount_cents: d.discount_cents, pct: d.pct, payment_method: d.payment_method, at: d.at })),
+      backdated: backdated.rows,
       low_stock: lowByUnit
     };
     res.set('Cache-Control', 'no-store').json({ from, to, units, totals, alerts });

@@ -66,6 +66,7 @@
   .go{width:100%;margin-top:12px;padding:14px;border:0;border-radius:10px;background:var(--ink);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
   .go:disabled{opacity:.45;cursor:default}
   .disc{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;flex-wrap:wrap}
+  .backrow{margin:0 0 10px}.backwarn{background:#fff6df;border:1px solid #f0d58a;color:#7a5a00;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:0 0 10px}
   .discq{display:inline-flex;gap:4px;flex-wrap:wrap}.discq button{border:1px solid var(--line,#e2ded6);background:#fff;border-radius:999px;padding:3px 9px;font-size:12px;cursor:pointer;color:var(--ink)}.discq button.on{background:var(--green-bg);color:var(--green);border-color:transparent;font-weight:600}
   .msg{margin:10px 0 0;font-weight:600;min-height:18px}.msg.err{color:var(--red)}.msg.ok{color:var(--green)}
   .done{background:var(--green-bg);border-radius:10px;padding:14px;margin-top:12px}.done strong{color:var(--green)}
@@ -170,6 +171,8 @@
           <div class="card">
             <div class="tefpend" id="tefPend" hidden></div>
             <p class="label">Pagamento</p>
+            <label class="disc backrow" id="backRow"><input type="checkbox" id="backOn"> Venda de outro dia (boleta) <input class="field" type="date" id="backDate" hidden style="width:auto;padding:4px 8px"></label>
+            <div class="backwarn" id="backWarn" hidden></div>
             <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button></div>
             <div class="disc" id="discRow">Desconto <input class="field" id="discPct" type="number" min="0" max="50" step="1" inputmode="numeric" placeholder="0" style="width:64px;padding:5px 8px"> %
               <span class="discq" id="discQuick"><button type="button" data-p="5">5%</button><button type="button" data-p="10">10%</button><button type="button" data-p="20">20%</button><button type="button" data-p="25">25%</button><button type="button" data-p="30">30%</button><button type="button" data-p="40">40%</button><button type="button" data-p="50">50%</button><button type="button" data-p="0">Sem</button></span>
@@ -279,6 +282,8 @@
       <div class="top"><div><h1>Vendas e caixa</h1><p class="sub" id="salesSub">Vendas do caixa aberto</p></div></div>
       <div class="grid">
         <div class="card"><p class="label">Vendas de hoje</p><table><thead><tr><th>Nº</th><th>Hora</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th></th></tr></thead><tbody id="tSales"></tbody></table>
+          <div id="backCard" hidden style="margin-top:18px;border-top:1px solid #eee;padding-top:14px"><p class="label">Vendas de outro dia (boletas lançadas depois)</p>
+            <table><thead><tr><th>Nº</th><th>Dia da venda</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th></th></tr></thead><tbody id="tBack"></tbody></table></div>
           <div id="tefCard" hidden style="margin-top:18px;border-top:1px solid #eee;padding-top:14px">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><p class="label" style="margin:0">Cobranças no pinpad Stone (hoje)</p><button type="button" class="cancelbtn" id="tefInit" style="color:var(--ink);border-color:#ddd">Inicializar pinpad</button></div>
             <p class="msg" id="tefInitMsg"></p>
@@ -372,6 +377,10 @@
     return Math.max(0, Math.min(cbAvailable(), max, base - 1));
   };
   const total = () => subtotal() - discountCents() - cbUseCents();
+  // Venda de outro dia (boleta do período sem sistema): data passada, fora do caixa de hoje, sem pinpad e sem cashback.
+  const ymd = d => new Date(d.getTime() - 3 * 3600000).toISOString().slice(0, 10);
+  const backOn = () => $('backOn').checked && !!$('backDate').value;
+  const dmyS = s => s.split('-').reverse().join('/');
 
   function draw() {
     $('items').innerHTML = items.map((x, i) => '<tr><td class="code">' + safe(x.barcode || '—') + '</td><td>' + safe(x.name) + '</td><td><span class="qty"><button type="button" data-dec="' + i + '">−</button>' + x.qty + '<button type="button" data-inc="' + i + '">+</button></span></td><td class="n"><strong>' + brl(x.price_cents * x.qty) + '</strong></td><td><button type="button" class="x" data-del="' + i + '" aria-label="Tirar">×</button></td></tr>').join('');
@@ -385,7 +394,14 @@
     if (Number($('discPct').value) > DISC_MAX) $('discPct').value = DISC_MAX;
     $('discInfo').textContent = discountCents() ? '− ' + brl(discountCents()) + ' (de ' + brl(subtotal()) + ' para ' + brl(subtotal() - discountCents()) + ')' : 'até ' + DISC_MAX + '%';
     $('discQuick').querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', Number(b.dataset.p) === discPct() && (discPct() > 0 || $('discPct').value !== '')));
-    $('offRow').hidden = method === 'cash'; if (method === 'cash') $('offline').checked = false;
+    const back = $('backOn').checked;
+    $('backDate').hidden = !back;
+    if (back) { const now = new Date(); $('backDate').max = ymd(new Date(now.getTime() - 86400000)); $('backDate').min = ymd(new Date(now.getTime() - 60 * 86400000)); }
+    $('backWarn').hidden = !back;
+    $('backWarn').textContent = !back ? '' : $('backDate').value ? 'Lançando venda do dia ' + dmyS($('backDate').value) + ': entra no faturamento e na comissão desse dia, baixa o estoque, fica fora do caixa de hoje, sem pinpad e sem cashback.' : 'Escolha a data em que a venda aconteceu (está na boleta).';
+    if (back) { $('cbUse').checked = false; $('offline').checked = false; }
+    $('cbUseRow').hidden = back || !cbAvailable();
+    $('offRow').hidden = method === 'cash' || back; if (method === 'cash') $('offline').checked = false;
     $('offAuth').hidden = !$('offline').checked;
     $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)'
       : method === 'cash' ? 'Dinheiro: não usa o pinpad'
@@ -403,7 +419,9 @@
     $('total').textContent = brl(total());
     const earn = customer && cfg.cashback_enabled ? Math.round(total() * (Number(cfg.cashback_percent) || 0) / 100) : 0;
     $('st3t').textContent = earn ? 'Cashback de ' + brl(earn) + ' no WhatsApp' : 'Cashback pelo WhatsApp';
-    $('finish').disabled = !items.length || !seller || total() < 1;
+    $('finish').disabled = !items.length || !seller || total() < 1 || ($('backOn').checked && !$('backDate').value);
+    $('finish').textContent = backOn() ? 'Lançar venda do dia ' + dmyS($('backDate').value) : 'Finalizar venda';
+    if (back) $('st1').querySelector('small').textContent = 'Venda de outro dia: não passa pelo pinpad nem pelo caixa de hoje';
   }
 
   // ---------- Peças: leitor ou digitação ----------
@@ -477,7 +495,7 @@
   }
   function cfFill(p, c = {}) { CF.forEach(([k]) => { $(p + '_' + k).value = c[k] || ''; }); $(p + '_offers_opt_out').checked = !!c.offers_opt_out; }
   $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('nc_name').focus(); };
-  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
+  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('backOn').onchange = draw; $('backDate').onchange = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
   // ---------- PIN ----------
@@ -509,6 +527,7 @@
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
     if (method === 'credit' && Number($('inst').value) > 1) body.installments = Number($('inst').value);
+    if (backOn()) { body.sold_on = $('backDate').value; delete body.cashback_use_cents; }
     if ($('offline').checked && method !== 'cash') { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
     else if (!$('newCust').hidden && $('nc_name').value.trim()) {
@@ -516,7 +535,7 @@
       body.new_customer = f.data;
     }
     else body.anonymous = true;
-    if (tef && method !== 'cash' && !body.offline_payment) {
+    if (tef && method !== 'cash' && !body.offline_payment && !body.sold_on) {
       // Cobra no pinpad antes de gravar. Cobrança já aprovada (venda não gravou antes) é reaproveitada, nunca cobrada de novo.
       if (paidTx && (paidTx.method !== method || paidTx.amount_cents !== total())) {
         $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Já foi cobrado ' + brl(paidTx.amount_cents) + ' no pinpad e a venda mudou. Estorne essa cobrança em "Pendências do pinpad" e cobre de novo.';
@@ -554,7 +573,7 @@
           + (r.sale.receipt_code ? ' Seu comprovante e a garantia da joia: ' + location.origin + '/g/' + r.sale.receipt_code : '');
         wa = 'https://wa.me/' + (ph.length <= 11 ? '55' + ph : ph) + '?text=' + encodeURIComponent(text);
       }
-      $('doneBox').innerHTML = '<strong>Venda nº ' + r.sale.sale_number + ' registrada · ' + brl(r.sale.total_cents) + '</strong><div class="sub" style="margin:2px 0 0">Vendida por ' + safe(seller.name.split(' ')[0]) + (earned ? ' · cashback de ' + brl(earned) : '') + '</div>'
+      $('doneBox').innerHTML = '<strong>Venda nº ' + r.sale.sale_number + (body.sold_on ? ' lançada no dia ' + dmyS(body.sold_on) : ' registrada') + ' · ' + brl(r.sale.total_cents) + '</strong><div class="sub" style="margin:2px 0 0">Vendida por ' + safe(seller.name.split(' ')[0]) + (earned ? ' · cashback de ' + brl(earned) : '') + '</div>'
         + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + '<button type="button" id="printRc">Imprimir comprovante</button>' + (soldTx ? '<button type="button" id="tefRcBtn">Comprovante do cartão</button>' : '') + '<button type="button" id="newSale">Nova venda</button>';
       $('doneBox').hidden = false; $('st1').classList.add('done');
       if (wa && c?.id) {
@@ -654,7 +673,16 @@
     $(el).innerHTML = sellers.map(s => '<button type="button" data-w="' + safe(s.id) + '">' + safe(s.name.split(' ')[0]) + '</button>').join('');
     $(el).querySelectorAll('[data-w]').forEach(b => b.onclick = () => onPick(sellers.find(s => s.id === b.dataset.w)));
   };
+  async function loadBack() {
+    let d; try { d = await api('/store/sales/backdated'); } catch { return; }
+    $('backCard').hidden = !d.items.length;
+    $('tBack').innerHTML = d.items.map(x => '<tr' + (x.canceled_at ? ' class="canceled"' : '') + '><td>' + x.sale_number + '</td><td>' + dmyS(x.sold_on) + '</td><td>' + safe((x.seller_name || '').split(' ')[0]) + '</td><td>' + safe(x.customer_name || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + safe(METHOD[x.payment_method] || x.payment_method) + (x.installments > 1 ? ' ' + x.installments + 'x' : '') + '</td><td>'
+      + '<button type="button" class="linkbtn" data-pr="' + safe(x.id) + '" style="margin-right:8px">Imprimir</button>' + (x.canceled_at ? '<span class="sub">cancelada</span>' : '<button type="button" class="cancelbtn" data-cb="' + safe(x.id) + '">Cancelar</button>') + '</td></tr>').join('');
+    $('tBack').querySelectorAll('[data-pr]').forEach(b => b.onclick = () => printSale(b.dataset.pr));
+    $('tBack').querySelectorAll('[data-cb]').forEach(b => b.onclick = () => { const x = d.items.find(i => i.id === b.dataset.cb); cancelSale({ ...x, sale_number: x.sale_number + ' (dia ' + dmyS(x.sold_on) + ')' }); });
+  }
   async function loadSales() {
+    loadBack();
     const d = await api('/store/kiosk/cash-today');
     if (!d.session) { $('salesSub').textContent = 'O caixa está fechado.'; $('tSales').innerHTML = ''; $('tMoves').innerHTML = ''; $('expCash').textContent = '—'; return; }
     $('salesSub').textContent = 'Caixa aberto às ' + hhmm(d.session.opened_at).replace(':', 'h') + ' · ' + d.sales.filter(x => !x.canceled_at).length + ' vendas';

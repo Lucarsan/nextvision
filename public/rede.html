@@ -329,6 +329,12 @@
       h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>'
         + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + (c.sale_number ? ' · venda nº ' + c.sale_number : '') + ' · ' + brl(c.total_cents) + ' · cancelada ' + safe(c.at) + (c.canceled_by ? ' por ' + safe(c.canceled_by) : '') + (c.seller && c.seller !== c.canceled_by ? ' (vendida por ' + safe(c.seller) + ')' : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
     }
+    const back = only(data.alerts.backdated || []);
+    if (back.length) {
+      const ok = back.filter(b => !b.canceled);
+      h += '<div class="alert yellow"><b>' + warn + plural(back.length, 'venda de outro dia lançada', 'vendas de outro dia lançadas') + ' ' + RANGES[range].word + '</b><p>' + brl(ok.reduce((a, b) => a + b.total_cents, 0)) + ' no total (boletas do período sem sistema). Entram no faturamento do dia da venda, fora do caixa.</p>'
+        + '<details><summary>Ver lançamentos</summary><ul>' + back.map(b => '<li>' + safe(b.unit) + ' · venda nº ' + b.sale_number + ' do dia <b>' + safe(b.sold_on) + '</b> · ' + brl(b.total_cents) + (b.seller ? ' · ' + safe(b.seller) : '') + ' · lançada ' + safe(b.launched_at) + (b.launched_by && b.launched_by !== b.seller ? ' por ' + safe(b.launched_by) : '') + (b.canceled ? ' · <b>cancelada</b>' : '') + '</li>').join('') + '</ul></details></div>';
+    }
     const disc = only(data.alerts.discounted || []);
     if (disc.length) {
       const dt = disc.reduce((a, d) => a + d.discount_cents, 0);

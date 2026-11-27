@@ -100,6 +100,24 @@ export const tefForSale = t => ({
 
 const PUBLIC = 'id,sale_id,mode,method,amount_cents,installments,status,provider_tx,auth_code,brand_name,card_mask,e2e_id,error_code,message,created_at,finished_at,reversed_at,resolved_note';
 
+// Comprovante a partir da cobrança gravada (a resposta do Slim fica em response; os dados vêm dentro de "receipt"/"card").
+const READING = { EMVProximityReader: 'Aproximação (NFC)', EMVChip: 'Chip', EMV: 'Chip', MagneticStripe: 'Tarja magnética' };
+export function receiptOf(t) {
+  const body = t.response || {}, rc = pick(body, 'receipt') || {}, cd = pick(body, 'card') || {};
+  const get = (...k) => { const x = pick(rc, ...k); return x !== undefined && x !== null && x !== '' ? x : pick(body, ...k); };
+  const reading = str(get('cardReadingType'), 40);
+  return {
+    id: t.id, mode: t.mode, method: t.method, status: t.status, amount_cents: t.amount_cents, installments: t.installments,
+    sale_number: t.sale_number ?? null, merchant_name: t.merchant_name || null, merchant_document: t.merchant_document || t.unit_cnpj || null,
+    merchant_address: str(get('merchantAddress'), 200), stone_code: t.stone_code || str(get('stoneCode'), 20),
+    brand_name: t.brand_name || str(get('brandName'), 60), card_mask: t.card_mask || str(pick(cd, 'maskedPan'), 30),
+    reading: reading ? (READING[reading] || (/proxim|nfc|contactless/i.test(reading) ? 'Aproximação (NFC)' : /chip|emv/i.test(reading) ? 'Chip' : reading)) : null,
+    transaction_datetime: str(get('transactionDateTime'), 40), auth_code: t.auth_code, atk: t.provider_tx, itk: str(get('initiatorTransactionKey'), 80),
+    e2e_id: t.e2e_id, terminal_serial: t.terminal_serial, message: t.message, error_code: t.error_code,
+    client_receipt: t.client_receipt, created_at: t.created_at, finished_at: t.finished_at, reversed_at: t.reversed_at,
+  };
+}
+
 export function registerTef(app, { q, auth, roles, route, bad, valid, audit, uuid }) {
   const tid = req => req.user.tenant_id;
   const salesOn = route(async (req, res, next) => {
@@ -211,6 +229,23 @@ export function registerTef(app, { q, auth, roles, route, bad, valid, audit, uui
         (sale_id IS NULL OR EXISTS(SELECT 1 FROM sales s WHERE s.id=sale_id AND s.canceled_at IS NOT NULL)))) RETURNING ${PUBLIC}`, [req.params.id, tid(req), v.note]);
     if (!r.rowCount) return bad(res, 409, 'Esta cobrança não tem pendência');
     await audit(req, 'tef_resolved', 'tef_transaction', req.params.id); res.json(r.rows[0]);
+  }));
+
+  // Cobranças no pinpad de hoje (hora de Fortaleza), para conferir e abrir o comprovante.
+  app.get('/api/store/tef/today', ...staff, route(async (req, res) => {
+    const r = await q(`SELECT ${PUBLIC.split(',').map(c => 't.' + c).join(',')},s.sale_number FROM tef_transactions t LEFT JOIN sales s ON s.id=t.sale_id
+      WHERE t.tenant_id=$1 AND t.created_at >= date_trunc('day', now() AT TIME ZONE 'America/Fortaleza') AT TIME ZONE 'America/Fortaleza'
+      ORDER BY t.created_at DESC LIMIT 200`, [tid(req)]);
+    res.set('Cache-Control', 'no-store').json({ items: r.rows });
+  }));
+
+  // Comprovante da cobrança no pinpad (cartão ou Pix), montado com os dados que a Stone devolveu.
+  app.get('/api/store/tef/transactions/:id/receipt', ...staff, route(async (req, res) => {
+    if (!id(req, res)) return;
+    const t = (await q(`SELECT t.*,s.sale_number,coalesce(tn.legal_name,tn.name) merchant_name,tn.cnpj unit_cnpj FROM tef_transactions t
+      LEFT JOIN sales s ON s.id=t.sale_id JOIN tenants tn ON tn.id=t.tenant_id WHERE t.id=$1 AND t.tenant_id=$2`, [req.params.id, tid(req)])).rows[0];
+    if (!t) return bad(res, 404, 'Cobrança não encontrada');
+    res.set('Cache-Control', 'no-store').json(receiptOf(t));
   }));
 
   // Central: TEF por unidade.

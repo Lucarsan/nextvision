@@ -15,6 +15,20 @@ test('cartão aprovado: ATK, autorização, bandeira (tBand) e CNPJ da loja', ()
   assert.equal(r.merchant_document, '11999222000199'); assert.equal(r.client_receipt, 'VIA CLIENTE');
 });
 
+// Resposta real do Slim em produção (27/11/2026, débito R$ 1,00): dados dentro de "receipt" e "card", "brandName" do topo genérico.
+const CARD_REAL = { brandName: 'MasterCard',
+  card: { type: 5, brandId: 4, brandName: 'MASTER DEBITO', maskedPan: '544559*********4685', maskedPrimaryAccountNumber: '544559*********4685' },
+  receipt: { amount: 1, brandName: 'MASTER DEBITO', stoneCode: '116520620', messageDisplay: 'Aprovado', merchantDocument: null, productBrandCard: 'MAESTRO         ',
+    authorisationCode: '025605', transactionType: 1, acquirerTransactionKey: '43163894321099', initiatorTransactionKey: '717642271120261238153988',
+    maskedPrimaryAccountNumber: '************4685' } };
+
+test('cartão aprovado no formato real do Slim (dados em receipt/card)', () => {
+  const r = interpretSlim('card', 200, CARD_REAL);
+  assert.equal(r.status, 'approved'); assert.equal(r.provider_tx, '43163894321099'); assert.equal(r.auth_code, '025605');
+  assert.equal(r.brand_name, 'MASTER DEBITO'); assert.equal(r.brand_code, '02'); assert.equal(r.card_mask, '544559*********4685');
+  assert.equal(r.stone_code, '116520620'); assert.equal(r.merchant_document, null); assert.equal(r.message, 'Aprovado');
+});
+
 test('cartão: recusa, timeout, pinpad fora e sem ativação', () => {
   assert.deepEqual(interpretSlim('card', 400, { responseCode: 'DECL', responseReason: '1016', messageDisplay: 'Não autorizada' }), { status: 'declined', error_code: 'DECL', message: 'Não autorizada' });
   assert.equal(interpretSlim('card', 400, { responseCode: 'TECH', responseReason: '9109', messageDisplay: 'Erro no sistema' }).status, 'error');

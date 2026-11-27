@@ -50,14 +50,21 @@ export function interpretSlim(kind, http, body) {
   const display = str(pick(body, 'messageDisplay'), 300);
   if (kind === 'lost') return { status: 'unknown', message: 'Sem resposta do pinpad. Confira no app/extrato da Stone antes de cobrar de novo.' };
   if (kind === 'card') {
-    if (http === 200 && pick(body, 'acquirerTransactionKey')) {
-      const brand = str(pick(body, 'brandName'), 60);
+    // O Slim real (produção, 27/11/2026) devolve os dados dentro de "receipt" e "card"; a documentação mostra tudo no topo.
+    // Lê o "receipt" primeiro e cai para o topo.
+    const rc = pick(body, 'receipt'), cd = pick(body, 'card');
+    const get = (...k) => { const x = pick(rc, ...k); return x !== undefined && x !== null && x !== '' ? x : pick(body, ...k); };
+    const atk = get('acquirerTransactionKey');
+    if (http === 200 && atk) {
+      const brand = str(get('brandName'), 60) || str(pick(cd, 'brandName'), 60);
       return {
-        status: 'approved', provider_tx: str(pick(body, 'acquirerTransactionKey'), 80), auth_code: str(pick(body, 'authorisationCode', 'authorizationCode'), 80),
-        brand_name: brand, brand_code: brandCode(brand, pick(body, 'productBrandCard')), card_mask: str(pick(body, 'maskedPrimaryAccountNumber'), 30),
-        merchant_document: digits(pick(body, 'merchantDocument')).slice(0, 20) || null, stone_code: str(pick(body, 'stoneCode'), 20),
-        client_receipt: str(pick(body, 'clientVia'), 8000), merchant_receipt: str(pick(body, 'merchantVia'), 8000),
-        message: display || 'Aprovado',
+        status: 'approved', provider_tx: str(atk, 80), auth_code: str(get('authorisationCode', 'authorizationCode'), 80),
+        brand_name: brand, brand_code: brandCode(brand, get('productBrandCard')),
+        // O estorno confere o cartão pela máscara: guarda a mais completa (com os 6 primeiros dígitos) quando vier.
+        card_mask: str(pick(cd, 'maskedPan', 'maskedPrimaryAccountNumber'), 30) || str(get('maskedPrimaryAccountNumber'), 30),
+        merchant_document: digits(get('merchantDocument')).slice(0, 20) || null, stone_code: str(get('stoneCode'), 20),
+        client_receipt: str(get('clientVia'), 8000), merchant_receipt: str(get('merchantVia'), 8000),
+        message: str(get('messageDisplay'), 300) || display || 'Aprovado',
       };
     }
     // DECL = recusada pelo emissor/Stone. Demais (TECH, N404 pinpad, N401 vencido, G002 sem ativação) = erro.

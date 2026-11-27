@@ -1090,6 +1090,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Pinpad fora do ar: pago na maquininha avulsa; fica pendente de conciliação (ECONF). offline_auth = autorização do comprovante.
       offline_payment: z.boolean().optional(),
       offline_auth: z.string().trim().max(40).optional(),
+      // Parcelas no crédito (pinpad ou maquininha avulsa). Só vale quando há crédito na venda.
+      installments: z.number().int().min(1).max(12).optional(),
       // TEF Stone (AutoTEF): cobranças aprovadas no pinpad (registradas antes em /api/store/tef/transactions).
       tef_transaction_ids: z.array(uuid).min(1).max(5).optional(),
       payment_method: METHOD.optional(),
@@ -1494,6 +1496,10 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         sale.tef = tefRows.map(tefForSale);
         await c.query('UPDATE sales SET tef=$2 WHERE id=$1', [sale.id, JSON.stringify(sale.tef)]);
       }
+      // Parcelas: do pinpad quando houver cobrança de crédito; senão, o que a vendedora escolheu (maquininha avulsa).
+      const hasCredit = v.payments ? v.payments.some(p => p.method === 'credit') : v.payment_method === 'credit';
+      const inst = hasCredit ? Math.max(1, ...tefRows.filter(t => t.method === 'credit').map(t => Number(t.installments) || 1), v.installments || 1) : 1;
+      if (inst > 1) { await c.query('UPDATE sales SET installments=$2 WHERE id=$1', [sale.id, inst]); sale.installments = inst; }
       if (v.offline_payment && (v.payments ? v.payments.some(p => p.method !== 'cash') : v.payment_method !== 'cash')) {
         await c.query('UPDATE sales SET offline_payment=true,offline_auth=$2 WHERE id=$1', [sale.id, v.offline_auth || null]); sale.offline_payment = true; sale.offline_auth = v.offline_auth || null;
       }

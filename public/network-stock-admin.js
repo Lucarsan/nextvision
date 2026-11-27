@@ -11,7 +11,7 @@
   const when = iso => new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Fortaleza', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const msg = (el, text, err) => { if (!el) return; el.textContent = text || ''; el.style.color = err ? 'var(--red)' : 'var(--green)'; };
   const card = (title, hint, body) => '<section class="card block nsCard"><header class="bh nsh"><h2>' + title + '</h2><span class="hint">' + (hint || '') + '</span></header><div class="bb">' + body + '</div></section>';
-  const KIND = { entry: 'Entrada', sale: 'Venda', cancel: 'Venda cancelada', adjust: 'Ajuste', edit: 'Correção no cadastro', restore: 'Reativada', delete: 'Excluída', transfer_out: 'Transferência enviada', transfer_in: 'Transferência recebida', count: 'Contagem' };
+  const KIND = { entry: 'Entrada', sale: 'Venda', cancel: 'Venda cancelada', adjust: 'Ajuste', edit: 'Correção no cadastro', restore: 'Reativada', delete: 'Excluída', transfer_out: 'Transferência enviada', transfer_in: 'Transferência recebida', count: 'Contagem', return: 'Troca/devolução (voltou)' };
   const LAB_KEY = 'fp_net_label_choice';
   const labChoice = () => { try { return localStorage.getItem(LAB_KEY) || 'none'; } catch { return 'none'; } };
   const labHtml = name => '<label>Etiquetas<select id="' + name + '">' + [['none', 'Não imprimir'], ['one', '1 etiqueta só'], ['each', '1 por unidade']].map(([v, t]) => '<option value="' + v + '"' + (labChoice() === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select></label>';

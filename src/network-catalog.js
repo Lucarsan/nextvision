@@ -205,7 +205,7 @@ export function registerNetworkCatalog(app, { q, db, auth, roles, route, bad, va
   }));
 
   // ---------- Histórico: toda mudança de estoque das unidades da pessoa ----------
-  const LOG_KINDS = ['entry', 'sale', 'cancel', 'adjust', 'edit', 'restore', 'delete', 'transfer_out', 'transfer_in', 'count'];
+  const LOG_KINDS = ['entry', 'sale', 'cancel', 'adjust', 'edit', 'restore', 'delete', 'transfer_out', 'transfer_in', 'count', 'return'];
   app.get('/api/network/stock/log', ...network, route(async (req, res) => {
     const units = await myUnits(q, req), uid = String(req.query.unit_id || ''), kind = String(req.query.kind || ''), term = String(req.query.q || '').trim().slice(0, 80);
     if (uid && !units.some(u => u.id === uid)) return bad(res, 403, 'Unidade fora do seu acesso.');

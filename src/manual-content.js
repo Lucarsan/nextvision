@@ -115,14 +115,15 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 'v-garantia', group: 'caixa', version: 1, audiences: ALL, title: 'Garantia, troca e devolução',
+    key: 'v-garantia', group: 'caixa', version: 2, audiences: ALL, title: 'Garantia, troca e devolução',
     summary: 'Encontrar a venda pelo comprovante, conferir a garantia e registrar o atendimento.',
     blocks: [
       { h: 'Encontrar a venda', steps: ['Toque em "Garantia" no menu.', 'Digite o código do comprovante (8 letras e números) que a cliente recebeu no WhatsApp.', 'Toque em "Buscar". Vale para venda de qualquer unidade.'], img: 'v-garantia.png', cap: 'Garantia: busca pelo código do comprovante' },
       { p: 'Aparecem a venda, as peças, a garantia de cada joia (em verde, até quando vale; em cinza, encerrada) e os atendimentos já registrados.' },
       { h: 'Registrar um atendimento', steps: ['Em "Registrar atendimento de garantia", escolha o tipo: Troca, Conserto, Devolução ou Outro.', 'Descreva o que aconteceu (ex.: "banho escureceu").', 'Em "Quem está atendendo?", toque no seu nome e digite o PIN.', 'Aparece "Atendimento registrado. O prazo para resolver é de 30 dias."'] },
-      { h: 'Crédito para a cliente (troca ou devolução)', p: 'Em um atendimento de troca ou devolução em aberto, aparece "Gerar crédito para a cliente". O valor vira saldo da cliente (como cashback) e vale em qualquer unidade.', steps: ['Toque em "Gerar crédito para a cliente".', 'Confirme o valor.', 'Um supervisor, gerente ou dono digita o PIN dele para liberar.'] },
-      { warn: 'Crédito só com o PIN do supervisor ou da gestão. Se a venda não tem cliente, o supervisor precisa incluir a cliente na venda pelo painel da rede antes.' }
+      { h: 'Troca ou devolução (crédito de troca)', steps: ['Busque a venda pelo código do comprovante e registre o atendimento como Troca ou Devolução (seu PIN).', 'Toque em "Gerar crédito de troca".', 'Marque quantas peças voltaram: elas entram no estoque desta unidade na hora.', 'Confira o valor do crédito (o sistema sugere o que a cliente pagou pelas peças) e confirme com o SEU PIN.'] },
+      { p: 'O crédito de troca é separado do cashback e vale em qualquer unidade (validade definida pela gestão, padrão 180 dias). Na nova venda, escolha a cliente: aparece "Crédito de troca" e a opção "Usar o crédito de troca nesta compra". Ele pode pagar a compra inteira; se a peça nova for mais cara, a cliente paga a diferença na forma que quiser. Toda troca aparece para a supervisão no painel da rede.' },
+      { warn: 'A venda precisa ter cliente. Se foi feita sem cliente, o supervisor inclui a cliente na venda pelo painel da rede antes de gerar o crédito.' }
     ]
   },
   {
@@ -180,11 +181,11 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 's-autorizar', group: 'rede', version: 2, audiences: LEAD, title: 'Autorizações no quiosque e PIN das vendedoras',
+    key: 's-autorizar', group: 'rede', version: 3, audiences: LEAD, title: 'Autorizações no quiosque e PIN das vendedoras',
     summary: 'O que só o supervisor libera com o PIN dele e como gerar PIN novo para a vendedora.',
     blocks: [
       { h: 'O seu PIN', p: 'Além da senha do painel, o supervisor tem um PIN de 4 números para autorizar no quiosque. Quem gera o PIN do supervisor é a gestão (Pessoas e acessos → "Novo PIN"). Ainda não tem ou esqueceu? Peça à gestão.' },
-      { h: 'O que pede o PIN do supervisor', list: ['Cancelar venda: a vendedora cancela sozinha, com o PIN dela. O supervisor só digita o PIN quando quem vendeu não está na unidade. Todo cancelamento aparece no painel da rede ("vendas canceladas"), com motivo e quem cancelou; os descontos aparecem em "vendas com desconto".', 'Crédito de troca ou devolução na Garantia.'] },
+      { h: 'O que pede o PIN do supervisor', list: ['Cancelar venda: a vendedora cancela sozinha, com o PIN dela. O supervisor só digita o PIN quando quem vendeu não está na unidade. Todo cancelamento aparece no painel da rede ("vendas canceladas"), com motivo e quem cancelou; os descontos aparecem em "vendas com desconto".', 'Crédito de troca: a vendedora gera com o PIN dela; as peças que voltam entram no estoque. As trocas aparecem no painel da rede ("trocas ou devoluções").'] },
       { warn: 'Nunca passe o seu PIN para a vendedora "adiantar". Cada autorização fica registrada no seu nome.' },
       { h: 'PIN novo para a vendedora', steps: ['Abra "Pessoas e acessos".', 'Na linha da vendedora, toque em "Novo PIN" e confirme.', 'Passe o PIN temporário para ela pessoalmente.', 'Peça para ela trocar em "Trocar meu PIN" no quiosque.'], img: 's-pessoas.png', cap: 'Pessoas e acessos' },
       { p: 'O supervisor vê e gera PIN só para as vendedoras das unidades dele. Cadastrar ou desativar pessoas é com a gestão.' }

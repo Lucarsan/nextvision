@@ -126,14 +126,15 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 'v-estoque', group: 'caixa', version: 1, audiences: ALL, title: 'Estoque no quiosque',
+    key: 'v-estoque', group: 'caixa', version: 2, audiences: ALL, title: 'Estoque no quiosque',
     summary: 'Consultar peças na rede, receber e enviar transferências e fazer a contagem da unidade.',
     blocks: [
       { h: 'Consultar', p: 'Na aba "Consultar", filtre por código, nome ou família. A tabela mostra quantas peças há em cada unidade (em verde). Use "Acabou aqui, tem em outra" para achar a peça em outra unidade quando a cliente pedir.', img: 'v-estoque.png', cap: 'Estoque → Consultar' },
       { h: 'Receber uma transferência', steps: ['Abra a aba "Receber" (o número mostra quantas transferências estão chegando).', 'Abra a transferência e bipe as peças que chegaram.', 'Confirme com o seu PIN.'] },
       { warn: 'Chegou quantidade diferente do que foi enviado? O sistema avisa e pede confirmação. Confirme com a quantidade REAL que chegou: a diferença vai para o supervisor conferir.' },
       { h: 'Enviar para outra unidade', steps: ['Abra a aba "Enviar".', 'Escolha a unidade de destino.', 'Bipe as peças que vão.', 'Se quiser, escreva uma observação.', 'Em "Quem está enviando?", toque no seu nome e digite o PIN. O estoque sai da sua unidade na hora.'] },
-      { h: 'Contagem', steps: ['Abra a aba "Contagem".', 'Bipe cada peça da unidade, uma vez por peça. A contagem fica guardada neste computador até ser aplicada.', 'Confira a tabela: contadas x no sistema.', 'Em "Quem contou?", toque no seu nome e digite o PIN para aplicar.'] },
+      { h: 'Contagem (inventário)', steps: ['Abra a aba "Contagem". A barra mostra quantas peças da unidade já foram contadas e quantas faltam.', 'Bipe cada peça. Para várias peças iguais (ex.: 10 alianças do mesmo código), digite 10 em "Qtd" e bipe UMA delas.', 'Errou? Corrija o número na linha da peça ou toque em "−".', 'Abra "Ainda não contadas" para ver o que falta. Peça que não bipa: digite a quantidade e Enter. Peça que acabou: digite 0.', 'Código que o sistema não conhece aparece em vermelho: separe a peça para a supervisora cadastrar.', 'No fim, em "Quem contou?", toque no seu nome e digite o PIN para aplicar.'] },
+      { p: 'A contagem fica guardada no sistema: dá para parar e continuar no outro dia, ou contar em dois computadores da unidade ao mesmo tempo. Pode vender normalmente enquanto conta: a peça vendida depois de bipada é descontada quando a contagem for aplicada.' },
       { warn: 'A opção "Peças não contadas ficam com estoque zero" é para a contagem COMPLETA da unidade. Se você contou só uma parte, não marque: as outras peças ficariam zeradas.' }
     ]
   },

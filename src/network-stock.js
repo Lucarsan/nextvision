@@ -39,14 +39,60 @@ export function registerNetworkStock(app, { q, db, auth, roles, route, bad, vali
     res.set('Cache-Control', 'no-store').json(r.rows);
   }));
 
+  // Inventário em andamento (rascunho no servidor): qualquer computador da unidade soma na mesma contagem.
+  const draftView = async tid => {
+    const items = (await q(`SELECT d.product_id id, p.name, p.barcode, p.code, p.stock_qty stock, d.qty, d.updated_at
+      FROM stock_count_drafts d JOIN products p ON p.id = d.product_id WHERE d.tenant_id = $1 ORDER BY d.updated_at DESC`, [tid])).rows;
+    const total = (await q("SELECT count(*)::int n FROM products WHERE tenant_id = $1 AND active AND kind = 'product'", [tid])).rows[0].n;
+    return { items, total, counted: items.length, units: items.reduce((a, x) => a + x.qty, 0) };
+  };
+  app.get('/api/store/stock/count/draft', ...staff, route(async (req, res) => { res.set('Cache-Control', 'no-store').json(await draftView(req.user.tenant_id)); }));
+  // add: soma (bipagem, "−"); set: digita a quantidade. Com add, a peça que volta a 0 sai da contagem.
+  app.post('/api/store/stock/count/draft', ...staff, route(async (req, res) => {
+    const v = valid(z.object({ product_id: uuid, add: z.number().int().min(-9999).max(9999).optional(), set: z.number().int().min(0).max(99999).optional() }).strict()
+      .refine(x => (x.add === undefined) !== (x.set === undefined), 'Informe add ou set'), req, res); if (!v) return;
+    const tid = req.user.tenant_id;
+    const p = (await q("SELECT id FROM products WHERE id = $1 AND tenant_id = $2 AND active AND kind = 'product'", [v.product_id, tid])).rows[0];
+    if (!p) return bad(res, 404, 'Peça não encontrada nesta unidade');
+    const r = (await q(`INSERT INTO stock_count_drafts(tenant_id, product_id, qty, updated_by) VALUES($1, $2, LEAST(99999, GREATEST(0, coalesce($4::int, $3::int))), $5)
+      ON CONFLICT (tenant_id, product_id) DO UPDATE SET qty = LEAST(99999, GREATEST(0, coalesce($4::int, stock_count_drafts.qty + $3::int))), updated_at = now(), updated_by = $5
+      RETURNING qty`, [tid, v.product_id, v.add ?? 0, v.set ?? null, req.user.id])).rows[0];
+    if (v.add !== undefined && r.qty === 0) await q('DELETE FROM stock_count_drafts WHERE tenant_id = $1 AND product_id = $2', [tid, v.product_id]);
+    res.json({ product_id: v.product_id, qty: r.qty, removed: v.add !== undefined && r.qty === 0 });
+  }));
+  app.delete('/api/store/stock/count/draft', ...staff, route(async (req, res) => {
+    const r = await q('DELETE FROM stock_count_drafts WHERE tenant_id = $1', [req.user.tenant_id]);
+    await audit(req, 'stock_count_reset', 'tenant', req.user.tenant_id); res.json({ removed: r.rowCount });
+  }));
+  // Peças da unidade que ainda não entraram na contagem (busca por nome, código ou código de barras).
+  app.get('/api/store/stock/count/missing', ...staff, route(async (req, res) => {
+    const term = String(req.query.q || '').trim().slice(0, 80), off = Math.max(0, Math.min(100000, Number(req.query.offset) || 0));
+    const like = '%' + term.replace(/[\\%_]/g, m => '\\' + m) + '%';
+    const where = `p.tenant_id = $1 AND p.active AND p.kind = 'product' AND NOT EXISTS (SELECT 1 FROM stock_count_drafts d WHERE d.tenant_id = $1 AND d.product_id = p.id)
+      AND ($2 = '' OR p.name ILIKE $3 OR p.code ILIKE $3 OR p.barcode ILIKE $3)`;
+    const total = (await q(`SELECT count(*)::int n FROM products p WHERE ${where}`, [req.user.tenant_id, term, like])).rows[0].n;
+    const items = (await q(`SELECT p.id, p.name, p.barcode, p.code, p.stock_qty stock FROM products p WHERE ${where} ORDER BY p.name, p.code LIMIT 100 OFFSET $4`, [req.user.tenant_id, term, like, off])).rows;
+    res.set('Cache-Control', 'no-store').json({ items, total, offset: off });
+  }));
+
   // Contagem: define o estoque das peças contadas; com zero_others, as não contadas ficam com 0.
+  // from_draft: aplica o inventário em andamento; o que vendeu, cancelou, entrou ou foi transferido depois
+  // da primeira bipagem da peça é descontado do contado (a peça bipada e vendida já não está na loja).
   app.post('/api/store/stock/count', ...staff, route(async (req, res) => {
-    const v = valid(z.object({ items: z.array(z.object({ product_id: uuid, quantity: z.number().int().min(0).max(99999) }).strict()).min(1).max(20000), zero_others: z.boolean().default(false), seller_id: uuid.optional(), seller_pin: PIN.optional() }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ items: z.array(z.object({ product_id: uuid, quantity: z.number().int().min(0).max(99999) }).strict()).min(1).max(20000).optional(), from_draft: z.boolean().default(false), zero_others: z.boolean().default(false), seller_id: uuid.optional(), seller_pin: PIN.optional() }).strict()
+      .refine(x => x.from_draft || x.items, 'Nenhuma peça contada'), req, res); if (!v) return;
     const u = await who(req, v); if (!u) return bad(res, 401, 'PIN incorreto');
     const tid = req.user.tenant_id, c = await db.connect();
     try {
       await c.query('BEGIN');
-      const ids = v.items.map(i => i.product_id), qty = v.items.map(i => i.quantity);
+      let ids, qty, adjusted = 0;
+      if (v.from_draft) {
+        const d = (await c.query(`SELECT d.product_id, d.qty, d.qty + coalesce((SELECT sum(m.quantity) FROM stock_movements m WHERE m.tenant_id = d.tenant_id AND m.product_id = d.product_id
+            AND m.created_at > d.first_at AND m.kind IN ('sale', 'cancel', 'entry', 'transfer_out', 'transfer_in')), 0)::int q
+          FROM stock_count_drafts d WHERE d.tenant_id = $1 FOR UPDATE`, [tid])).rows;
+        if (!d.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Nenhuma peça contada'); }
+        ids = d.map(x => x.product_id); qty = d.map(x => Math.min(99999, Math.max(0, x.q))); adjusted = d.filter(x => x.q !== x.qty).length;
+      } else { ids = v.items.map(i => i.product_id); qty = v.items.map(i => i.quantity); }
       const ok = (await c.query('SELECT count(*)::int n FROM products WHERE tenant_id = $1 AND id = ANY($2)', [tid, ids])).rows[0].n;
       if (ok !== new Set(ids).size) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça de outra unidade na contagem'); }
       await c.query(`INSERT INTO stock_movements(tenant_id, product_id, kind, quantity, created_by, stock_before, stock_after, note)
@@ -59,9 +105,10 @@ export function registerNetworkStock(app, { q, db, auth, roles, route, bad, vali
           SELECT $1, id, 'count', -stock_qty, $3, stock_qty, 0, 'Contagem: não encontrada' FROM products WHERE tenant_id = $1 AND active AND kind = 'product' AND id <> ALL($2) AND coalesce(stock_qty, 0) <> 0`, [tid, ids, u.id]);
         zeroed = (await c.query("UPDATE products SET stock_qty = 0, updated_at = now() WHERE tenant_id = $1 AND active AND kind = 'product' AND id <> ALL($2) AND coalesce(stock_qty, 0) <> 0", [tid, ids])).rowCount;
       }
+      if (v.from_draft) await c.query('DELETE FROM stock_count_drafts WHERE tenant_id = $1 AND product_id = ANY($2)', [tid, ids]);
       await c.query('COMMIT');
       await audit(req, 'stock_count', 'tenant', tid);
-      res.json({ counted: set.rowCount, units: qty.reduce((a, b) => a + b, 0), zeroed });
+      res.json({ counted: set.rowCount, units: qty.reduce((a, b) => a + b, 0), zeroed, adjusted });
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }));
 

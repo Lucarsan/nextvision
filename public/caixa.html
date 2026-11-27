@@ -90,7 +90,10 @@
   .tefpend{border:1px solid #e6c9c2;background:#fff7f5;border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:13px}
   .tefpend p{margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .tefpend button{border:1px solid #d9c6a6;background:#fff;border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
-  #stTabs .chip{border:0;cursor:pointer}
+  #stTabs .chip,#ctTabs .chip{border:0;cursor:pointer}
+  .ctbar{display:flex;gap:8px;align-items:center}.ctbar #ctScan{flex:1}.ctq{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}.ctq input{width:80px}
+  .ctprog{height:6px;background:#efede8;border-radius:3px;margin-top:10px;overflow:hidden}.ctprog div{height:100%;width:0;background:var(--green);transition:width .3s}
+  input.cti{width:70px;text-align:right;padding:4px 6px}
   .ncgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.ncgrid .full{grid-column:1/-1}
   .ncgrid label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
   .ncgrid label.chk{flex-direction:row;align-items:center;gap:6px;font-size:12px}
@@ -253,12 +256,19 @@
         <input class="field" id="sdNote" maxlength="200" placeholder="Observação (opcional)" style="margin-top:10px">
         <p class="sub" style="margin:10px 0 4px">Quem está enviando?</p><div class="people" id="sdWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg" id="sdMsg"></p></div>
       <div class="card" id="tCount" hidden>
-        <p class="sub" style="margin:0 0 8px">Bipe cada peça da unidade (uma vez por peça). A contagem fica guardada neste computador até ser aplicada.</p>
-        <input class="field" id="ctScan" placeholder="Bipe a peça" autocomplete="off">
-        <div class="sum"><span id="ctInfo">Nenhuma peça contada</span><button type="button" class="linkbtn" id="ctClear">Recomeçar contagem</button></div>
-        <table><thead><tr><th>Código</th><th>Peça</th><th class="n">Contadas</th><th class="n">No sistema</th><th></th></tr></thead><tbody id="ctItems"></tbody></table>
+        <p class="sub" style="margin:0 0 8px">Inventário da unidade: bipe cada peça. Para várias peças iguais, digite a quantidade e bipe uma delas. A contagem fica guardada no sistema: dá para parar e continuar depois, até em outro computador da unidade. Pode vender normalmente durante a contagem.</p>
+        <div class="ctbar"><input class="field" id="ctScan" placeholder="Bipe a peça" autocomplete="off"><label class="ctq">Qtd <input class="field" id="ctQty" type="number" min="1" max="9999" value="1" inputmode="numeric"></label></div>
+        <div class="ctprog"><div id="ctBar"></div></div>
+        <div class="sum" style="margin-top:6px"><span id="ctInfo">Nenhuma peça contada</span><button type="button" class="linkbtn" id="ctClear">Recomeçar contagem</button></div>
+        <div class="chips" id="ctTabs" style="margin:10px 0"><button type="button" class="chip ok" data-v="done">Contadas <span id="ctDoneN"></span></button><button type="button" class="chip" data-v="miss">Ainda não contadas <span id="ctMissN"></span></button></div>
+        <div id="ctDone"><table><thead><tr><th>Código</th><th>Peça</th><th class="n">Contadas</th><th class="n">No sistema</th><th></th></tr></thead><tbody id="ctItems"></tbody></table></div>
+        <div id="ctMiss" hidden><input class="field" id="ctMissQ" placeholder="Buscar entre as não contadas: código ou nome" autocomplete="off">
+          <p class="sub" style="margin:6px 0">Peça que não bipa (etiqueta estragada) ou que acabou: digite a quantidade e Enter. Digite 0 para confirmar que não tem.</p>
+          <table><thead><tr><th>Código</th><th>Peça</th><th class="n">No sistema</th><th class="n">Contadas</th></tr></thead><tbody id="ctMissRows"></tbody></table>
+          <button type="button" class="linkbtn" id="ctMissMore" hidden>Carregar mais</button></div>
+        <p class="msg err" id="ctUnknown" hidden></p>
         <label class="disc"><input type="checkbox" id="ctZero"> Peças não contadas ficam com estoque zero (contagem completa da unidade)</label>
-        <p class="sub" style="margin:10px 0 4px">Quem contou?</p><div class="people" id="ctWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg" id="ctMsg"></p></div>
+        <p class="sub" style="margin:10px 0 4px">Quem contou? (aplica a contagem)</p><div class="people" id="ctWho" style="display:flex;gap:6px;flex-wrap:wrap"></div><p class="msg" id="ctMsg"></p></div>
     </section>
 
     <!-- ===== Vendas do dia, sangria e fechamento (proposta p. 7) ===== -->
@@ -723,21 +733,21 @@
   $('wCode').addEventListener('keydown', e => { if (e.key === 'Enter') { $('wMsg').className = 'msg err'; findWarranty(); } });
 
   // ---------- Estoque: consulta na rede, receber, enviar, contagem ----------
-  let netUnits = null, sendItems = [], counts = {};
-  try { counts = JSON.parse(localStorage.getItem('fp_count_' + (sessionStorage.getItem('fp_unit') || '')) || '{}'); } catch { counts = {}; }
+  let netUnits = null, sendItems = [], inv = { items: [], total: 0, counted: 0, units: 0 }, ctView = 'done', ctMissOff = 0, ctUnknown = [];
+  // Contagem antiga (só neste computador): passa para o sistema na primeira abertura.
   const countKey = () => 'fp_count_' + (unit?.label || '');
-  const saveCounts = () => { try { localStorage.setItem(countKey(), JSON.stringify(counts)); } catch { } };
+  const unknownKey = () => 'fp_count_unknown_' + (unit?.label || '');
   function stTab(t) {
     $('stTabs').querySelectorAll('[data-t]').forEach(b => b.classList.toggle('ok', b.dataset.t === t));
     $('tFind').hidden = t !== 'find'; $('tRecv').hidden = t !== 'recv'; $('tSend').hidden = t !== 'send'; $('tCount').hidden = t !== 'count';
     setTimeout(() => ({ find: $('sfQ'), send: $('sdScan'), count: $('ctScan') }[t]?.focus()), 30);
-    if (t === 'recv') loadRecv();
+    if (t === 'recv') loadRecv(); if (t === 'count') loadCount();
   }
   $('stTabs').querySelectorAll('[data-t]').forEach(b => b.onclick = () => stTab(b.dataset.t));
   async function openStock() {
     if (!netUnits) { netUnits = await api('/store/network-units'); $('sdTo').innerHTML = '<option value="">Enviar para…</option>' + netUnits.units.filter(u => u.id !== netUnits.me?.id).map(u => '<option value="' + safe(u.id) + '">' + safe(u.label) + (u.depot ? ' (depósito)' : '') + '</option>').join(''); }
-    try { const c = JSON.parse(localStorage.getItem(countKey()) || 'null'); if (c) counts = c; } catch { }
-    drawSend(); drawCount(); loadRecv(); stTab(unit?.depot ? 'send' : 'find'); findStock();
+    try { ctUnknown = JSON.parse(localStorage.getItem(unknownKey()) || '[]'); } catch { ctUnknown = []; }
+    drawSend(); loadCount(); loadRecv(); stTab(unit?.depot ? 'send' : 'find'); findStock();
   }
   let sfT;
   $('sfQ').addEventListener('input', () => { clearTimeout(sfT); sfT = setTimeout(findStock, 300); });
@@ -799,18 +809,71 @@
     try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); const cur = sendItems.find(x => x.id === p.id); if (cur) cur.qty++; else sendItems.push({ id: p.id, name: p.name, barcode: p.barcode, qty: 1 }); $('sdMsg').textContent = ''; drawSend(); }
     catch (err) { $('sdMsg').className = 'msg err'; $('sdMsg').textContent = 'Peça não encontrada: ' + code; }
   });
+  async function loadCount() {
+    let old = null; try { old = JSON.parse(localStorage.getItem(countKey()) || 'null'); } catch { }
+    if (old && Object.keys(old).length) { for (const x of Object.values(old)) await api('/store/stock/count/draft', 'POST', { product_id: x.id, add: x.qty }).catch(() => { }); }
+    if (old) try { localStorage.removeItem(countKey()); } catch { }
+    try { inv = await api('/store/stock/count/draft'); } catch (e) { $('ctInfo').textContent = e.message; return; }
+    drawCount(); if (ctView === 'miss') loadMissing();
+  }
   function drawCount() {
-    const list = Object.values(counts);
-    $('ctInfo').textContent = list.length ? list.length + ' peças diferentes · ' + list.reduce((a, x) => a + x.qty, 0) + ' unidades contadas' : 'Nenhuma peça contada';
-    $('ctItems').innerHTML = list.slice().reverse().slice(0, 300).map(x => '<tr><td class="code">' + safe(x.barcode || '') + '</td><td>' + safe(x.name) + '</td><td class="n">' + x.qty + '</td><td class="n">' + (x.stock ?? '—') + '</td><td><button type="button" class="x" data-ct="' + safe(x.id) + '">−</button></td></tr>').join('');
-    $('ctItems').querySelectorAll('[data-ct]').forEach(b => b.onclick = () => { const x = counts[b.dataset.ct]; if (x.qty > 1) x.qty--; else delete counts[b.dataset.ct]; saveCounts(); drawCount(); });
+    const miss = Math.max(0, inv.total - inv.counted);
+    $('ctInfo').textContent = inv.counted ? 'Contadas ' + inv.counted + ' de ' + inv.total + ' peças · ' + inv.units + ' unidades' + (miss ? ' · faltam ' + miss : ' · todas contadas') : 'Nenhuma peça contada · ' + inv.total + ' peças cadastradas';
+    $('ctBar').style.width = (inv.total ? Math.min(100, inv.counted * 100 / inv.total) : 0) + '%';
+    $('ctDoneN').textContent = '(' + inv.counted + ')'; $('ctMissN').textContent = '(' + miss + ')';
+    $('ctItems').innerHTML = inv.items.slice(0, 500).map(x => '<tr><td class="code">' + safe(x.code || x.barcode || '') + '</td><td>' + safe(x.name) + '</td><td class="n"><input class="field cti" type="number" min="0" max="99999" data-set="' + safe(x.id) + '" value="' + x.qty + '"></td><td class="n">' + (x.stock ?? '—') + '</td><td><button type="button" class="x" title="Tirar uma" data-inv="' + safe(x.id) + '">−</button></td></tr>').join('')
+      + (inv.items.length > 500 ? '<tr><td colspan="5" class="sub">Mostrando as 500 últimas bipadas de ' + inv.items.length + '.</td></tr>' : '');
+    $('ctItems').querySelectorAll('[data-ct]').forEach(b => b.onclick = () => ctPut(b.dataset.ct, { add: -1 }));
+    $('ctItems').querySelectorAll('[data-set]').forEach(i => { i.onchange = () => ctPut(i.dataset.set, { set: Math.max(0, Math.floor(Number(i.value) || 0)) }); i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); i.blur(); $('ctScan').focus(); } }; });
+    $('ctUnknown').hidden = !ctUnknown.length;
+    $('ctUnknown').innerHTML = ctUnknown.length ? 'Códigos bipados sem cadastro (separe as peças para a supervisora cadastrar): ' + ctUnknown.map(safe).join(', ') + ' &nbsp;<button type="button" class="linkbtn" id="ctUnkClr">limpar lista</button>' : '';
+    if (ctUnknown.length) $('ctUnkClr').onclick = () => { ctUnknown = []; try { localStorage.setItem(unknownKey(), '[]'); } catch { } drawCount(); };
+  }
+  // Grava na contagem do sistema e atualiza a tela sem recarregar tudo.
+  async function ctPut(id, body, info) {
+    let r; try { r = await api('/store/stock/count/draft', 'POST', { product_id: id, ...body }); } catch (e) { $('ctMsg').className = 'msg err'; $('ctMsg').textContent = e.message; return false; }
+    const i = inv.items.findIndex(x => x.id === id), had = i >= 0 ? inv.items[i] : null;
+    if (had) { inv.units += r.qty - had.qty; inv.items.splice(i, 1); }
+    if (r.removed) inv.counted--;
+    else { if (!had) inv.counted++; inv.items.unshift({ ...(had || info || { id, name: '', code: '' }), qty: r.qty }); if (!had) inv.units += r.qty; }
+    drawCount(); return true;
   }
   $('ctScan').addEventListener('keydown', async e => {
     if (e.key !== 'Enter') return; e.preventDefault(); const code = $('ctScan').value.trim(); $('ctScan').value = ''; if (!code) return;
-    try { const p = await api('/store/products/barcode/' + encodeURIComponent(code)); const x = counts[p.id] || (counts[p.id] = { id: p.id, name: p.name, barcode: p.barcode, stock: p.stock_qty, qty: 0 }); x.qty++; saveCounts(); $('ctMsg').textContent = ''; drawCount(); }
-    catch (err) { $('ctMsg').className = 'msg err'; $('ctMsg').textContent = 'Peça não encontrada: ' + code + ' (separe para cadastrar)'; }
+    const n = Math.max(1, Math.min(9999, Math.floor(Number($('ctQty').value) || 1)));
+    let p; try { p = await api('/store/products/barcode/' + encodeURIComponent(code)); }
+    catch (err) {
+      $('ctMsg').className = 'msg err';
+      if (/mais de um produto/.test(err.message)) { $('ctMsg').textContent = err.message + ' Use a aba "Ainda não contadas" para achar a peça certa.'; return; }
+      $('ctMsg').textContent = 'Peça não encontrada: ' + code + ' (separe para cadastrar)';
+      if (!ctUnknown.includes(code)) { ctUnknown.push(code); try { localStorage.setItem(unknownKey(), JSON.stringify(ctUnknown.slice(-200))); } catch { } drawCount(); }
+      return;
+    }
+    if (await ctPut(p.id, { add: n }, { id: p.id, name: p.name, barcode: p.barcode, code: p.code, stock: p.stock_qty })) { $('ctMsg').className = 'msg ok'; $('ctMsg').textContent = (n > 1 ? n + 'x ' : '') + p.name; $('ctQty').value = 1; }
   });
-  $('ctClear').onclick = () => { if (!confirm('Apagar a contagem feita até agora neste computador?')) return; counts = {}; saveCounts(); drawCount(); };
+  $('ctQty').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('ctScan').focus(); } });
+  $('ctTabs').querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+    ctView = b.dataset.v; $('ctTabs').querySelectorAll('[data-v]').forEach(x => x.classList.toggle('ok', x === b));
+    $('ctDone').hidden = ctView !== 'done'; $('ctMiss').hidden = ctView !== 'miss'; if (ctView === 'miss') { loadMissing(); $('ctMissQ').focus(); } else $('ctScan').focus();
+  });
+  async function loadMissing(more) {
+    if (!more) ctMissOff = 0;
+    let d; try { d = await api('/store/stock/count/missing?' + new URLSearchParams({ q: $('ctMissQ').value.trim(), offset: ctMissOff })); } catch (e) { $('ctMissRows').innerHTML = '<tr><td colspan="4" class="sub">' + safe(e.message) + '</td></tr>'; return; }
+    const rows = d.items.map(x => '<tr data-row="' + safe(x.id) + '"><td class="code">' + safe(x.code || x.barcode || '') + '</td><td>' + safe(x.name) + '</td><td class="n">' + (x.stock ?? '—') + '</td><td class="n"><input class="field cti" type="number" min="0" max="99999" placeholder="—" data-miss="' + safe(x.id) + '"></td></tr>').join('');
+    $('ctMissRows').innerHTML = more ? $('ctMissRows').innerHTML + rows : (rows || '<tr><td colspan="4" class="sub">' + (d.total || $('ctMissQ').value.trim() ? 'Nenhuma peça.' : 'Todas as peças da unidade já foram contadas.') + '</td></tr>');
+    ctMissOff = d.offset + d.items.length; $('ctMissMore').hidden = ctMissOff >= d.total;
+    const byId = Object.fromEntries(d.items.map(x => [x.id, x]));
+    $('ctMissRows').querySelectorAll('[data-miss]').forEach(i => i.onkeydown = async e => {
+      if (e.key !== 'Enter' || i.value === '') return; e.preventDefault();
+      const id = i.dataset.miss, all = [...$('ctMissRows').querySelectorAll('[data-miss]')], next = all[all.indexOf(i) + 1];
+      if (await ctPut(id, { set: Math.max(0, Math.floor(Number(i.value) || 0)) }, byId[id])) { i.closest('tr').remove(); ctMissOff = Math.max(0, ctMissOff - 1); next?.focus(); }
+    });
+  }
+  let ctMissT; $('ctMissQ').addEventListener('input', () => { clearTimeout(ctMissT); ctMissT = setTimeout(() => loadMissing(), 300); });
+  $('ctMissMore').onclick = () => loadMissing(true);
+  // Outro computador da unidade pode estar contando: atualiza a cada 15 s (menos enquanto digita).
+  setInterval(() => { if (!$('tCount').hidden && document.visibilityState === 'visible' && !document.activeElement?.classList.contains('cti') && ctView === 'done') api('/store/stock/count/draft').then(d => { inv = d; drawCount(); }).catch(() => { }); }, 15000);
+  $('ctClear').onclick = async () => { if (!confirm('Apagar a contagem em andamento desta unidade (de todos os computadores)? O estoque não muda.')) return; try { await api('/store/stock/count/draft', 'DELETE'); } catch (e) { $('ctMsg').textContent = e.message; return; } loadCount(); };
   function refreshStockWho() {
     whoButtons('sdWho', s => {
       $('sdMsg').className = 'msg err';
@@ -820,11 +883,14 @@
         async pin => { r = await api('/store/transfers', 'POST', { to_tenant_id: $('sdTo').value, items: sendItems.map(x => ({ product_id: x.id, quantity: x.qty })), note: $('sdNote').value.trim(), seller_id: s.id, seller_pin: pin }); });
     });
     whoButtons('ctWho', s => {
-      const list = Object.values(counts); $('ctMsg').className = 'msg err';
-      if (!list.length) { $('ctMsg').textContent = 'Nenhuma peça contada.'; return; }
-      if (!confirm('Aplicar a contagem: ' + list.length + ' peças passam a ter o estoque contado' + ($('ctZero').checked ? ' e as não contadas ficam com zero' : '') + '. Confirmar?')) return;
-      let r; askPin(s, () => { $('ctMsg').className = 'msg ok'; $('ctMsg').textContent = 'Contagem aplicada: ' + r.counted + ' peças' + (r.zeroed ? ', ' + r.zeroed + ' zeradas' : '') + '.'; counts = {}; saveCounts(); drawCount(); },
-        async pin => { r = await api('/store/stock/count', 'POST', { items: list.map(x => ({ product_id: x.id, quantity: x.qty })), zero_others: $('ctZero').checked, seller_id: s.id, seller_pin: pin }); });
+      $('ctMsg').className = 'msg err';
+      if (!inv.counted) { $('ctMsg').textContent = 'Nenhuma peça contada.'; return; }
+      const miss = Math.max(0, inv.total - inv.counted);
+      if (!confirm('Aplicar a contagem: ' + inv.counted + ' peças (' + inv.units + ' unidades) passam a ter o estoque contado.'
+        + (miss ? ($('ctZero').checked ? ' As ' + miss + ' peças não contadas ficam com ZERO.' : ' As ' + miss + ' peças não contadas ficam como estão.') : '')
+        + ' O que foi vendido depois de bipado é descontado. Confirmar?')) return;
+      let r; askPin(s, () => { $('ctMsg').className = 'msg ok'; $('ctMsg').textContent = 'Contagem aplicada: ' + r.counted + ' peças' + (r.zeroed ? ', ' + r.zeroed + ' zeradas' : '') + (r.adjusted ? ', ' + r.adjusted + ' com venda ou transferência durante a contagem (descontada)' : '') + '.'; loadCount(); },
+        async pin => { r = await api('/store/stock/count', 'POST', { from_draft: true, zero_others: $('ctZero').checked, seller_id: s.id, seller_pin: pin }); });
     });
   }
 

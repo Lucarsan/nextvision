@@ -38,16 +38,17 @@ test('rede: corrigir venda, crédito de troca em qualquer unidade, estoque míni
     const s2 = await api('/store/sales', { method: 'POST', token: foreignToken, body: { anonymous: true, total_cents: 1000, payment_method: 'cash' } }, 201).catch(async () => { await api('/store/cash/open', { method: 'POST', token: foreignToken, body: { opening_cents: 0 } }, 201); return api('/store/sales', { method: 'POST', token: foreignToken, body: { anonymous: true, total_cents: 1000, payment_method: 'cash' } }, 201); });
     assert.equal((await request(`/network/sales/${s2.id || s2.sale?.id}/correct`, { method: 'POST', token: sup, body: { payment_method: 'pix', reason: 'teste fora' } })).status, 404);
 
-    // Troca com crédito: atendimento + PIN do supervisor → saldo vale nas duas unidades.
+    // Troca com crédito (fora do quiosque: o próprio usuário gera; no quiosque, a vendedora com o PIN — ver exchange-credit).
     const code = (await db.query('SELECT receipt_code FROM sales WHERE id=$1', [saleId])).rows[0].receipt_code;
     const claim = await api(`/store/warranty/${code}/claims`, { method: 'POST', body: { kind: 'troca', note: 'banho escureceu' } }, 201);
-    assert.equal((await request(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 30000, supervisor_pin: '1111' } })).status, 401, 'PIN de vendedora não autoriza');
-    assert.equal((await request(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 99999, supervisor_pin: '5555' } })).status, 400);
-    r = await api(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 30000, supervisor_pin: '5555' } }, 201);
-    assert.equal(r.authorized_by, 'Dani'); assert.equal(r.valid_days, 180);
+    assert.equal((await request(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 99999 } })).status, 400);
+    r = await api(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 30000 } }, 201);
+    assert.equal(r.valid_days, 180);
     assert.equal((await request(`/store/warranty/claims/${claim.id}/credit`, { method: 'POST', body: { amount_cents: 100, supervisor_pin: '5555' } })).status, 409);
     const bal = (await db.query(`SELECT sum(l.remaining_cents)::int n FROM cashback_lots l JOIN customers g ON g.id=l.customer_id WHERE coalesce(g.link_id,g.id)=$1 AND l.reversed_at IS NULL`, [local.link_id])).rows[0].n;
     assert.equal(bal, 33000, 'cashback 30,00 + crédito 300,00');
+    const kinds = (await db.query(`SELECT l.kind, sum(l.remaining_cents)::int n FROM cashback_lots l JOIN customers g ON g.id=l.customer_id WHERE coalesce(g.link_id,g.id)=$1 AND l.reversed_at IS NULL GROUP BY 1 ORDER BY 1`, [local.link_id])).rows;
+    assert.deepEqual(kinds.map(k => [k.kind, k.n]), [['cashback', 3000], ['credit', 30000]], 'saldos separados');
     const w = await api(`/store/warranty/${code}`);
     assert.equal(w.claims[0].credit_cents, 30000); assert.equal(w.claims[0].mine, true); assert.equal(w.has_customer, true);
 

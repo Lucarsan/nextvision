@@ -47,8 +47,12 @@ export function registerWarranty(app, { q, auth, roles, route, bad, valid, audit
     const claims = (await q(`SELECT w.id, w.kind, w.note, to_char(w.opened_at AT TIME ZONE $2, 'DD/MM/YYYY') opened, w.closed_at IS NOT NULL closed, coalesce(t.unit_label, t.name) unit,
         w.credit_cents, w.tenant_id = $3 mine
       FROM warranty_claims w JOIN tenants t ON t.id = w.tenant_id WHERE w.sale_id = $1 ORDER BY w.opened_at`, [s.id, tz, req.user.tenant_id])).rows;
+    // Peças da venda com o valor pago por unidade (já com desconto) e quantas já voltaram em trocas/devoluções.
+    const items = (await q(`SELECT i.id, i.name, i.barcode code, i.quantity, i.total_cents, i.product_id IS NOT NULL is_product,
+        (SELECT coalesce(sum(r.quantity),0) FROM warranty_returns r WHERE r.sale_item_id = i.id)::int returned
+      FROM sale_items i WHERE i.sale_id = $1 ORDER BY i.position`, [s.id])).rows;
     res.set('Cache-Control', 'no-store').json({ id: s.id, code: s.receipt_code, unit: s.unit, sale_number: s.sale_number, sold_at: s.sold_at, total_cents: s.total_cents, canceled: !!s.canceled_at,
-      customer_name: s.customer_name, has_customer: !!s.customer_id, items: s.items, warranties: s.warranties, claims });
+      customer_name: s.customer_name, has_customer: !!s.customer_id, items, warranties: s.warranties, claims });
   }));
   app.post('/api/store/warranty/:code/claims', ...kioskStaff, route(async (req, res) => {
     const v = valid(z.object({ kind: z.enum(['troca', 'conserto', 'devolucao', 'outro']), note: z.string().trim().max(300).default(''), seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;

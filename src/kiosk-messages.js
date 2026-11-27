@@ -40,7 +40,7 @@ const OWNER = `$1 = coalesce(
 const SENT = (label, days) => `EXISTS (SELECT 1 FROM customer_messages m JOIN customers g ON g.id = m.customer_id
   WHERE ${grp('g')} = ${grp('c')} AND m.campaign IN (${label}, 'skip:' || ${label}) AND m.created_at > now() - interval '${days} days')`;
 const BALANCE = `(SELECT coalesce(sum(l.remaining_cents),0)::int FROM cashback_lots l JOIN customers g ON g.id = l.customer_id
-  WHERE ${grp('g')} = ${grp('c')} AND l.reversed_at IS NULL AND l.remaining_cents > 0 AND l.expires_on >= $2::date)`;
+  WHERE ${grp('g')} = ${grp('c')} AND l.kind = 'cashback' AND l.reversed_at IS NULL AND l.cleared_at IS NULL AND l.remaining_cents > 0 AND l.expires_on >= $2::date)`;
 const PHONE = "length(regexp_replace(coalesce(c.phone,''),'\\D','','g')) >= 10";
 
 async function context(q, tenantId) {
@@ -82,7 +82,7 @@ export async function messageQueue(q, tenantId, { limit = 40 } = {}) {
   if (cfg.expiring_enabled) {
     const days = Math.max(1, Number(cfg.expiring_days) || 7);
     const rows = (await q(`SELECT c.id, c.name, c.phone, min(l.expires_on) exp, ${BALANCE} balance FROM cashback_lots l JOIN customers c ON c.id = l.customer_id
-      WHERE l.tenant_id = $1 AND l.reversed_at IS NULL AND l.remaining_cents > 0 AND l.expires_on BETWEEN $2::date AND $2::date + ${days}
+      WHERE l.tenant_id = $1 AND l.kind = 'cashback' AND l.reversed_at IS NULL AND l.cleared_at IS NULL AND l.remaining_cents > 0 AND l.expires_on BETWEEN $2::date AND $2::date + ${days}
         AND c.deleted_at IS NULL AND ${PHONE} AND NOT ${SENT("'expiring'", 10)} GROUP BY c.id ORDER BY min(l.expires_on)`, [tenantId, today])).rows;
     push('expiring', rows.filter(r => r.balance > 0), r => ({ text: fill(cfg.texts.expiring, { ...common(r), saldo: brl(r.balance), validade: dmy(r.exp) }) }));
   }

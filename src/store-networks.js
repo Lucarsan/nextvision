@@ -356,6 +356,17 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users sl ON sl.id = s.seller_id LEFT JOIN users bu ON bu.id = s.backdated_by
       WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.backdated_at IS NOT NULL AND (s.backdated_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY s.backdated_at DESC LIMIT 300`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
+    // Trocas e devoluções (com o crédito gerado e as peças que voltaram) no período: para a supervisão acompanhar.
+    const exchanges = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, w.kind, x.sale_number, w.credit_cents, split_part(coalesce(cu.name, ''), ' ', 1) customer,
+             coalesce(au.name, ou.name) by_name, coalesce(w.note, '') note,
+             to_char(coalesce(w.credited_at, w.opened_at) AT TIME ZONE $4, 'DD/MM HH24:MI') at,
+             (SELECT coalesce(sum(r.quantity), 0) FROM warranty_returns r WHERE r.claim_id = w.id)::int pieces
+      FROM warranty_claims w JOIN tenants t ON t.id = w.tenant_id JOIN sales x ON x.id = w.sale_id
+        LEFT JOIN customers cu ON cu.id = x.customer_id LEFT JOIN users au ON au.id = w.credit_authorized_by LEFT JOIN users ou ON ou.id = w.opened_by
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND w.kind IN ('troca', 'devolucao')
+        AND (coalesce(w.credited_at, w.opened_at) AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY coalesce(w.credited_at, w.opened_at) DESC LIMIT 300`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Estoque baixo: peças com estoque controlado no mínimo da rede (padrão 1) ou menos, que venderam nos últimos 30 dias.
     const low = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
@@ -388,6 +399,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       canceled: canceled.rows.map(c => ({ unit: c.unit, sale_number: c.sale_number, seller: c.seller || '', total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
       discounted: discounted.rows.map(d => ({ unit: d.unit, sale_number: d.sale_number, seller: d.seller || '', total_cents: d.total_cents, discount_cents: d.discount_cents, pct: d.pct, payment_method: d.payment_method, at: d.at })),
       backdated: backdated.rows,
+      exchanges: exchanges.rows,
       low_stock: lowByUnit
     };
     res.set('Cache-Control', 'no-store').json({ from, to, units, totals, alerts });

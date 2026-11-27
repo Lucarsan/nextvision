@@ -32,7 +32,7 @@ test('cashback: ganhar, usar com limite, estornar, vencer e avisar', { skip }, a
     const today = (await db.query(`SELECT to_char((now() AT TIME ZONE 'America/Fortaleza')::date,'YYYY-MM-DD') d, to_char((now() AT TIME ZONE 'America/Fortaleza')::date+90,'YYYY-MM-DD') e`)).rows[0];
     const s1 = await api('/store/sales', { method: 'POST', body: { customer_id: maria, total_cents: 10000, payment_method: 'cash' } }, 201);
     assert.equal(s1.sale.cashback_earned_cents, 500);
-    assert.deepEqual(s1.cashback, { balance_cents: 500, next_expires_on: today.e, next_expiring_cents: 500, used_cents: 0, earned_cents: 500 });
+    assert.deepEqual(s1.cashback, { balance_cents: 500, next_expires_on: today.e, next_expiring_cents: 500, used_cents: 0, earned_cents: 500, credit_cents: 0, credit_expires_on: null });
     assert.equal((await api(`/store/sales/customers/${maria}`)).cashback.balance_cents, 500);
     assert.equal((await api('/store/sales/customers?q=maria'))[0].cashback.balance_cents, 500);
 

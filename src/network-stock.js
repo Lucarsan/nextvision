@@ -88,7 +88,7 @@ export function registerNetworkStock(app, { q, db, auth, roles, route, bad, vali
       let ids, qty, adjusted = 0;
       if (v.from_draft) {
         const d = (await c.query(`SELECT d.product_id, d.qty, d.qty + coalesce((SELECT sum(m.quantity) FROM stock_movements m WHERE m.tenant_id = d.tenant_id AND m.product_id = d.product_id
-            AND m.created_at > d.first_at AND m.kind IN ('sale', 'cancel', 'entry', 'transfer_out', 'transfer_in')), 0)::int q
+            AND m.created_at > d.first_at AND m.kind IN ('sale', 'cancel', 'entry', 'transfer_out', 'transfer_in', 'return')), 0)::int q
           FROM stock_count_drafts d WHERE d.tenant_id = $1 FOR UPDATE`, [tid])).rows;
         if (!d.length) { await c.query('ROLLBACK'); return bad(res, 400, 'Nenhuma peça contada'); }
         ids = d.map(x => x.product_id); qty = d.map(x => Math.min(99999, Math.max(0, x.q))); adjusted = d.filter(x => x.q !== x.qty).length;

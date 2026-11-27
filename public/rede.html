@@ -329,6 +329,13 @@
       h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>'
         + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + (c.sale_number ? ' · venda nº ' + c.sale_number : '') + ' · ' + brl(c.total_cents) + ' · cancelada ' + safe(c.at) + (c.canceled_by ? ' por ' + safe(c.canceled_by) : '') + (c.seller && c.seller !== c.canceled_by ? ' (vendida por ' + safe(c.seller) + ')' : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
     }
+    const exch = only(data.alerts.exchanges || []);
+    if (exch.length) {
+      const cr = exch.reduce((a, e) => a + (e.credit_cents || 0), 0), pcs = exch.reduce((a, e) => a + e.pieces, 0);
+      h += '<div class="alert yellow"><b>' + warn + plural(exch.length, 'troca ou devolução', 'trocas ou devoluções') + ' ' + RANGES[range].word + '</b><p>' + brl(cr) + ' em crédito de troca gerado · ' + plural(pcs, 'peça voltou', 'peças voltaram') + ' ao estoque.</p>'
+        + '<details><summary>Ver trocas</summary><ul>' + exch.map(e => '<li>' + safe(e.unit) + ' · ' + (e.kind === 'troca' ? 'troca' : 'devolução') + ' da venda nº ' + e.sale_number + (e.customer ? ' (' + safe(e.customer) + ')' : '') + ' · ' + safe(e.at)
+          + (e.credit_cents ? ' · <b>crédito de ' + brl(e.credit_cents) + '</b>' : ' · sem crédito ainda') + (e.pieces ? ' · ' + plural(e.pieces, 'peça voltou', 'peças voltaram') : '') + (e.by_name ? ' · por ' + safe(e.by_name) : '') + (e.note ? ' — ' + safe(e.note) : '') + '</li>').join('') + '</ul></details></div>';
+    }
     const back = only(data.alerts.backdated || []);
     if (back.length) {
       const ok = back.filter(b => !b.canceled);

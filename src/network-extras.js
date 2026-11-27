@@ -93,30 +93,58 @@ export function registerNetworkExtras(app, { q, db, auth, roles, route, bad, val
     res.json(r.rows);
   }));
 
-  // ---- Crédito de troca/devolução (quiosque, com PIN do supervisor/dono) ----
+  // ---- Crédito de troca/devolução (quiosque) ----
+  // Decisão da Audace (27/11): a vendedora gera com o PIN dela (sem o PIN da supervisora); a supervisão acompanha no painel.
+  // As peças que voltaram entram no estoque da unidade onde a troca é feita (casadas pelo código da peça).
   app.post('/api/store/warranty/claims/:id/credit', ...kioskStaff, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
-    const v = valid(z.object({ amount_cents: z.number().int().min(1).max(100000000), supervisor_pin: z.string().regex(/^\d{4}$/) }).strict(), req, res); if (!v) return;
-    const w = (await q(`SELECT w.*, s.customer_id, s.total_cents, s.tenant_id sale_tenant, t.network_id, n.credit_valid_days FROM warranty_claims w JOIN sales s ON s.id=w.sale_id
+    const v = valid(z.object({
+      amount_cents: z.number().int().min(1).max(100000000),
+      items: z.array(z.object({ sale_item_id: uuid, quantity: z.number().int().min(1).max(9999) }).strict()).max(200).default([]),
+      seller_id: uuid.optional(), seller_pin: z.string().regex(/^\d{4}$/).optional(), supervisor_pin: z.string().regex(/^\d{4}$/).optional()
+    }).strict(), req, res); if (!v) return;
+    const w = (await q(`SELECT w.*, s.customer_id, s.total_cents, s.credit_used_cents, s.sale_number, s.tenant_id sale_tenant, t.network_id, n.credit_valid_days FROM warranty_claims w JOIN sales s ON s.id=w.sale_id
       JOIN tenants t ON t.id=w.tenant_id LEFT JOIN store_networks n ON n.id=t.network_id WHERE w.id=$1`, [req.params.id])).rows[0];
     if (!w || w.tenant_id !== req.user.tenant_id) return bad(res, 404, 'Atendimento não encontrado nesta unidade');
     if (!['troca', 'devolucao'].includes(w.kind)) return bad(res, 409, 'Crédito só para troca ou devolução');
     if (w.credit_cents) return bad(res, 409, 'Este atendimento já gerou crédito');
     if (!w.customer_id) return bad(res, 409, 'A venda não tem cliente: peça ao supervisor para incluir a cliente na venda (painel da rede) e tente de novo');
-    if (v.amount_cents > w.total_cents) return bad(res, 400, 'O crédito não pode passar do valor da venda');
-    const who = await authorizerByPin({ query: q }, bcrypt, req.user.tenant_id, v.supervisor_pin);
-    if (!who) return bad(res, 401, 'PIN do supervisor, gerente ou dono incorreto');
-    const c = await db.connect();
+    if (v.amount_cents > w.total_cents + (w.credit_used_cents || 0)) return bad(res, 400, 'O crédito não pode passar do valor da venda');
+    // Quem gera: a vendedora (PIN dela) ou, se mandarem, supervisor/gerente/dono (PIN dele). Fora do quiosque, o próprio usuário.
+    let who = null;
+    if (!req.user.kiosk) who = { id: req.user.id, name: null };
+    else if (v.seller_id && v.seller_pin) {
+      const u = (await q("SELECT id,name FROM users WHERE id=$1 AND tenant_id=$2 AND active", [v.seller_id, req.user.tenant_id])).rows[0];
+      if (u && await pinOk({ query: q }, bcrypt, u.id, v.seller_pin)) who = u;
+    } else if (v.supervisor_pin) who = await authorizerByPin({ query: q }, bcrypt, req.user.tenant_id, v.supervisor_pin);
+    if (!who) return bad(res, 401, 'PIN incorreto');
+    const c = await db.connect(); let returned = 0;
     try {
       await c.query('BEGIN');
-      const upd = await c.query('UPDATE warranty_claims SET credit_cents=$2, credit_authorized_by=$3 WHERE id=$1 AND credit_cents IS NULL', [w.id, v.amount_cents, who.id]);
+      const upd = await c.query('UPDATE warranty_claims SET credit_cents=$2, credit_authorized_by=$3, credited_at=now() WHERE id=$1 AND credit_cents IS NULL', [w.id, v.amount_cents, who.id]);
       if (!upd.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Este atendimento já gerou crédito'); }
+      for (const it of v.items) {
+        const si = (await c.query(`SELECT i.id, i.name, i.quantity, i.product_id, p.code, p.barcode,
+            (SELECT coalesce(sum(r.quantity),0) FROM warranty_returns r WHERE r.sale_item_id=i.id)::int back
+          FROM sale_items i LEFT JOIN products p ON p.id=i.product_id WHERE i.id=$1 AND i.sale_id=$2 FOR UPDATE OF i`, [it.sale_item_id, w.sale_id])).rows[0];
+        if (!si || !si.product_id) { await c.query('ROLLBACK'); return bad(res, 400, 'Peça não encontrada nesta venda'); }
+        if (it.quantity > si.quantity - si.back) { await c.query('ROLLBACK'); return bad(res, 400, `${si.name}: só ${si.quantity - si.back} peça(s) podem voltar desta venda`); }
+        // Mesma unidade: a própria peça. Outra unidade da rede: a peça com o mesmo código aqui.
+        const pid = w.sale_tenant === req.user.tenant_id ? si.product_id
+          : (await c.query("SELECT id FROM products WHERE tenant_id=$1 AND active AND kind='product' AND (($2::text IS NOT NULL AND code=$2) OR ($3::text IS NOT NULL AND barcode=$3)) ORDER BY (code=$2) DESC NULLS LAST LIMIT 1", [req.user.tenant_id, si.code || null, si.barcode || null])).rows[0]?.id;
+        if (!pid) { await c.query('ROLLBACK'); return bad(res, 400, `${si.name}: a peça não está cadastrada nesta unidade (código ${si.code || si.barcode || '—'}). Peça ao supervisor para cadastrar e tente de novo.`); }
+        const st = (await c.query('UPDATE products SET stock_qty=CASE WHEN stock_qty IS NULL THEN NULL ELSE LEAST(999999,stock_qty+$2) END, updated_at=now() WHERE id=$1 RETURNING stock_qty', [pid, it.quantity])).rows[0];
+        await c.query(`INSERT INTO stock_movements(tenant_id,product_id,kind,quantity,created_by,stock_before,stock_after,note) VALUES($1,$2,'return',$3,$4,$5,$6,$7)`,
+          [req.user.tenant_id, pid, it.quantity, who.id, st.stock_qty == null ? null : st.stock_qty - it.quantity, st.stock_qty, (w.kind === 'troca' ? 'Troca' : 'Devolução') + ' · venda nº ' + w.sale_number]);
+        await c.query('INSERT INTO warranty_returns(claim_id,sale_item_id,tenant_id,product_id,quantity,created_by) VALUES($1,$2,$3,$4,$5,$6)', [w.id, si.id, req.user.tenant_id, pid, it.quantity, who.id]);
+        returned += it.quantity;
+      }
       await c.query(`INSERT INTO cashback_lots(tenant_id,customer_id,sale_id,amount_cents,remaining_cents,percent_snapshot,expires_on,kind,warranty_claim_id)
         VALUES($1,$2,NULL,$3,$3,0,(now() AT TIME ZONE '${TZ}')::date + $4::int,'credit',$5)`, [w.sale_tenant, w.customer_id, v.amount_cents, w.credit_valid_days || 180, w.id]);
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
     await audit(req, 'credit', 'warranty_claim', w.id, req.user.tenant_id);
-    res.status(201).json({ ok: true, credit_cents: v.amount_cents, authorized_by: who.name, valid_days: w.credit_valid_days || 180 });
+    res.status(201).json({ ok: true, credit_cents: v.amount_cents, authorized_by: who.name, returned_pieces: returned, valid_days: w.credit_valid_days || 180 });
   }));
 
   // ---- Estoque mínimo e validade do crédito (dono e supervisor) ----
@@ -144,10 +172,11 @@ export function registerNetworkExtras(app, { q, db, auth, roles, route, bad, val
       head: ['Unidade', 'Venda nº', 'Data', 'Código', 'Peça', 'Qtd', 'Preço (R$)', 'Total (R$)', 'Situação'],
       row: r => [r.unidade, r.numero, r.data, r.code, r.name, r.quantity, money(r.unit_price_cents), money(r.total_cents), r.situacao] },
     clientes: { name: 'clientes', sql: `SELECT DISTINCT ON (coalesce(c.link_id,c.id)) c.name, c.cpf, c.phone, c.email, to_char(c.birth_date,'DD/MM/YYYY') nascimento, c.offers_opt_out, coalesce(t.unit_label,t.name) unidade,
-        (SELECT coalesce(sum(l.remaining_cents),0) FROM cashback_lots l JOIN customers g ON g.id=l.customer_id WHERE coalesce(g.link_id,g.id)=coalesce(c.link_id,c.id) AND l.reversed_at IS NULL AND l.expires_on >= (now() AT TIME ZONE '${TZ}')::date) saldo
+        (SELECT coalesce(sum(l.remaining_cents),0) FROM cashback_lots l JOIN customers g ON g.id=l.customer_id WHERE coalesce(g.link_id,g.id)=coalesce(c.link_id,c.id) AND l.kind='cashback' AND l.reversed_at IS NULL AND l.cleared_at IS NULL AND l.expires_on >= (now() AT TIME ZONE '${TZ}')::date) saldo,
+        (SELECT coalesce(sum(l.remaining_cents),0) FROM cashback_lots l JOIN customers g ON g.id=l.customer_id WHERE coalesce(g.link_id,g.id)=coalesce(c.link_id,c.id) AND l.kind='credit' AND l.reversed_at IS NULL AND l.cleared_at IS NULL AND l.expires_on >= (now() AT TIME ZONE '${TZ}')::date) credito_troca
       FROM customers c JOIN tenants t ON t.id=c.tenant_id WHERE t.network_id=$1 AND c.deleted_at IS NULL ORDER BY coalesce(c.link_id,c.id), c.created_at`,
-      head: ['Nome', 'CPF', 'Telefone', 'E-mail', 'Nascimento', 'Não quer ofertas', 'Unidade do cadastro', 'Saldo de cashback (R$)'],
-      row: r => [r.name, r.cpf, r.phone, r.email, r.nascimento, r.offers_opt_out ? 'sim' : '', r.unidade, money(r.saldo)] },
+      head: ['Nome', 'CPF', 'Telefone', 'E-mail', 'Nascimento', 'Não quer ofertas', 'Unidade do cadastro', 'Saldo de cashback (R$)', 'Crédito de troca (R$)'],
+      row: r => [r.name, r.cpf, r.phone, r.email, r.nascimento, r.offers_opt_out ? 'sim' : '', r.unidade, money(r.saldo), money(r.credito_troca)] },
     estoque: { name: 'estoque', sql: `SELECT coalesce(t.unit_label,t.name) unidade, p.code, p.barcode, p.name, p.ncm, p.price_cents, p.stock_qty
       FROM products p JOIN tenants t ON t.id=p.tenant_id WHERE t.network_id=$1 AND p.active ORDER BY 1, p.name`,
       head: ['Unidade', 'Código', 'Código de barras', 'Peça', 'NCM', 'Preço (R$)', 'Estoque'],

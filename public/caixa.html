@@ -69,6 +69,7 @@
   .go{width:100%;margin-top:12px;padding:14px;border:0;border-radius:10px;background:var(--ink);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
   .go:disabled{opacity:.45;cursor:default}
   .disc{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;flex-wrap:wrap}
+  .cb.cr{background:#eef1fb;color:#2f4a8f}
   .backrow{margin:0 0 10px}.backwarn{background:#fff6df;border:1px solid #f0d58a;color:#7a5a00;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:0 0 10px}
   .discq{display:inline-flex;gap:4px;flex-wrap:wrap}.discq button{border:1px solid var(--line,#e2ded6);background:#fff;border-radius:999px;padding:3px 9px;font-size:12px;cursor:pointer;color:var(--ink)}.discq button.on{background:var(--green-bg);color:var(--green);border-color:transparent;font-weight:600}
   .msg{margin:10px 0 0;font-weight:600;min-height:18px}.msg.err{color:var(--red)}.msg.ok{color:var(--green)}
@@ -168,7 +169,9 @@
             <div id="custSel" hidden class="cust">
               <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><strong id="custName"></strong><p id="custInfo"></p></div><button type="button" class="linkbtn" id="custClear">Trocar</button></div>
               <div class="cb" id="cbBox" hidden><span>Cashback disponível</span><strong id="cbVal"></strong></div>
+              <div class="cb cr" id="crBox" hidden><span>Crédito de troca</span><strong id="crVal"></strong></div>
               <label class="disc" id="cbUseRow" hidden><input type="checkbox" id="cbUse"> Usar o cashback nesta compra <span class="sub" id="cbUseInfo" style="margin:0"></span></label>
+              <label class="disc" id="crUseRow" hidden><input type="checkbox" id="crUse"> Usar o crédito de troca nesta compra <span class="sub" id="crUseInfo" style="margin:0"></span></label>
             </div>
           </div>
           <div class="card">
@@ -387,7 +390,11 @@
     const base = subtotal() - discountCents(), max = Math.floor(base * (Number(cfg.cashback_max_use_percent) || 0) / 100);
     return Math.max(0, Math.min(cbAvailable(), max, base - 1));
   };
-  const total = () => subtotal() - discountCents() - cbUseCents();
+  // Crédito de troca (separado do cashback): sem limite por compra; pode pagar a venda inteira.
+  const crAvailable = () => customer?.cashback?.credit_cents || 0;
+  const crUseCents = () => !$('crUse').checked || !crAvailable() ? 0 : Math.max(0, Math.min(crAvailable(), subtotal() - discountCents() - cbUseCents()));
+  const total = () => subtotal() - discountCents() - cbUseCents() - crUseCents();
+  const paidByCredit = () => crUseCents() > 0 && total() === 0;
   // Pagamento dividido: várias formas que somam o total. A mesma forma em duas linhas é somada ao gravar.
   let splitRows = [];
   const toC = v => Math.max(0, Math.round((Number(String(v || '').replace(/\./g, '').replace(',', '.')) || 0) * 100));
@@ -438,7 +445,9 @@
     if (back) { const now = new Date(); $('backDate').max = ymd(new Date(now.getTime() - 86400000)); $('backDate').min = ymd(new Date(now.getTime() - 60 * 86400000)); }
     $('backWarn').hidden = !back;
     $('backWarn').textContent = !back ? '' : $('backDate').value ? 'Lançando venda do dia ' + dmyS($('backDate').value) + ': entra no faturamento e na comissão desse dia, baixa o estoque, fica fora do caixa de hoje, sem pinpad e sem cashback.' : 'Escolha a data em que a venda aconteceu (está na boleta).';
-    if (back) { $('cbUse').checked = false; $('offline').checked = false; }
+    if (back) { $('cbUse').checked = false; $('crUse').checked = false; $('offline').checked = false; }
+    $('crUseRow').hidden = back || !crAvailable();
+    $('crUseInfo').textContent = crUseCents() ? '(− ' + brl(crUseCents()) + (paidByCredit() ? ', paga a venda toda' : '') + ')' : '';
     $('cbUseRow').hidden = back || !cbAvailable();
     drawSplit();
     const nonCash = payMethods().some(m => m !== 'cash') || (method === 'split' && !splitMerged().length);
@@ -457,7 +466,7 @@
     $('pinOk').hidden = !seller;
     const cbu = cbUseCents();
     $('cbUseInfo').textContent = cbu ? '(− ' + brl(cbu) + ')' : '';
-    $('totalLabel').textContent = (method === 'split' ? 'Dividido' : METHOD[method]) + (discountCents() ? ' · desconto ' + brl(discountCents()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
+    $('totalLabel').textContent = (paidByCredit() ? 'Pago com crédito de troca' : method === 'split' ? 'Dividido' : METHOD[method]) + (crUseCents() && !paidByCredit() ? ' · crédito ' + brl(crUseCents()) : '') + (discountCents() ? ' · desconto ' + brl(discountCents()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
     $('total').textContent = brl(total());
     const earn = customer && cfg.cashback_enabled ? Math.round(total() * (Number(cfg.cashback_percent) || 0) / 100) : 0;
     $('st3t').textContent = earn ? 'Cashback de ' + brl(earn) + ' no WhatsApp' : 'Cashback pelo WhatsApp';
@@ -468,7 +477,7 @@
   // Pinpad ligado + dividido com cartão/Pix: ainda não cobra em partes no pinpad; só com a maquininha avulsa.
   function drawFinish() {
     const tefSplit = method === 'split' && tef && !$('offline').checked && !backOn() && splitMerged().some(p => p.method !== 'cash');
-    $('finish').disabled = !items.length || !seller || total() < 1 || ($('backOn').checked && !$('backDate').value) || !splitOk() || tefSplit;
+    $('finish').disabled = !items.length || !seller || (total() < 1 && !paidByCredit()) || ($('backOn').checked && !$('backDate').value) || !splitOk() || tefSplit;
   }
 
   // ---------- Peças: leitor ou digitação ----------
@@ -517,7 +526,9 @@
     const ph = String(c.phone || '').replace(/\D/g, '');
     $('custInfo').textContent = ph ? '(' + ph.slice(-11, -9) + ') ' + ph.slice(-9, -8) + '•••• -' + ph.slice(-4) : 'sem telefone';
     $('cbBox').hidden = !cbAvailable(); $('cbVal').textContent = brl(cbAvailable());
-    $('cbUseRow').hidden = !cbAvailable(); $('cbUse').checked = false; draw();
+    $('cbUseRow').hidden = !cbAvailable(); $('cbUse').checked = false;
+    $('crBox').hidden = !crAvailable(); $('crVal').textContent = brl(crAvailable());
+    $('crUseRow').hidden = !crAvailable(); $('crUse').checked = false; draw();
   }
   $('custClear').onclick = () => { customer = null; $('custSel').hidden = true; $('custPick').hidden = false; $('custQ').value = ''; $('custResults').hidden = true; draw(); };
   // ---------- Formulário de cliente (venda e aba Clientes) ----------
@@ -542,7 +553,7 @@
   }
   function cfFill(p, c = {}) { CF.forEach(([k]) => { $(p + '_' + k).value = c[k] || ''; }); $(p + '_offers_opt_out').checked = !!c.offers_opt_out; }
   $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('nc_name').focus(); };
-  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('discBrl').oninput = draw;
+  $('cbUse').onchange = draw; $('crUse').onchange = draw; $('discPct').oninput = draw; $('discBrl').oninput = draw;
   $('discMode').querySelectorAll('[data-d]').forEach(b => b.onclick = () => { discMode = b.dataset.d; $('discPct').value = ''; $('discBrl').value = ''; draw(); (discMode === 'brl' ? $('discBrl') : $('discPct')).focus(); }); $('backOn').onchange = draw; $('backDate').onchange = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { discMode = 'pct'; $('discBrl').value = ''; $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
@@ -576,15 +587,17 @@
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
     if (payMethods().includes('credit') && Number($('inst').value) > 1) body.installments = Number($('inst').value);
-    if (backOn()) { body.sold_on = $('backDate').value; delete body.cashback_use_cents; }
-    if ($('offline').checked && payMethods().some(m => m !== 'cash')) { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
+    if (crUseCents()) body.credit_use_cents = crUseCents();
+    if (paidByCredit()) { body.payment_method = 'other'; delete body.payments; delete body.installments; }
+    if (backOn()) { body.sold_on = $('backDate').value; delete body.cashback_use_cents; delete body.credit_use_cents; }
+    if ($('offline').checked && !paidByCredit() && payMethods().some(m => m !== 'cash')) { body.offline_payment = true; if ($('offAuth').value.trim()) body.offline_auth = $('offAuth').value.trim(); }
     if (customer) body.customer_id = customer.id;
     else if (!$('newCust').hidden && $('nc_name').value.trim()) {
       const f = cfRead('nc'); if (f.error) { $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Cadastro da cliente: ' + f.error; $('finish').disabled = false; return; }
       body.new_customer = f.data;
     }
     else body.anonymous = true;
-    if (tef && method !== 'cash' && method !== 'split' && !body.offline_payment && !body.sold_on) {
+    if (tef && method !== 'cash' && method !== 'split' && !body.offline_payment && !body.sold_on && !paidByCredit()) {
       // Cobra no pinpad antes de gravar. Cobrança já aprovada (venda não gravou antes) é reaproveitada, nunca cobrada de novo.
       if (paidTx && (paidTx.method !== method || paidTx.amount_cents !== total())) {
         $('saleMsg').className = 'msg err'; $('saleMsg').textContent = 'Já foi cobrado ' + brl(paidTx.amount_cents) + ' no pinpad e a venda mudou. Estorne essa cobrança em "Pendências do pinpad" e cobre de novo.';
@@ -869,19 +882,35 @@
       + '<table>' + d.items.map(i => '<tr><td class="code">' + safe(i.code || '') + '</td><td>' + safe(i.name) + '</td><td class="n">' + brl(i.total_cents) + '</td></tr>').join('') + '</table>'
       + d.warranties.map(w => '<div class="cb" style="' + (w.until < today ? 'background:#efede8;color:#6b6b70' : 'background:#e4f1e7;color:#2f6b45') + '"><span>' + safe(w.label) + '</span><strong>' + (w.until < today ? 'encerrada em ' : 'até ') + br(w.until) + '</strong></div>').join('')
       + (d.claims.length ? '<p class="label" style="margin-top:14px">Atendimentos</p>' + d.claims.map(c => '<p class="sub" style="margin:2px 0">' + safe(c.opened) + ' · ' + KIND[c.kind] + ' · ' + safe(c.unit) + (c.note ? ' · ' + safe(c.note) : '') + (c.closed ? ' · resolvido' : ' · em aberto')
-          + (c.credit_cents ? ' · <b>crédito de ' + brl(c.credit_cents) + '</b>' : (c.mine && !c.closed && ['troca', 'devolucao'].includes(c.kind) ? ' <button type="button" class="linkbtn wCredit" data-id="' + safe(c.id) + '">Gerar crédito para a cliente</button>' : '')) + '</p>').join('') : '')
+          + (c.credit_cents ? ' · <b>crédito de troca de ' + brl(c.credit_cents) + '</b>' : (c.mine && !c.closed && ['troca', 'devolucao'].includes(c.kind) ? ' <button type="button" class="linkbtn wCredit" data-id="' + safe(c.id) + '">Gerar crédito de troca</button>' : '')) + '</p>').join('') : '')
       + (d.canceled ? '' : '<p class="label" style="margin-top:14px">Registrar atendimento de garantia</p><div style="display:flex;gap:8px;flex-wrap:wrap"><select class="field" id="wKind" style="width:auto">' + Object.entries(KIND).map(([k, l]) => '<option value="' + k + '">' + l + '</option>').join('') + '</select><input class="field" id="wNote" maxlength="200" placeholder="O que aconteceu (ex.: banho escureceu)" style="flex:1;min-width:200px"></div>'
         + '<p class="sub" style="margin:8px 0 4px">Quem está atendendo?</p><div class="people" id="wWho" style="display:flex;gap:6px;flex-wrap:wrap"></div>');
     $('wBox').hidden = false;
+    // Gerar crédito de troca: marca as peças que voltaram (entram no estoque desta unidade) e confirma com o PIN de quem atende.
     document.querySelectorAll('.wCredit').forEach(b => b.onclick = () => {
       if (!d.has_customer) { $('wMsg').className = 'msg err'; $('wMsg').textContent = 'A venda não tem cliente. O supervisor inclui a cliente na venda pelo painel da rede e depois o crédito pode ser gerado.'; return; }
-      const v = prompt('Valor do crédito para a cliente (R$). Vale em qualquer unidade, como saldo de cashback.', (d.total_cents / 100).toFixed(2).replace('.', ','));
-      if (v === null) return; const cents = Math.round(Number(v.replace(/\./g, '').replace(',', '.')) * 100);
-      if (!(cents > 0)) { $('wMsg').className = 'msg err'; $('wMsg').textContent = 'Valor inválido.'; return; }
-      let r; askPin({ name: 'Supervisor, gerente ou dono' }, () => { $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Crédito de ' + brl(r.credit_cents) + ' liberado por ' + r.authorized_by + '. Já aparece no saldo da cliente em qualquer unidade (validade de ' + r.valid_days + ' dias).'; findWarranty(); },
-        async pin => { r = await api('/store/warranty/claims/' + b.dataset.id + '/credit', 'POST', { amount_cents: cents, supervisor_pin: pin }); });
+      const back = d.items.filter(i => i.is_product && i.quantity - i.returned > 0);
+      const unitPaid = i => Math.floor(i.total_cents / i.quantity);
+      let edited = false;
+      const box = document.createElement('div'); box.className = 'wcred'; box.id = 'wCred';
+      box.innerHTML = '<p class="label" style="margin-top:12px">Peças que voltaram (entram no estoque desta unidade)</p>'
+        + (back.length ? '<table>' + back.map(i => '<tr><td class="code">' + safe(i.code || '') + '</td><td>' + safe(i.name) + '<br><span class="sub">pago ' + brl(unitPaid(i)) + ' cada' + (i.returned ? ' · já voltaram ' + i.returned : '') + '</span></td><td class="n"><input class="field cti" type="number" min="0" max="' + (i.quantity - i.returned) + '" value="' + (i.quantity - i.returned) + '" data-ri="' + safe(i.id) + '"> de ' + (i.quantity - i.returned) + '</td></tr>').join('') + '</table>' : '<p class="sub">Nenhuma peça desta venda para voltar ao estoque.</p>')
+        + '<div class="disc" style="margin-top:8px">Crédito para a cliente R$ <input class="field" id="wcVal" inputmode="decimal" style="width:110px;padding:5px 8px"><span class="sub" id="wcInfo" style="margin:0"></span></div>'
+        + '<p class="sub" style="margin:8px 0 4px">Quem está fazendo a troca? (PIN)</p><div class="people" id="wcWho" style="display:flex;gap:6px;flex-wrap:wrap"></div>';
+      $('wCred')?.remove(); b.closest('p').after(box);
+      const picks = () => back.map(i => ({ i, q: Math.max(0, Math.min(i.quantity - i.returned, Math.floor(Number(box.querySelector('[data-ri="' + i.id + '"]').value) || 0))) })).filter(x => x.q > 0);
+      const suggest = () => picks().reduce((a, x) => a + unitPaid(x.i) * x.q, 0);
+      const fill = () => { if (!edited) $('wcVal').value = (suggest() / 100).toFixed(2).replace('.', ','); $('wcInfo').textContent = ' até ' + brl(d.total_cents) + ' · vale ' + 180 + ' dias em qualquer unidade'; };
+      box.querySelectorAll('[data-ri]').forEach(e => e.oninput = fill); $('wcVal').oninput = () => { edited = true; }; fill();
+      whoButtons('wcWho', s => {
+        const cents = Math.round(Number(String($('wcVal').value).replace(/\./g, '').replace(',', '.')) * 100);
+        if (!(cents > 0)) { $('wMsg').className = 'msg err'; $('wMsg').textContent = 'Informe o valor do crédito.'; return; }
+        const items = picks().map(x => ({ sale_item_id: x.i.id, quantity: x.q }));
+        let r; askPin(s, async () => { await findWarranty(); $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Crédito de troca de ' + brl(r.credit_cents) + ' gerado' + (r.returned_pieces ? ' e ' + r.returned_pieces + (r.returned_pieces === 1 ? ' peça voltou' : ' peças voltaram') + ' ao estoque' : '') + '. A cliente usa em qualquer unidade em até ' + r.valid_days + ' dias.'; },
+          async pin => { r = await api('/store/warranty/claims/' + b.dataset.id + '/credit', 'POST', { amount_cents: cents, items, seller_id: s.id, seller_pin: pin }); });
+      });
     });
-    if (!d.canceled) whoButtons('wWho', s => askPin(s, () => { $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Atendimento registrado. O prazo para resolver é de 30 dias.'; findWarranty(); },
+    if (!d.canceled) whoButtons('wWho', s => askPin(s, async () => { await findWarranty(); $('wMsg').className = 'msg ok'; $('wMsg').textContent = 'Atendimento registrado. O prazo para resolver é de 30 dias.'; },
       pin => api('/store/warranty/' + encodeURIComponent(code) + '/claims', 'POST', { kind: $('wKind').value, note: $('wNote').value.trim(), seller_id: s.id, seller_pin: pin })));
   }
   $('wFind').onclick = () => { $('wMsg').className = 'msg err'; findWarranty(); };

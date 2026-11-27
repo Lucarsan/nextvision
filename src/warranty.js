@@ -13,9 +13,10 @@ export function registerWarranty(app, { q, auth, roles, route, bad, valid, audit
   const tz = 'America/Fortaleza';
   const saleView = async code => {
     const r = await q(`SELECT x.id, x.tenant_id, x.customer_id, x.receipt_code, x.sale_number, x.total_cents, x.payment_method, x.canceled_at,
+        x.discount_cents, x.cashback_used_cents, x.payments, x.installments, t.legal_name, t.cnpj,
         to_char(x.created_at AT TIME ZONE $2, 'YYYY-MM-DD') sold_on, to_char(x.created_at AT TIME ZONE $2, 'DD/MM/YYYY HH24:MI') sold_at,
         coalesce(t.unit_label, t.name) unit, t.name store_name, t.cnpj, t.network_id, n.name network_name, n.warranty_rules, t.google_review_url, c.name customer_name,
-        coalesce((SELECT json_agg(json_build_object('name', i.name, 'code', i.barcode, 'quantity', i.quantity, 'total_cents', i.total_cents) ORDER BY i.position) FROM sale_items i WHERE i.sale_id = x.id), '[]') items
+        coalesce((SELECT json_agg(json_build_object('name', i.name, 'code', i.barcode, 'quantity', i.quantity, 'total_cents', i.total_cents, 'unit_price_cents', i.unit_price_cents) ORDER BY i.position) FROM sale_items i WHERE i.sale_id = x.id), '[]') items
       FROM sales x JOIN tenants t ON t.id = x.tenant_id LEFT JOIN store_networks n ON n.id = t.network_id LEFT JOIN customers c ON c.id = x.customer_id
       WHERE x.receipt_code = $1`, [code, tz]);
     const s = r.rows[0]; if (!s) return null;
@@ -32,7 +33,9 @@ export function registerWarranty(app, { q, auth, roles, route, bad, valid, audit
     const s = await saleView(code); if (!s) return bad(res, 404, 'Comprovante não encontrado');
     const first = (s.customer_name || '').split(' ')[0] || null;
     res.set('Cache-Control', 'no-store').json({ code: s.receipt_code, store: s.network_name || s.store_name, unit: s.unit, sale_number: s.sale_number, sold_at: s.sold_at,
-      total_cents: s.total_cents, canceled: !!s.canceled_at, customer_first_name: first, items: s.items, warranties: s.warranties, units: s.units, review_url: s.google_review_url || null });
+      total_cents: s.total_cents, canceled: !!s.canceled_at, customer_first_name: first, items: s.items,
+      discount_cents: Number(s.discount_cents || 0), cashback_used_cents: Number(s.cashback_used_cents || 0), payment_method: s.payment_method, payments: s.payments || null, installments: s.installments || 1,
+      legal_name: s.legal_name || null, cnpj: s.cnpj || null, warranties: s.warranties, units: s.units, review_url: s.google_review_url || null });
   }));
   app.get('/g/:code', (_req, res) => res.sendFile('garantia.html', { root: 'public' }));
 

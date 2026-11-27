@@ -143,9 +143,10 @@ export function registerServiceOrders(app, { q, db, route, bad, valid, audit, gu
       [tid(req), crypto.randomBytes(16).toString('base64url'), v.source, v.id, JSON.stringify(d), req.user.id]);
     res.json({ url: linkBase() + '/g/' + r.rows[0].token, data: d });
   }));
-  app.get('/g/:token', rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), route(async (req, res) => {
+  // /g/ é dividido com o comprovante da venda (código de 8 caracteres, warranty.js): o que não é token de OS passa adiante.
+  app.get('/g/:token', (req, res, next) => (/^[A-Za-z0-9_-]{16,40}$/.test(String(req.params.token)) ? next() : next('route')), rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), route(async (req, res) => {
     const tok = String(req.params.token);
-    const r = /^[A-Za-z0-9_-]{16,40}$/.test(tok) ? await q('SELECT data FROM service_warranties WHERE token=$1', [tok]) : { rows: [] };
+    const r = await q('SELECT data FROM service_warranties WHERE token=$1', [tok]);
     res.set('Cache-Control', 'no-store'); res.set('X-Robots-Tag', 'noindex');
     if (!r.rows[0]) return res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><p style="font:16px Arial;margin:40px">Garantia não encontrada.</p>');
     res.type('html').send(warrantyPage(r.rows[0].data));

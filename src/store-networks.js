@@ -337,11 +337,18 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
         AND (b.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY b.created_at DESC LIMIT 20`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     const canceled = await q(`
-      SELECT coalesce(t.unit_label, t.name) unit, s.total_cents, coalesce(s.cancel_reason, '') reason, cu.name canceled_by,
+      SELECT coalesce(t.unit_label, t.name) unit, s.sale_number, s.total_cents, coalesce(s.cancel_reason, '') reason, cu.name canceled_by, sl.name seller,
              to_char(s.canceled_at AT TIME ZONE $4, 'DD/MM HH24:MI') at
-      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by LEFT JOIN users sl ON sl.id = s.seller_id
       WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
+    // Descontos dados no período (o quiosque permite até 50%): para a supervisão acompanhar.
+    const discounted = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, s.sale_number, s.total_cents, s.discount_cents, sl.name seller, s.payment_method,
+             round(100.0 * s.discount_cents / nullif(s.total_cents + s.discount_cents, 0))::int pct, to_char(s.created_at AT TIME ZONE $4, 'DD/MM HH24:MI') at
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users sl ON sl.id = s.seller_id
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NULL AND s.discount_cents > 0 AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY s.created_at DESC LIMIT 200`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Estoque baixo: peças com estoque controlado no mínimo da rede (padrão 1) ou menos, que venderam nos últimos 30 dias.
     const low = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, p.name, p.stock_qty, sum(i.quantity)::int sold
@@ -371,7 +378,8 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       warranty_open: await openClaims(q, req.user.network_id, scope(req)),
       econf_pending: econf.rows,
       duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
-      canceled: canceled.rows.map(c => ({ unit: c.unit, total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
+      canceled: canceled.rows.map(c => ({ unit: c.unit, sale_number: c.sale_number, seller: c.seller || '', total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
+      discounted: discounted.rows.map(d => ({ unit: d.unit, sale_number: d.sale_number, seller: d.seller || '', total_cents: d.total_cents, discount_cents: d.discount_cents, pct: d.pct, payment_method: d.payment_method, at: d.at })),
       low_stock: lowByUnit
     };
     res.set('Cache-Control', 'no-store').json({ from, to, units, totals, alerts });

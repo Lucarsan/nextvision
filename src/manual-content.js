@@ -29,7 +29,7 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 'v-venda', group: 'caixa', version: 1, audiences: ALL, title: 'Fazer uma venda',
+    key: 'v-venda', group: 'caixa', version: 2, audiences: ALL, title: 'Fazer uma venda',
     summary: 'Passo a passo da venda no caixa: peças, cliente, pagamento, desconto e confirmação com o PIN.',
     blocks: [
       { h: 'Visão geral da tela Caixa', list: ['À esquerda: a busca (bipe ou digite) e a lista de peças da venda.', 'À direita, em cima: a cliente.', 'À direita, embaixo: a forma de pagamento, quem está vendendo, o total e o botão "Finalizar venda".'], img: 'v-caixa.png', cap: 'Tela Caixa com uma venda em andamento' },
@@ -38,7 +38,7 @@ export const MANUAL_PAGES = [
       { warn: 'Apareceu "Peça não encontrada"? Confira o código na etiqueta. Não venda uma peça "parecida" no lugar: o estoque das duas fica errado. Avise o supervisor para cadastrar a peça.' },
       { h: '2. Escolher a cliente', p: 'Digite o telefone ou o nome no campo "Telefone ou nome da cliente" e toque na cliente certa. Ela não tem cadastro? Toque em "Cadastrar cliente" (veja a página "Cliente na venda e cadastro"). Se ela não quiser se identificar, deixe em branco: a venda sai sem cliente.' },
       { tip: 'Venda com cliente gera cashback, comprovante e garantia no WhatsApp dela. Sempre que possível, identifique a cliente.' },
-      { h: '3. Forma de pagamento', p: 'Toque em Crédito, Débito, Pix ou Dinheiro.', list: ['Dinheiro: aparece "Desconto de 10% no dinheiro". Marque só se a rede autorizou o desconto para essa venda.', 'Pix: aparece "Desconto de 5% no Pix", com a mesma regra.', 'Crédito com o pinpad ligado: escolha as parcelas.', 'O total à direita já mostra o desconto e o cashback usado.'] },
+      { h: '3. Forma de pagamento', p: 'Toque em Crédito, Débito, Pix ou Dinheiro.', list: ['Desconto: digite a % ou toque num dos botões (5%, 10%, 20%, 30%, 40%, 50%). Vale para qualquer forma de pagamento, até 50%. A supervisão vê todos os descontos dados.', 'Crédito com o pinpad ligado: escolha as parcelas.', 'O total à direita já mostra o desconto e o cashback usado.'] },
       { h: '4. Quem está vendendo', steps: ['Em "Quem está vendendo?", toque no seu nome.', 'Digite o seu PIN.', 'Aparece "✓ PIN confirmado". A venda e a comissão ficam no seu nome.'] },
       { h: '5. Finalizar', steps: ['Confira peças, cliente, forma de pagamento e total.', 'Toque em "Finalizar venda".', 'Com o pinpad Stone ligado, o valor vai sozinho para o pinpad: a cliente passa o cartão ou paga o Pix. Sem o pinpad ligado, digite o valor na maquininha.', 'Aparece "Venda nº ... registrada". Envie o comprovante (página "Depois da venda").', 'Toque em "Nova venda" para começar a próxima.'] },
       { warn: 'Se aparecer "O pagamento foi APROVADO no pinpad, mas a venda não gravou", NÃO cobre de novo. Corrija o que a mensagem pedir e toque em "Finalizar venda" outra vez: o sistema usa a cobrança já aprovada.' },
@@ -139,12 +139,13 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 'v-fechar', group: 'caixa', version: 1, audiences: ALL, title: 'Vendas do dia, sangria e fechamento',
+    key: 'v-fechar', group: 'caixa', version: 2, audiences: ALL, title: 'Vendas do dia, sangria e fechamento',
     summary: 'Ver as vendas do caixa, tirar dinheiro da gaveta, cancelar venda e fechar o caixa.',
     blocks: [
       { h: 'Vendas do dia', p: 'Em "Vendas e caixa" aparecem as vendas do caixa aberto: número, hora, vendedora, cliente, valor e forma.', img: 'v-vendas-caixa.png', cap: 'Vendas e caixa' },
       { h: 'Sangria (retirar dinheiro)', steps: ['Em "Sangria", digite o valor retirado.', 'Escreva o motivo (ex.: "depósito no banco").', 'Toque no seu nome e digite o PIN.'] },
-      { h: 'Cancelar uma venda', steps: ['Na lista de vendas, toque em "Cancelar" na venda.', 'Escreva o motivo do cancelamento.', 'Quem vendeu digita o PIN.', 'Um supervisor, gerente ou dono digita o PIN dele para autorizar.', 'Se a venda foi no pinpad, o sistema oferece o estorno (precisa do mesmo cartão).'] },
+      { h: 'Cancelar uma venda', steps: ['Menu "Vendas e caixa": na lista de vendas do caixa aberto, toque em "Cancelar" na venda.', 'Escreva o motivo do cancelamento.', 'Quem vendeu digita o PIN. Se ela não está na unidade, o supervisor, gerente ou dono digita o PIN dele.', 'Se a venda foi no pinpad, o sistema oferece o estorno (precisa do mesmo cartão).'] },
+      { warn: 'Venda com cupom fiscal (NFC-e): só dá para cancelar até 30 minutos depois da venda (regra da SEFAZ); o cupom é cancelado junto. Depois disso aparece "só troca/devolução": faça pela Garantia. Venda de caixa já fechado também não se cancela. Todo cancelamento aparece para a supervisão, com motivo e quem cancelou.' },
       { h: 'Fechar o caixa', steps: ['Toque em "Fechar caixa" (no topo da tela Caixa ou em "Vendas e caixa").', 'Veja o "Dinheiro esperado na gaveta".', 'Conte o dinheiro e digite em "Dinheiro contado na gaveta" (0 se não tiver).', 'Toque no seu nome e digite o PIN.', 'O sistema mostra se houve diferença.'], img: 'v-fechar.png', cap: 'Fechar o caixa' },
       { warn: 'Digite o valor que você CONTOU, não o esperado. A diferença aparece para o supervisor conferir; esconder diferença atrapalha achar o erro.' },
       { p: 'Depois de fechado, novas vendas só com o caixa aberto de novo.' }
@@ -176,11 +177,11 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 's-autorizar', group: 'rede', version: 1, audiences: LEAD, title: 'Autorizações no quiosque e PIN das vendedoras',
+    key: 's-autorizar', group: 'rede', version: 2, audiences: LEAD, title: 'Autorizações no quiosque e PIN das vendedoras',
     summary: 'O que só o supervisor libera com o PIN dele e como gerar PIN novo para a vendedora.',
     blocks: [
       { h: 'O seu PIN', p: 'Além da senha do painel, o supervisor tem um PIN de 4 números para autorizar no quiosque. Quem gera o PIN do supervisor é a gestão (Pessoas e acessos → "Novo PIN"). Ainda não tem ou esqueceu? Peça à gestão.' },
-      { h: 'O que pede o PIN do supervisor', list: ['Cancelar venda: o PIN de quem vendeu e o PIN do supervisor, gerente ou dono.', 'Crédito de troca ou devolução na Garantia.'] },
+      { h: 'O que pede o PIN do supervisor', list: ['Cancelar venda: a vendedora cancela sozinha, com o PIN dela. O supervisor só digita o PIN quando quem vendeu não está na unidade. Todo cancelamento aparece no painel da rede ("vendas canceladas"), com motivo e quem cancelou; os descontos aparecem em "vendas com desconto".', 'Crédito de troca ou devolução na Garantia.'] },
       { warn: 'Nunca passe o seu PIN para a vendedora "adiantar". Cada autorização fica registrada no seu nome.' },
       { h: 'PIN novo para a vendedora', steps: ['Abra "Pessoas e acessos".', 'Na linha da vendedora, toque em "Novo PIN" e confirme.', 'Passe o PIN temporário para ela pessoalmente.', 'Peça para ela trocar em "Trocar meu PIN" no quiosque.'], img: 's-pessoas.png', cap: 'Pessoas e acessos' },
       { p: 'O supervisor vê e gera PIN só para as vendedoras das unidades dele. Cadastrar ou desativar pessoas é com a gestão.' }

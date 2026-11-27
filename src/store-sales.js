@@ -18,6 +18,8 @@ import { matchParts, partKindFor, fold } from './part-match.js';
 import { registerInfinitePay } from './infinitepay.js';
 import bcrypt from 'bcryptjs';
 import { pinOk, authorizerByPin } from './kiosk.js';
+import { cancelSaleFiscal, salesFiscal } from './nfce-cancel.js';
+export const KIOSK_MAX_DISCOUNT_PCT = 50;
 import { linkedIds, linkLocal, searchNetwork, adopt } from './network-customers.js';
 import { newReceiptCode } from './warranty.js';
 import { newCustomerSchema, saveNewCustomer, registerKioskCustomers } from './kiosk-customers.js';
@@ -280,7 +282,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       cancel_reason: x.cancel_reason, customer_name: x.customer_name, seller_name: x.seller_name, items: (x.items || []).map(i => ({ name: i.name, barcode: i.barcode, quantity: i.quantity, total_cents: i.total_cents })) }));
     const off = (await q('SELECT id,offline_auth FROM sales WHERE session_id=$1 AND offline_payment', [s.id])).rows;
     const offMap = new Map(off.map(o => [o.id, o]));
-    res.set('Cache-Control', 'no-store').json({ session: s, sales: sales.map(x => ({ ...x, offline_payment: offMap.has(x.id), offline_auth: offMap.get(x.id)?.offline_auth || null })),
+    const fis = await salesFiscal(q, sales.map(x => x.id));
+    res.set('Cache-Control', 'no-store').json({ session: s, now: new Date().toISOString(), sales: sales.map(x => ({ ...x, offline_payment: offMap.has(x.id), offline_auth: offMap.get(x.id)?.offline_auth || null, nfce: fis.get(x.id) || null })),
       movements: d.movements.map(m => ({ id: m.id, kind: m.kind, amount_cents: m.amount_cents, note: m.note, created_at: m.created_at, canceled_at: m.canceled_at })),
       expected_cash_cents: d.summary.expected_cash_cents });
   }));
@@ -1426,11 +1429,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
         items = [...merged.values()].map((x, position) => ({ ...x, total_cents: x.unit_price_cents * x.quantity, position }));
         const gross = items.reduce((a, x) => a + x.total_cents, 0), disc = v.discount_cents || 0;
         total = gross - disc;
-        // Quiosque: desconto só dentro da regra da rede (até 10% no dinheiro e 5% no Pix).
-        if (req.user.kiosk && disc) {
-          const max = v.payments ? 0 : v.payment_method === 'cash' ? Math.round(gross * 0.10) : v.payment_method === 'pix' ? Math.round(gross * 0.05) : 0;
-          if (disc > max) { await c.query('ROLLBACK'); return bad(res, 403, 'Desconto acima da regra: até 10% no dinheiro e 5% no Pix'); }
-        }
+        // Quiosque: desconto até 50% em qualquer forma de pagamento (Audace, 27/11: Black Friday até 40%, funcionária 50%).
+        if (req.user.kiosk && disc > Math.floor(gross * KIOSK_MAX_DISCOUNT_PCT / 100)) { await c.query('ROLLBACK'); return bad(res, 403, `Desconto acima do limite: até ${KIOSK_MAX_DISCOUNT_PCT}% da venda`); }
         if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, disc ? 'O desconto não pode ser igual ou maior que o valor dos itens' : 'Total da venda inválido (confira preços e quantidades)'); }
         if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / gross)); x.total_cents -= cut; left -= cut; }); }
         // Modelo (película/capinha): acha ou cria, com o nome já salvo (fica para sugerir nas próximas vendas).
@@ -1587,24 +1587,39 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     res.set('Cache-Control', 'no-store'); res.json({ ...sale, timezone: TZ, generated_at: new Date().toISOString(), loyalty: loyalty?.enabled ? loyalty : null, cashback });
   }));
 
+  // Quem cancela no quiosque: a vendedora da venda (PIN dela) ou, sem ela, supervisor/gerente/dono (PIN dele).
+  const kioskCancelerFor = async (client, tenantId, sellerId, v) => {
+    if (v.seller_pin) return sellerId && (await pinOk(client, bcrypt, sellerId, v.seller_pin)) ? { id: sellerId, supervisor: false } : null;
+    const by = v.supervisor_pin ? await authorizerByPin(client, bcrypt, tenantId, v.supervisor_pin) : null;
+    return by ? { id: by.id, name: by.name, supervisor: true } : null;
+  };
   app.post('/api/store/sales/:id/cancel', ...full, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ reason: z.string().trim().min(3).max(200), seller_pin: z.string().regex(/^\d{4}$/).optional(), supervisor_pin: z.string().regex(/^\d{4}$/).optional() }).strict(), req, res); if (!v) return;
+    // Cupom fiscal: confere a venda e os PINs ANTES de cancelar o cupom na SEFAZ (o cancelamento lá não tem volta).
+    // Passou de 30 minutos, a SEFAZ não aceita: a venda não se cancela (troca ou devolução).
+    {
+      const pre = (await q(`SELECT x.id,x.seller_id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open'`, [req.params.id, tid(req)])).rows[0];
+      if (!pre) return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto');
+      // Quiosque (decisão da Audace, 27/11): basta o PIN de quem vendeu; sem ele (vendedora fora), o de um supervisor, gerente ou dono.
+      if (req.user.kiosk && !(await kioskCancelerFor({ query: q }, tid(req), pre.seller_id, v))) return bad(res, 401, v.seller_pin ? 'PIN de quem vendeu incorreto' : 'PIN do supervisor incorreto');
+      const fx = await cancelSaleFiscal(q, req.params.id, v.reason);
+      if (fx) return bad(res, fx.status, fx.error);
+    }
     const c = await db.connect();
     try {
       await c.query('BEGIN');
       await c.query("SELECT pg_advisory_xact_lock(hashtext('fp-sale:'||$1))", [tid(req)]); // mesma fila das vendas (saldo de cashback)
       const s = await c.query(`SELECT x.id,x.seller_id FROM sales x JOIN cash_sessions s ON s.id=x.session_id WHERE x.id=$1 AND x.tenant_id=$2 AND x.canceled_at IS NULL AND s.status='open' FOR UPDATE OF x`, [req.params.id, tid(req)]);
       if (!s.rowCount) { await c.query('ROLLBACK'); return bad(res, 409, 'Só é possível cancelar vendas do caixa aberto'); }
-      // Quiosque: cancelar pede o PIN de quem vendeu e o PIN de um supervisor, dono ou gerente.
-      let reason = v.reason;
+      // Quiosque: quem cancelou é a pessoa do PIN (aparece no painel da rede, em "vendas canceladas").
+      let reason = v.reason, canceledBy = req.user.id;
       if (req.user.kiosk) {
-        if (!(await pinOk(c, bcrypt, s.rows[0].seller_id, v.seller_pin))) { await c.query('ROLLBACK'); return bad(res, 401, 'PIN de quem vendeu incorreto'); }
-        const by = await authorizerByPin(c, bcrypt, tid(req), v.supervisor_pin);
-        if (!by) { await c.query('ROLLBACK'); return bad(res, 401, 'PIN do supervisor incorreto'); }
-        reason = (v.reason + ' · autorizado por ' + by.name).slice(0, 300);
+        const by = await kioskCancelerFor(c, tid(req), s.rows[0].seller_id, v);
+        if (!by) { await c.query('ROLLBACK'); return bad(res, 401, v.seller_pin ? 'PIN de quem vendeu incorreto' : 'PIN do supervisor incorreto'); }
+        canceledBy = by.id; if (by.supervisor) reason = (v.reason + ' · autorizado por ' + by.name).slice(0, 300);
       }
-      await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [req.user.id, reason, req.params.id]);
+      await c.query('UPDATE sales SET canceled_at=now(),canceled_by=$1,cancel_reason=$2 WHERE id=$3', [canceledBy, reason, req.params.id]);
       // Devolve ao estoque o que a venda baixou.
       // Peça ligada depois ao serviço (só reposição, sem estoque): sai da reposição.
       await c.query(`UPDATE products p SET restock_pending=GREATEST(0,p.restock_pending-i.qty),updated_at=now()

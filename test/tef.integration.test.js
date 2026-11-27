@@ -99,7 +99,7 @@ test('TEF Stone: cobrança registrada antes do pinpad, venda só com aprovação
     assert.equal((await api('/store/tef/pending', { token: kt })).items.length, 0);
 
     // Cancelar venda paga no pinpad: a resposta diz o que estornar e a cobrança aparece nas pendências até estornar.
-    const cx = await api(`/store/sales/${s1.data.sale.id}/cancel`, { method: 'POST', token: kt, body: { reason: 'Cliente desistiu', seller_pin: '1234', supervisor_pin: '9999' } });
+    const cx = await api(`/store/sales/${s1.data.sale.id}/cancel`, { method: 'POST', token: kt, body: { reason: 'Cliente desistiu', seller_pin: '1234' } });
     assert.deepEqual(cx.tef_to_reverse, [{ id: t1.id, method: 'credit', amount_cents: 4900 }]);
     pend = (await api('/store/tef/pending', { token: kt })).items;
     assert.deepEqual(pend.map(p => [p.id, p.reason, p.sale_number]), [[t1.id, 'sale_canceled', s1.data.sale.sale_number]]);

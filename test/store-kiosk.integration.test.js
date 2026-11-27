@@ -83,18 +83,20 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', seller_id: ana.id, seller_pin: '1111' } })).status, 401);
     const sale = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', seller_id: ana.id, seller_pin: '1234' } }, 201);
     assert.equal(sale.sale.seller_id, ana.id);
-    // Desconto: até 10% no dinheiro e 5% no Pix; nada no cartão.
-    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', discount_cents: 100, seller_id: ana.id, seller_pin: '1234' } })).status, 403);
-    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'pix', discount_cents: 300, seller_id: ana.id, seller_pin: '1234' } })).status, 403);
+    // Desconto: até 50% da venda em qualquer forma de pagamento.
+    assert.equal((await request('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', discount_cents: 2451, seller_id: ana.id, seller_pin: '1234' } })).status, 403);
     const cash = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'cash', discount_cents: 490, seller_id: ana.id, seller_pin: '1234' } }, 201);
     assert.equal(cash.sale.total_cents, 4410);
-    // O PIN não fica guardado em venda "a receber".
-    // Cancelar no quiosque: PIN de quem vendeu + PIN de supervisor/dono.
-    const cancel = body => request(`/store/sales/${sale.sale.id}/cancel`, { method: 'POST', token: kt, body: { reason: 'Cobrança repetida', ...body } });
-    assert.equal((await cancel({})).status, 401);
-    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '1234' })).status, 401);
-    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '5555' })).status, 401, 'supervisor de outra unidade não autoriza');
-    assert.equal((await cancel({ seller_pin: '1234', supervisor_pin: '9999' })).status, 200);
+    // Cancelar no quiosque: só o PIN de quem vendeu; sem ela, o PIN de supervisor/dono da unidade.
+    const cancel = (id, body) => request(`/store/sales/${id}/cancel`, { method: 'POST', token: kt, body: { reason: 'Cobrança repetida', ...body } });
+    assert.equal((await cancel(sale.sale.id, {})).status, 401);
+    assert.equal((await cancel(sale.sale.id, { seller_pin: '1111' })).status, 401);
+    assert.equal((await cancel(sale.sale.id, { supervisor_pin: '5555' })).status, 401, 'supervisor de outra unidade não autoriza');
+    assert.equal((await cancel(sale.sale.id, { seller_pin: '1234' })).status, 200);
+    assert.equal((await f.db.query('SELECT canceled_by FROM sales WHERE id=$1', [sale.sale.id])).rows[0].canceled_by, ana.id);
+    const half = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'credit', discount_cents: 2450, seller_id: ana.id, seller_pin: '1234' } }, 201);
+    assert.equal(half.sale.total_cents, 2450);
+    assert.equal((await cancel(half.sale.id, { supervisor_pin: '9999' })).status, 200);
     const day = await api('/store/cash', { token: kt });
     assert.match(JSON.stringify(day), /autorizado por Gabriel Mota/);
 
@@ -110,12 +112,14 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     const offCash = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'cash', offline_payment: true, seller_id: ana.id, seller_pin: '1234' } }, 201);
     assert.notEqual(offCash.sale.offline_payment, true, 'dinheiro não fica pendente');
     const ov = await api('/network/overview', { token: g.data.token });
+    assert.ok(ov.alerts.discounted.some(d => d.pct === 10 && d.seller === 'Ana Paula' && d.discount_cents === 490), 'desconto aparece para a supervisão');
+    assert.ok(ov.alerts.canceled.some(c => c.canceled_by === 'Ana Paula' && c.seller === 'Ana Paula'), 'quem cancelou é a vendedora do PIN');
     assert.deepEqual(ov.alerts.econf_pending.map(e => [e.sale_number, e.offline_auth]), [[off.sale.sale_number, 'AUT123']]);
     await api(`/network/sales/${off.sale.id}/econf-done`, { method: 'POST', token: g.data.token });
     assert.equal((await api('/network/overview', { token: g.data.token })).alerts.econf_pending.length, 0);
     // Vendas do caixa no quiosque: sem custo; sangria e fechamento com PIN.
     const today = await api('/store/kiosk/cash-today', { token: kt });
-    assert.equal(today.sales.length, 4); assert.equal(JSON.stringify(today).includes('cost'), false);
+    assert.equal(today.sales.length, 5); assert.equal(JSON.stringify(today).includes('cost'), false);
     assert.equal(today.sales.find(x => x.id === off.sale.id).offline_payment, true);
     assert.equal((await request('/store/cash/movements', { method: 'POST', token: kt, body: { kind: 'withdrawal', amount_cents: 1000, seller_id: ana.id, seller_pin: '0000' } })).status, 401);
     const sg = await api('/store/cash/movements', { method: 'POST', token: kt, body: { kind: 'withdrawal', amount_cents: 1000, note: 'Banco', seller_id: ana.id, seller_pin: '1234' } }, 201);

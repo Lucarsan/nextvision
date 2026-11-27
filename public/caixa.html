@@ -65,7 +65,8 @@
   .step b{display:block;color:var(--ink);font-weight:600}.step small{color:var(--muted)}
   .go{width:100%;margin-top:12px;padding:14px;border:0;border-radius:10px;background:var(--ink);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
   .go:disabled{opacity:.45;cursor:default}
-  .disc{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px}
+  .disc{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px;flex-wrap:wrap}
+  .discq{display:inline-flex;gap:4px;flex-wrap:wrap}.discq button{border:1px solid var(--line,#e2ded6);background:#fff;border-radius:999px;padding:3px 9px;font-size:12px;cursor:pointer;color:var(--ink)}.discq button.on{background:var(--green-bg);color:var(--green);border-color:transparent;font-weight:600}
   .msg{margin:10px 0 0;font-weight:600;min-height:18px}.msg.err{color:var(--red)}.msg.ok{color:var(--green)}
   .done{background:var(--green-bg);border-radius:10px;padding:14px;margin-top:12px}.done strong{color:var(--green)}
   .done a,.done button{display:inline-block;margin:8px 8px 0 0;padding:8px 12px;border-radius:8px;border:0;background:var(--ink);color:#fff;text-decoration:none;font-weight:600;cursor:pointer;font-size:13px}
@@ -170,7 +171,9 @@
             <div class="tefpend" id="tefPend" hidden></div>
             <p class="label">Pagamento</p>
             <div class="pay" id="pay"><button type="button" data-m="credit">Crédito</button><button type="button" data-m="debit">Débito</button><button type="button" data-m="pix">Pix</button><button type="button" data-m="cash">Dinheiro</button></div>
-            <label class="disc" id="discRow" hidden><input type="checkbox" id="disc"> <span id="discLabel"></span></label>
+            <div class="disc" id="discRow">Desconto <input class="field" id="discPct" type="number" min="0" max="50" step="1" inputmode="numeric" placeholder="0" style="width:64px;padding:5px 8px"> %
+              <span class="discq" id="discQuick"><button type="button" data-p="5">5%</button><button type="button" data-p="10">10%</button><button type="button" data-p="20">20%</button><button type="button" data-p="30">30%</button><button type="button" data-p="40">40%</button><button type="button" data-p="50">50%</button><button type="button" data-p="0">Sem</button></span>
+              <span class="sub" id="discInfo" style="margin:0"></span></div>
             <label class="disc" id="instRow" hidden>Parcelas no crédito <select class="field" id="inst" style="width:auto;margin-left:6px"></select></label>
             <div id="offRow" hidden><label class="disc"><input type="checkbox" id="offline"> Pinpad fora do ar: cobrei na maquininha avulsa</label>
               <input class="field" id="offAuth" maxlength="40" placeholder="Autorização do comprovante (AUT/NSU)" hidden style="margin-top:6px"></div>
@@ -352,7 +355,10 @@
   let tef = null, tefCfg = { mode: 'off' }, paidTx = null;
   let isKiosk = false, unit = null, sellers = [], cfg = {}, items = [], customer = null, method = 'credit', seller = null, sellerPin = '';
   const subtotal = () => items.reduce((a, x) => a + x.price_cents * x.qty, 0);
-  const discountCents = () => !$('disc').checked ? 0 : Math.round(subtotal() * (method === 'cash' ? 0.10 : method === 'pix' ? 0.05 : 0));
+  // Desconto em % na hora do pagamento: até 50% em qualquer forma (o servidor confere o mesmo limite).
+  const DISC_MAX = 50;
+  const discPct = () => Math.max(0, Math.min(DISC_MAX, Math.floor(Number($('discPct').value) || 0)));
+  const discountCents = () => Math.floor(subtotal() * discPct() / 100);
   const cbAvailable = () => customer?.cashback?.balance_cents || 0;
   const cbUseCents = () => {
     if (!$('cbUse').checked || !cbAvailable()) return 0;
@@ -370,9 +376,9 @@
     document.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { items[+b.dataset.inc].qty++; draw(); });
     document.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => { const x = items[+b.dataset.dec]; if (x.qty > 1) x.qty--; else items.splice(+b.dataset.dec, 1); draw(); });
     $('pay').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === method));
-    $('discRow').hidden = !(method === 'cash' || method === 'pix');
-    if (!$('discRow').hidden) $('discLabel').textContent = method === 'cash' ? 'Desconto de 10% no dinheiro (' + brl(Math.round(subtotal() * 0.10)) + ')' : 'Desconto de 5% no Pix (' + brl(Math.round(subtotal() * 0.05)) + ')';
-    else $('disc').checked = false;
+    if (Number($('discPct').value) > DISC_MAX) $('discPct').value = DISC_MAX;
+    $('discInfo').textContent = discountCents() ? '− ' + brl(discountCents()) + ' (de ' + brl(subtotal()) + ' para ' + brl(subtotal() - discountCents()) + ')' : 'até ' + DISC_MAX + '%';
+    $('discQuick').querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', Number(b.dataset.p) === discPct() && (discPct() > 0 || $('discPct').value !== '')));
     $('offRow').hidden = method === 'cash'; if (method === 'cash') $('offline').checked = false;
     $('offAuth').hidden = !$('offline').checked;
     $('st1').querySelector('small').textContent = $('offline').checked ? 'Maquininha avulsa: a venda fica pendente de conciliação (ECONF)'
@@ -463,7 +469,7 @@
   }
   function cfFill(p, c = {}) { CF.forEach(([k]) => { $(p + '_' + k).value = c[k] || ''; }); $(p + '_offers_opt_out').checked = !!c.offers_opt_out; }
   $('newCustBtn').onclick = () => { $('newCust').hidden = !$('newCust').hidden; if (!$('newCust').hidden) $('nc_name').focus(); };
-  $('cbUse').onchange = draw; $('disc').onchange = draw; $('offline').onchange = draw;
+  $('cbUse').onchange = draw; $('discPct').oninput = draw; $('discQuick').querySelectorAll('[data-p]').forEach(b => b.onclick = () => { $('discPct').value = b.dataset.p === '0' ? '' : b.dataset.p; draw(); }); $('offline').onchange = draw;
   $('pay').querySelectorAll('button').forEach(b => b.onclick = () => { method = b.dataset.m; draw(); });
 
   // ---------- PIN ----------
@@ -550,7 +556,7 @@
         }).catch(() => {});
       }
       $('newSale').onclick = resetSale;
-      items = []; seller = null; sellerPin = ''; $('disc').checked = false; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
+      items = []; seller = null; sellerPin = ''; $('discPct').value = ''; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
       draw(); $('finish').disabled = true;
     } catch (e) {
       $('saleMsg').textContent = (paidTx ? 'O pagamento foi APROVADO no pinpad, mas a venda não gravou: ' : '') + e.message + (paidTx ? ' Corrija e toque em Finalizar de novo (não cobra outra vez).' : '');
@@ -558,7 +564,7 @@
     }
   };
   function resetSale() {
-    items = []; seller = null; sellerPin = ''; method = 'credit'; $('disc').checked = false; $('doneBox').hidden = true; $('st1').classList.remove('done');
+    items = []; seller = null; sellerPin = ''; method = 'credit'; $('discPct').value = ''; $('doneBox').hidden = true; $('st1').classList.remove('done');
     $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); $('scan').focus();
   }
 
@@ -643,22 +649,25 @@
     if (!d.session) { $('salesSub').textContent = 'O caixa está fechado.'; $('tSales').innerHTML = ''; $('tMoves').innerHTML = ''; $('expCash').textContent = '—'; return; }
     $('salesSub').textContent = 'Caixa aberto às ' + hhmm(d.session.opened_at).replace(':', 'h') + ' · ' + d.sales.filter(x => !x.canceled_at).length + ' vendas';
     $('tSales').innerHTML = d.sales.map(x => '<tr' + (x.canceled_at ? ' class="canceled"' : '') + '><td>' + x.sale_number + '</td><td>' + hhmm(x.created_at) + '</td><td>' + safe((x.seller_name || '').split(' ')[0]) + '</td><td>' + safe(x.customer_name || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + safe(METHOD[x.payment_method] || x.payment_method) + (x.offline_payment ? ' · avulsa' : '') + '</td><td>'
-      + (x.canceled_at ? '<span class="sub">cancelada</span>' : '<button type="button" class="cancelbtn" data-cx="' + safe(x.id) + '">Cancelar</button>') + '</td></tr>').join('') || '<tr><td colspan="7" class="sub">Nenhuma venda ainda.</td></tr>';
+      + (x.canceled_at ? '<span class="sub">cancelada</span>' : nfceLate(x) ? '<span class="sub" title="Passaram 30 minutos do cupom fiscal: a SEFAZ não aceita mais o cancelamento">só troca/devolução</span>'
+        : '<button type="button" class="cancelbtn" data-cx="' + safe(x.id) + '"' + (x.nfce?.status === 'authorized' ? ' title="Cupom fiscal: dá para cancelar até ' + hhmm(x.nfce.cancel_until) + '"' : '') + '>Cancelar</button>' + (x.nfce?.status === 'authorized' ? '<br><span class="sub">até ' + hhmm(x.nfce.cancel_until) + '</span>' : '')) + '</td></tr>').join('') || '<tr><td colspan="7" class="sub">Nenhuma venda ainda.</td></tr>';
     $('tSales').querySelectorAll('[data-cx]').forEach(b => b.onclick = () => cancelSale(d.sales.find(x => x.id === b.dataset.cx)));
     $('tMoves').innerHTML = d.movements.filter(m => !m.canceled_at).map(m => '<tr><td>' + hhmm(m.created_at) + '</td><td>' + (m.kind === 'withdrawal' ? 'Sangria' : m.kind === 'deposit' ? 'Suprimento' : 'Saída') + (m.note ? ' · ' + safe(m.note) : '') + '</td><td class="n">' + brl(m.amount_cents) + '</td></tr>').join('');
     $('expCash').textContent = brl(d.expected_cash_cents);
   }
+  // Venda com cupom fiscal: a SEFAZ só aceita cancelar até 30 minutos depois; passou disso, é troca ou devolução.
+  const nfceLate = x => x.nfce?.status === 'authorized' && Date.now() > new Date(x.nfce.cancel_until).getTime();
+  // Cancelar: só o PIN de quem vendeu. Se ela não está mais na unidade, o PIN de um supervisor, gerente ou dono.
   function cancelSale(x) {
-    const reason = prompt('Cancelar a venda nº ' + x.sale_number + ' (' + brl(x.total_cents) + ').\nMotivo do cancelamento:');
+    if (nfceLate(x)) { alert('Passaram 30 minutos do cupom fiscal desta venda: a SEFAZ não aceita mais o cancelamento. Faça a troca ou devolução pela Garantia.'); return; }
+    const reason = prompt('Cancelar a venda nº ' + x.sale_number + ' (' + brl(x.total_cents) + ').' + (x.nfce?.status === 'authorized' ? '\nO cupom fiscal também será cancelado.' : '') + '\nMotivo do cancelamento:');
     if (!reason || reason.trim().length < 3) return;
     const sellerP = sellers.find(s => s.name === x.seller_name);
-    const ask = sellerP || { id: null, name: x.seller_name || 'Quem vendeu' };
-    askPin(ask, sPin => {
-      let done = null;
-      askPin({ name: 'Supervisor, gerente ou dono' }, async () => { loadSales(); await reverseAfterCancel(done?.tef_to_reverse || []); }, async supPin => {
-        done = await api('/store/sales/' + x.id + '/cancel', 'POST', { reason: reason.trim(), seller_pin: sPin, supervisor_pin: supPin });
-      });
-    }, sellerP ? undefined : async () => {});
+    const ask = sellerP || { id: null, name: 'Supervisor, gerente ou dono' };
+    let done = null;
+    askPin(ask, async () => { loadSales(); await reverseAfterCancel(done?.tef_to_reverse || []); }, async pin => {
+      done = await api('/store/sales/' + x.id + '/cancel', 'POST', sellerP ? { reason: reason.trim(), seller_pin: pin } : { reason: reason.trim(), supervisor_pin: pin });
+    });
   }
   // ---------- Pendências do pinpad (TEF) ----------
   async function reverseOne(id, method, cents) {

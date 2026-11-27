@@ -327,7 +327,13 @@
     if (can.length) {
       const total = can.reduce((a, c) => a + c.total_cents, 0);
       h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>'
-        + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + ' · ' + brl(c.total_cents) + ' · ' + safe(c.at) + (c.canceled_by ? ' · ' + safe(c.canceled_by) : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
+        + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + (c.sale_number ? ' · venda nº ' + c.sale_number : '') + ' · ' + brl(c.total_cents) + ' · cancelada ' + safe(c.at) + (c.canceled_by ? ' por ' + safe(c.canceled_by) : '') + (c.seller && c.seller !== c.canceled_by ? ' (vendida por ' + safe(c.seller) + ')' : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
+    }
+    const disc = only(data.alerts.discounted || []);
+    if (disc.length) {
+      const dt = disc.reduce((a, d) => a + d.discount_cents, 0);
+      h += '<div class="alert yellow"><b>' + warn + plural(disc.length, 'venda com desconto', 'vendas com desconto') + ' ' + RANGES[range].word + '</b><p>' + brl(dt) + ' de desconto no total' + (disc.some(d => d.pct >= 40) ? '; ' + disc.filter(d => d.pct >= 40).length + ' com 40% ou mais' : '') + '.</p>'
+        + '<details><summary>Ver descontos</summary><ul>' + disc.map(d => '<li>' + safe(d.unit) + ' · venda nº ' + d.sale_number + ' · ' + safe(d.at) + (d.seller ? ' · ' + safe(d.seller) : '') + ' · <b>' + d.pct + '%</b> (' + brl(d.discount_cents) + ') · pago ' + brl(d.total_cents) + ' no ' + safe(METHOD[d.payment_method] || d.payment_method) + '</li>').join('') + '</ul></details></div>';
     }
     for (const u of low) h += '<div class="alert yellow"><b>' + warn + 'Estoque baixo em ' + safe(u.unit) + '</b><p>' + plural(u.products.length, 'peça que vende', 'peças que vendem') + ' com 1 unidade ou menos</p>'
       + '<details><summary>Ver peças</summary><ul>' + u.products.map(p => '<li>' + safe(p.name) + ' · estoque ' + p.stock_qty + ' · ' + p.sold_30d + ' vendida(s) em 30 dias</li>').join('') + '</ul></details></div>';

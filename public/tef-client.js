@@ -78,6 +78,15 @@
       if (a.status !== 200) throw Error(code(a.body) === 'N404' ? 'Pinpad não encontrado. ' + hint : code(a.body) === 'A001' ? 'Stone Code não combina com o ambiente do AutoTEF (teste x produção). Avise o suporte.' : 'Não foi possível ativar o pinpad (' + (code(a.body) || a.status) + ').');
       serial = a.body.serialNumber || serial;
     }
+    // Inicialização manual (logon + carga de tabelas): força uma nova ativação do pinpad.
+    async function initialize() {
+      let a;
+      try { a = await call('/api/Activate', { stoneCode: cfg.stone_code || '000000000', partnerName: cfg.partner_name, ...(cfg.pinpad_port ? { connectionName: cfg.pinpad_port } : {}) }, 60000); }
+      catch { throw Error('O pinpad não respondeu na ativação. ' + hint); }
+      if (a.status !== 200) throw Error(code(a.body) === 'N404' ? 'Pinpad não encontrado. ' + hint : code(a.body) === 'A001' ? 'Stone Code não combina com o ambiente do AutoTEF (teste x produção). Avise o suporte.' : 'Não foi possível ativar o pinpad (' + (code(a.body) || a.status) + ').');
+      serial = a.body.serialNumber || serial;
+      return { stone_code: a.body.stoneCode || cfg.stone_code, serial: a.body.serialNumber || null, port: a.body.connectionName || cfg.pinpad_port || null, at: new Date() };
+    }
     const report = (id, kind, r) => api('/store/tef/transactions/' + id + '/result', 'POST', { kind, http: r ? r.status : 0, body: r ? r.body : null, ...(serial ? { terminal_serial: String(serial).slice(0, 40) } : {}) });
 
     // Cartão (crédito/débito). onStep(texto) atualiza a tela. Devolve a cobrança como o servidor registrou.
@@ -128,6 +137,6 @@
       return api('/store/tef/transactions/' + txId + '/reversed', 'POST', {});
     }
 
-    return { mode: cfg.mode, ready, payCard, payPix, reverse, get serial() { return serial; } };
+    return { mode: cfg.mode, ready, initialize, payCard, payPix, reverse, get serial() { return serial; } };
   };
 })();

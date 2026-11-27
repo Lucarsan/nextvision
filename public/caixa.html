@@ -278,7 +278,11 @@
     <section id="viewSales" hidden>
       <div class="top"><div><h1>Vendas e caixa</h1><p class="sub" id="salesSub">Vendas do caixa aberto</p></div></div>
       <div class="grid">
-        <div class="card"><p class="label">Vendas de hoje</p><table><thead><tr><th>Nº</th><th>Hora</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th></th></tr></thead><tbody id="tSales"></tbody></table></div>
+        <div class="card"><p class="label">Vendas de hoje</p><table><thead><tr><th>Nº</th><th>Hora</th><th>Vendedora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th><th></th></tr></thead><tbody id="tSales"></tbody></table>
+          <div id="tefCard" hidden style="margin-top:18px;border-top:1px solid #eee;padding-top:14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><p class="label" style="margin:0">Cobranças no pinpad Stone (hoje)</p><button type="button" class="cancelbtn" id="tefInit" style="color:var(--ink);border-color:#ddd">Inicializar pinpad</button></div>
+            <p class="msg" id="tefInitMsg"></p>
+            <table><thead><tr><th>Hora</th><th class="n">Valor</th><th>Forma</th><th>Situação</th><th></th></tr></thead><tbody id="tTef"></tbody></table></div></div>
         <div style="display:flex;flex-direction:column;gap:16px">
           <div class="card"><p class="label">Sangria (retirada de dinheiro)</p>
             <input class="field" id="sgVal" inputmode="decimal" placeholder="Valor (R$)"><input class="field" id="sgNote" maxlength="120" placeholder="Motivo (ex.: depósito no banco)" style="margin-top:6px">
@@ -300,6 +304,8 @@
   <p class="msg err" id="cuMsg"></p>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="linkbtn" id="cuCancel">Cancelar</button><button type="button" class="go" id="cuSave" style="margin:0;width:auto;padding:10px 18px">Salvar</button></div>
 </dialog>
+<dialog id="tefDlg" style="border:0;border-radius:14px;padding:18px;max-width:360px;width:92%"><pre id="tefRc" style="font:12px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap;margin:0"></pre>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button type="button" class="linkbtn" id="tefRcPrint">Imprimir</button><button type="button" class="linkbtn" id="tefRcClose">Fechar</button></div></dialog>
 <dialog id="chDlg"><div id="chBody"></div></dialog>
 <dialog id="clDlg">
   <h2 style="margin:0 0 4px;font-size:18px">Fechar o caixa</h2>
@@ -532,6 +538,7 @@
       body.tef_transaction_ids = [paidTx.id];
     }
     try {
+      const soldTx = paidTx;
       const r = await api('/store/sales', 'POST', body);
       const c = r.customer || customer;
       const earned = r.sale.cashback_earned_cents || 0;
@@ -545,7 +552,7 @@
         wa = 'https://wa.me/' + (ph.length <= 11 ? '55' + ph : ph) + '?text=' + encodeURIComponent(text);
       }
       $('doneBox').innerHTML = '<strong>Venda nº ' + r.sale.sale_number + ' registrada · ' + brl(r.sale.total_cents) + '</strong><div class="sub" style="margin:2px 0 0">Vendida por ' + safe(seller.name.split(' ')[0]) + (earned ? ' · cashback de ' + brl(earned) : '') + '</div>'
-        + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + '<button type="button" id="newSale">Nova venda</button>';
+        + (wa ? '<a href="' + wa + '" target="_blank" rel="noopener">Enviar comprovante e cashback pelo WhatsApp</a>' : '') + (r.sale.receipt_code ? '<a href="/g/' + r.sale.receipt_code + '" target="_blank" rel="noopener">Ver comprovante (' + r.sale.receipt_code + ')</a>' : '') + (soldTx ? '<button type="button" id="tefRcBtn">Comprovante do cartão</button>' : '') + '<button type="button" id="newSale">Nova venda</button>';
       $('doneBox').hidden = false; $('st1').classList.add('done');
       if (wa && c?.id) {
         api('/store/kiosk/messages').then(d => {
@@ -555,7 +562,7 @@
           a.addEventListener('click', () => { api('/store/kiosk/messages/log', 'POST', { type: 'thanks', customer_id: m.customer_id, sale_id: m.sale_id }).then(msgBadge).catch(() => {}); }, { once: true });
         }).catch(() => {});
       }
-      $('newSale').onclick = resetSale;
+      $('newSale').onclick = resetSale; if (soldTx) $('tefRcBtn').onclick = () => showTefReceipt(soldTx.id);
       items = []; seller = null; sellerPin = ''; $('discPct').value = ''; $('offline').checked = false; $('offAuth').value = ''; paidTx = null; $('tefBox').hidden = true;
       draw(); $('finish').disabled = true;
     } catch (e) {
@@ -665,16 +672,47 @@
     const sellerP = sellers.find(s => s.name === x.seller_name);
     const ask = sellerP || { id: null, name: 'Supervisor, gerente ou dono' };
     let done = null;
-    askPin(ask, async () => { loadSales(); await reverseAfterCancel(done?.tef_to_reverse || []); }, async pin => {
+    askPin(ask, async () => { loadSales(); await reverseAfterCancel(done?.tef_to_reverse || []); loadTefToday(); }, async pin => {
       done = await api('/store/sales/' + x.id + '/cancel', 'POST', sellerP ? { reason: reason.trim(), seller_pin: pin } : { reason: reason.trim(), supervisor_pin: pin });
     });
   }
+  // ---------- Comprovante e cobranças do dia (TEF) ----------
+  const TEFST = { approved: 'Aprovada', reversed: 'Estornada', declined: 'Recusada', error: 'Erro', pending: 'Aguardando', unknown: 'Sem resposta', expired: 'Pix expirado' };
+  const fz = d => d ? new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Fortaleza' }) : '';
+  async function showTefReceipt(id) {
+    let r; try { r = await api('/store/tef/transactions/' + id + '/receipt'); } catch (e) { alert(e.message); return; }
+    const kind = r.method === 'pix' ? 'PIX' : (r.method === 'debit' ? 'DÉBITO' : 'CRÉDITO') + (r.method === 'credit' ? (r.installments > 1 ? ' PARCELADO ' + r.installments + 'X SEM JUROS' : ' À VISTA') : '');
+    const L = [r.status === 'reversed' ? '*** ESTORNO ***' : '', 'STONE · VIA DO ESTABELECIMENTO', r.merchant_name || '', r.merchant_document ? 'CNPJ ' + r.merchant_document : '', r.merchant_address || '',
+      'STONE CODE: ' + (r.stone_code || '—'), r.terminal_serial ? 'PINPAD: ' + r.terminal_serial : '', '', kind, r.brand_name ? 'BANDEIRA: ' + r.brand_name : '', r.card_mask ? 'CARTÃO: ' + r.card_mask : '',
+      r.reading ? 'LEITURA: ' + r.reading : '', 'VALOR: ' + brl(r.amount_cents) + (r.installments > 1 ? ' (' + r.installments + 'x de ' + brl(Math.floor(r.amount_cents / r.installments)) + ')' : ''), '',
+      'DATA/HORA: ' + (r.transaction_datetime ? fz(r.transaction_datetime + 'Z') : fz(r.finished_at || r.created_at)), r.auth_code ? 'AUT: ' + r.auth_code : '', r.atk ? 'ATK: ' + r.atk : '', r.itk ? 'ITK: ' + r.itk : '', r.e2e_id ? 'E2E: ' + r.e2e_id : '',
+      'SITUAÇÃO: ' + (TEFST[r.status] || r.status) + (r.status === 'reversed' && r.reversed_at ? ' em ' + fz(r.reversed_at) : '') + (r.status !== 'approved' && r.status !== 'reversed' && r.message ? ' · ' + r.message : ''),
+      r.sale_number ? 'VENDA Nº ' + r.sale_number : '', r.mode !== 'production' ? '(' + r.mode + ')' : ''];
+    $('tefRc').textContent = L.filter((x, i) => x !== '' || (i > 0 && L[i - 1] !== '')).join('\n').trim();
+    $('tefDlg').showModal();
+  }
+  $('tefRcClose').onclick = () => $('tefDlg').close();
+  $('tefRcPrint').onclick = () => { const w = window.open('', '_blank', 'width=380,height=640'); if (!w) return; w.document.write('<pre style="font:12px/1.45 monospace;white-space:pre-wrap">' + safe($('tefRc').textContent) + '</pre>'); w.document.close(); w.focus(); w.print(); };
+  async function loadTefToday() {
+    if (!tef) return;
+    $('tefCard').hidden = false;
+    let d; try { d = await api('/store/tef/today'); } catch { return; }
+    $('tTef').innerHTML = d.items.map(t => '<tr><td>' + new Date(t.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Fortaleza' }) + '</td><td class="n">' + brl(t.amount_cents) + '</td><td>'
+      + safe(METHOD[t.method] || t.method) + (t.installments > 1 ? ' ' + t.installments + 'x' : '') + (t.card_mask ? ' ' + safe(t.card_mask.slice(-4)) : '') + '</td><td>' + safe(TEFST[t.status] || t.status) + (t.sale_number ? ' · venda ' + t.sale_number : '') + (t.status === 'declined' || t.status === 'error' ? '<br><span class="sub">' + safe(t.message || '') + '</span>' : '')
+      + '</td><td><button type="button" class="cancelbtn" style="color:var(--ink);border-color:#ddd" data-rc="' + safe(t.id) + '">Comprovante</button></td></tr>').join('') || '<tr><td colspan="5" class="sub">Nenhuma cobrança hoje.</td></tr>';
+    $('tTef').querySelectorAll('[data-rc]').forEach(b => b.onclick = () => showTefReceipt(b.dataset.rc));
+  }
+  $('tefInit').onclick = async () => {
+    const m = $('tefInitMsg'); m.className = 'msg'; m.textContent = 'Inicializando o pinpad (logon e carga de tabelas)…'; $('tefInit').disabled = true;
+    try { const a = await tef.initialize(); m.className = 'msg ok'; m.textContent = 'Carga de tabelas realizada · ' + a.at.toLocaleString('pt-BR', { timeZone: 'America/Fortaleza' }) + ' · Stone Code ' + (a.stone_code || '—') + (a.serial ? ' · pinpad ' + a.serial : '') + (a.port ? ' (' + a.port + ')' : ''); }
+    catch (e) { m.className = 'msg err'; m.textContent = e.message; } finally { $('tefInit').disabled = false; }
+  };
   // ---------- Pendências do pinpad (TEF) ----------
   async function reverseOne(id, method, cents) {
     if (method === 'pix') { alert('Pix de ' + brl(cents) + ': a devolução é feita pelo app da Stone. Depois, marque como resolvido em "Pendências do pinpad".'); return false; }
     if (!tef) { alert('O TEF não está ligado nesta unidade.'); return false; }
     if (!confirm('Estornar ' + brl(cents) + ' no pinpad agora? Precisa do MESMO cartão da compra.')) return false;
-    try { await tef.reverse(id, t => { $('tefPend').hidden = false; $('tefPend').innerHTML = '<strong>' + safe(t) + '</strong>'; }); alert('Estorno de ' + brl(cents) + ' feito.'); return true; }
+    try { await tef.reverse(id, t => { $('tefPend').hidden = false; $('tefPend').innerHTML = '<strong>' + safe(t) + '</strong>'; }); alert('Estorno de ' + brl(cents) + ' feito.'); showTefReceipt(id); loadTefToday(); return true; }
     catch (e) { alert(e.message); return false; } finally { loadTefPending(); }
   }
   async function reverseAfterCancel(list) { for (const t of list) await reverseOne(t.id, t.method, t.amount_cents); }
@@ -998,7 +1036,7 @@
     if (b.dataset.view === 'stock') openStock().catch(e => { $('stSub').textContent = e.message; });
     if (b.dataset.view === 'warranty') setTimeout(() => $('wCode').focus(), 30);
     if (b.dataset.view === 'day') drawDayPick(); else clearTimeout(dayTimer);
-    if (b.dataset.view === 'sales') loadSales().catch(e => { $('salesSub').textContent = e.message; });
+    if (b.dataset.view === 'sales') { loadSales().catch(e => { $('salesSub').textContent = e.message; }); loadTefToday(); }
     if (b.dataset.view === 'cash') setTimeout(() => $('scan').focus(), 30);
   });
   $('myPin').onclick = () => {

@@ -60,3 +60,13 @@ test('dados para a NFC-e: credenciadora Stone, autorização e terminal', () => 
   const pix = tefForSale({ ...t, method: 'pix', e2e_id: 'E123', mode: 'simulator' });
   assert.equal(pix.brand, null); assert.equal(pix.auth, 'E123'); assert.equal(pix.simulated, true);
 });
+
+test('comprovante montado com a resposta real (receipt/card)', async () => {
+  const { receiptOf } = await import('../src/tef.js');
+  const r = receiptOf({ id: 'x', mode: 'production', method: 'debit', status: 'reversed', amount_cents: 100, installments: 1, stone_code: '116520620',
+    provider_tx: '43163894321099', auth_code: '025605', brand_name: 'MASTER DEBITO', card_mask: '544559*********4685', terminal_serial: '7500292408023676',
+    response: { ...CARD_REAL, receipt: { ...CARD_REAL.receipt, cardReadingType: 'EMVProximityReader', transactionDateTime: '2026-11-27T15:38:56', merchantAddress: 'Av. X, 1' } },
+    merchant_name: 'RKG JOIAS', unit_cnpj: '50926162000123', reversed_at: '2026-11-27T15:41:27Z' });
+  assert.equal(r.reading, 'Aproximação (NFC)'); assert.equal(r.atk, '43163894321099'); assert.equal(r.itk, '717642271120261238153988');
+  assert.equal(r.merchant_address, 'Av. X, 1'); assert.equal(r.merchant_document, '50926162000123'); assert.equal(r.transaction_datetime, '2026-11-27T15:38:56');
+});

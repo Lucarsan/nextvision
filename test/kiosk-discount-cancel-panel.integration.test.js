@@ -50,6 +50,8 @@ test('quiosque: desconto de 40% no crédito e cancelamento com o PIN da vendedor
     await page.waitForFunction(() => !document.getElementById('pinDlg').open);
     await page.click('#pay [data-m="credit"]');
     assert.ok(await page.isVisible('#discRow'));
+    await page.click('#discQuick [data-p="25"]');
+    await page.waitForFunction(() => /R\$\s*25,00/.test(document.getElementById('discInfo').textContent));
     await page.click('#discQuick [data-p="40"]');
     await page.waitForFunction(() => /R\$\s*40,00/.test(document.getElementById('discInfo').textContent));
     await page.fill('#discPct', '60');

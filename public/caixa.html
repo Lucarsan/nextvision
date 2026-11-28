@@ -51,7 +51,7 @@
   .cb{display:flex;justify-content:space-between;align-items:center;background:var(--gold-soft);border-radius:8px;padding:9px 12px;margin-top:10px;font-size:13px;color:#7a5a12}.cb strong{color:#7a5a12}
   .linkbtn{border:0;background:none;color:var(--blue);text-decoration:underline;cursor:pointer;padding:0;font-size:12px}
   .pay{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
-  .split{margin-top:10px;border:1px solid #e6e2d8;border-radius:8px;padding:8px 10px}.split .sr{display:flex;gap:6px;align-items:center;margin:4px 0}.split select{width:auto;padding:5px 8px}.split input{width:110px;padding:5px 8px;text-align:right}
+  .split{margin-top:10px;border:1px solid #e6e2d8;border-radius:8px;padding:8px 10px}.split .sr{display:flex;gap:6px;align-items:center;margin:4px 0}.split select{width:auto;padding:5px 8px}.split input{width:110px;padding:5px 8px;text-align:right}.split .sr input{flex:1;min-width:70px;width:auto}.split select[data-si]{width:74px;padding:5px 4px}.split .linkbtn{white-space:nowrap;font-size:12px}
   .splitfoot{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:13px}.splitfoot .ok{color:var(--green);font-weight:600}.splitfoot .bad{color:var(--red);font-weight:600}
   .idisc{display:flex;gap:6px;align-items:center;margin-top:5px;font-size:12px;color:var(--muted)}.idisc input{width:62px;padding:3px 6px;border:1px solid #dcd8cd;border-radius:6px;font:12px Inter,sans-serif;text-align:right}.idisc .bad{color:var(--red)}
   .was{display:block;color:var(--muted);font-size:12px;font-weight:400;text-decoration:line-through}.dlink{border:0;background:none;padding:0;margin-top:3px;font-size:12px;color:var(--gold,#9a7a2a);cursor:pointer;display:block}
@@ -433,7 +433,13 @@
   let splitRows = [];
   const toC = v => Math.max(0, Math.round((Number(String(v || '').replace(/\./g, '').replace(',', '.')) || 0) * 100));
   const splitSum = () => splitRows.reduce((a, r) => a + r.cents, 0);
-  const splitMerged = () => { const m = new Map(); for (const r of splitRows) if (r.cents > 0) m.set(r.method, (m.get(r.method) || 0) + r.cents); return [...m].map(([method, amount_cents]) => ({ method, amount_cents })); };
+  // Dividido: dinheiro, débito e Pix repetidos somam numa forma só; cada linha de crédito é um cartão, com as suas parcelas.
+  const splitMerged = () => {
+    const m = new Map(), cards = [];
+    for (const r of splitRows) if (r.cents > 0) { if (r.method === 'credit') cards.push({ method: 'credit', amount_cents: r.cents, ...((r.inst || 1) > 1 ? { installments: r.inst } : {}) }); else m.set(r.method, (m.get(r.method) || 0) + r.cents); }
+    return [...[...m].map(([method, amount_cents]) => ({ method, amount_cents })), ...cards];
+  };
+  const instTxt = p => p.method === 'credit' ? (p.installments > 1 ? ' em ' + p.installments + 'x de ' + brl(Math.floor(p.amount_cents / p.installments)) : ' à vista') : '';
   const payMethods = () => method === 'split' ? splitMerged().map(p => p.method) : [method];
   const splitOk = () => method !== 'split' || (splitSum() === total() && splitMerged().length >= 1);
   function drawSplit() {
@@ -441,8 +447,10 @@
     if (!splitRows.length) splitRows = [{ method: 'cash', cents: 0 }, { method: 'debit', cents: 0 }];
     $('splitRows').innerHTML = splitRows.map((r, i) => '<div class="sr"><select class="field" data-sm="' + i + '">' + ['cash', 'debit', 'credit', 'pix'].map(k => '<option value="' + k + '"' + (r.method === k ? ' selected' : '') + '>' + METHOD[k] + '</option>').join('') + '</select>'
       + '<input class="field" data-sv="' + i + '" inputmode="decimal" placeholder="0,00" value="' + (r.cents ? (r.cents / 100).toFixed(2).replace('.', ',') : '') + '">'
+      + (r.method === 'credit' ? '<select class="field" data-si="' + i + '" title="Parcelas deste cartão">' + Array.from({ length: 12 }, (_, k) => '<option value="' + (k + 1) + '"' + ((r.inst || 1) === k + 1 ? ' selected' : '') + '>' + (k ? (k + 1) + 'x' : 'à vista') + '</option>').join('') + '</select>' : '')
       + '<button type="button" class="linkbtn" data-sf="' + i + '" title="Colocar o que falta nesta forma">o que falta</button>' + (splitRows.length > 2 ? '<button type="button" class="x" data-sd="' + i + '">×</button>' : '') + '</div>').join('');
-    $('splitRows').querySelectorAll('[data-sm]').forEach(e => e.onchange = () => { splitRows[e.dataset.sm].method = e.value; draw(); });
+    $('splitRows').querySelectorAll('[data-sm]').forEach(e => e.onchange = () => { splitRows[e.dataset.sm].method = e.value; splitRows[e.dataset.sm].inst = 1; draw(); });
+    $('splitRows').querySelectorAll('[data-si]').forEach(e => e.onchange = () => { splitRows[e.dataset.si].inst = Number(e.value) || 1; draw(); });
     $('splitRows').querySelectorAll('[data-sv]').forEach(e => { e.oninput = () => { splitRows[e.dataset.sv].cents = toC(e.value); drawSplitInfo(); drawFinish(); }; e.onchange = () => draw(); });
     $('splitRows').querySelectorAll('[data-sf]').forEach(e => e.onclick = () => { const i = Number(e.dataset.sf); const rest = total() - splitSum() + splitRows[i].cents; splitRows[i].cents = Math.max(0, rest); draw(); });
     $('splitRows').querySelectorAll('[data-sd]').forEach(e => e.onclick = () => { splitRows.splice(Number(e.dataset.sd), 1); draw(); });
@@ -507,7 +515,7 @@
       : tef ? (paidTx ? 'Já cobrado no pinpad: ' + brl(paidTx.amount_cents) + '. Finalize para gravar a venda.' : 'Ao finalizar, o valor vai direto para o pinpad' + (tef.mode === 'simulator' ? ' (SIMULADOR: não cobra de verdade)' : tef.mode === 'sandbox' ? ' (Stone de teste)' : ''))
       : 'Enquanto o TEF não é ligado, digite o valor na maquininha';
     // Parcelas: com o pinpad vão para a cobrança; na maquininha avulsa, ficam registradas na venda (digite as mesmas na maquininha).
-    $('instRow').hidden = !payMethods().includes('credit');
+    $('instRow').hidden = method === 'split' || !payMethods().includes('credit');
     $('instLabel').textContent = tef && !$('offline').checked ? 'Parcelas no crédito' : 'Parcelas (as mesmas da maquininha)';
     $('sellers').innerHTML = sellers.map(s => '<button type="button" data-s="' + safe(s.id) + '"' + (seller?.id === s.id ? ' class="on"' : '') + '>' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada nesta unidade.</span>';
     $('sellers').querySelectorAll('[data-s]').forEach(b => b.onclick = () => askPin(sellers.find(s => s.id === b.dataset.s), pin => { seller = sellers.find(s => s.id === b.dataset.s); sellerPin = pin; draw(); }));
@@ -636,7 +644,7 @@
       .map(([c, l]) => '<tr><td>' + l + '</td><td class="n" style="color:var(--red)">− ' + brl(c) + '</td></tr>').join('');
     const inst = payMethods().includes('credit') && Number($('inst').value) > 1 ? ' em ' + Number($('inst').value) + 'x' : '';
     const pay = paidByCredit() ? 'Pago todo com crédito de troca'
-      : method === 'split' ? 'Dividido: ' + splitMerged().map(p => METHOD[p.method] + ' ' + brl(p.amount_cents) + (p.method === 'credit' ? inst : '')).join(' + ')
+      : method === 'split' ? 'Dividido: ' + splitMerged().map(p => METHOD[p.method] + ' ' + brl(p.amount_cents) + instTxt(p)).join(' + ')
       : (METHOD[method] || method) + inst;
     const offline = $('offline').checked && !paidByCredit() && payMethods().some(m => m !== 'cash');
     const n = items.reduce((a, x) => a + x.qty, 0);
@@ -657,10 +665,10 @@
   async function finishSale() {
     $('finish').disabled = true; $('saleMsg').textContent = ''; $('saleMsg').className = 'msg';
     const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty, ...(itemDisc(x) ? { discount_cents: itemDisc(x) } : {}) })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
-    if (method === 'split') { const m = splitMerged(); delete body.payment_method; if (m.length === 1) body.payment_method = m[0].method; else body.payments = m; }
+    if (method === 'split') { const m = splitMerged(); delete body.payment_method; if (m.length === 1) { body.payment_method = m[0].method; if (m[0].installments) body.installments = m[0].installments; } else body.payments = m; }
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();
-    if (payMethods().includes('credit') && Number($('inst').value) > 1) body.installments = Number($('inst').value);
+    if (method !== 'split' && payMethods().includes('credit') && Number($('inst').value) > 1) body.installments = Number($('inst').value);
     if (crUseCents()) body.credit_use_cents = crUseCents();
     if (paidByCredit()) { body.payment_method = 'other'; delete body.payments; delete body.installments; }
     if (backOn()) { body.sold_on = $('backDate').value; delete body.cashback_use_cents; delete body.credit_use_cents; }
@@ -872,7 +880,9 @@
   async function printSale(id) {
     let d; try { d = await api('/store/sales/' + id + '/print'); } catch (e) { alert(e.message); return; }
     const row = (l, r, b) => '<tr' + (b ? ' class="b"' : '') + '><td>' + l + '</td><td class="r">' + r + '</td></tr>';
-    const pay = d.payments ? d.payments.map(p => (PAYNAME[p.method] || p.method) + ' ' + brl(p.amount_cents) + (p.method === 'credit' && d.installments > 1 ? ' (' + d.installments + 'x)' : '')).join(' + ')
+    // Parcelas por cartão (venda nova) ou da venda toda (vendas antigas, com um cartão só).
+    const perCard = d.payments && d.payments.some(p => p.installments);
+    const pay = d.payments ? d.payments.map(p => { const n = p.method !== 'credit' ? 1 : perCard ? p.installments || 1 : d.installments; return (PAYNAME[p.method] || p.method) + ' ' + brl(p.amount_cents) + (n > 1 ? ' (' + n + 'x)' : ''); }).join(' + ')
       : (PAYNAME[d.payment_method] || d.payment_method) + (d.payment_method === 'credit' ? (d.installments > 1 ? ' ' + d.installments + 'x de ' + brl(Math.floor(d.total_cents / d.installments)) : ' à vista') : '');
     const fd = s => s ? s.split('-').reverse().join('/') : '';
     const html = '<!doctype html><html><head><meta charset="utf-8"><title>Comprovante ' + d.sale_number + '</title><style>'

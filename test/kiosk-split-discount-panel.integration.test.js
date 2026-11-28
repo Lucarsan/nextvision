@@ -65,7 +65,8 @@ test('quiosque: desconto em R$, pagamento dividido e comprovante digital complet
     assert.match(await page.textContent('#splitInfo'), /Falta R\$\s*10,00/);
     await page.selectOption('[data-sm="3"]', 'cash'); await page.click('[data-sf="3"]');
     await page.waitForFunction(() => /Fechou/.test(document.getElementById('splitInfo').textContent));
-    assert.ok(await page.isVisible('#instRow')); await page.selectOption('#inst', '3');
+    // Dividido: as parcelas ficam na linha de cada cartão (o campo único some).
+    assert.ok(await page.isHidden('#instRow')); await page.selectOption('[data-si="2"]', '3');
     await page.screenshot(shot('quiosque-dividido'));
     await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /registrada/.test(document.getElementById('doneBox').textContent), null, { timeout: 15000 });

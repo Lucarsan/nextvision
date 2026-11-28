@@ -48,7 +48,8 @@
   const today = new Date().toISOString().slice(0, 10);
   const PN = { credit: 'Crédito', debit: 'Débito', pix: 'Pix', cash: 'Dinheiro', other: 'Outro' };
   const sub = (d.items || []).reduce((t, i) => t + (i.unit_price_cents != null ? i.unit_price_cents * i.quantity : i.total_cents), 0);
-  const pay = d.payments ? d.payments.map(p => (PN[p.method] || p.method) + ' ' + brl(p.amount_cents) + (p.method === 'credit' && d.installments > 1 ? ' (' + d.installments + 'x)' : '')).join(' + ')
+  const perCard = d.payments && d.payments.some(p => p.installments);
+  const pay = d.payments ? d.payments.map(p => { const n = p.method !== 'credit' ? 1 : perCard ? p.installments || 1 : d.installments; return (PN[p.method] || p.method) + ' ' + brl(p.amount_cents) + (n > 1 ? ' (' + n + 'x)' : ''); }).join(' + ')
     : d.payment_method ? (PN[d.payment_method] || d.payment_method) + (d.payment_method === 'credit' ? (d.installments > 1 ? ' ' + d.installments + 'x de ' + brl(Math.floor(d.total_cents / d.installments)) : ' à vista') : '') : '';
   $('box').innerHTML = '<div class="card"><h1>' + (d.customer_first_name ? 'Olá, ' + safe(d.customer_first_name) + '!' : 'Comprovante da compra') + '</h1>'
     + '<p class="sub">Compra nº ' + d.sale_number + ' · ' + safe(d.unit) + ' · ' + safe(d.sold_at) + '</p>'

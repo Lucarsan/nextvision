@@ -112,7 +112,7 @@ test('tela do quiosque: lançar venda de outro dia e ver na lista', {
     await page.waitForFunction(() => /Lançar venda do dia/.test(document.getElementById('finish').textContent));
     assert.match(await page.textContent('#backWarn'), /fora do caixa de hoje/);
     await page.screenshot(shot('venda-outro-dia'));
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /lançada no dia/.test(document.getElementById('doneBox').textContent));
     const s = (await db.query("SELECT session_id, to_char(created_at AT TIME ZONE 'America/Fortaleza','YYYY-MM-DD') d, payment_method FROM sales WHERE tenant_id=$1", [tenant])).rows;
     assert.deepEqual(s, [{ session_id: null, d, payment_method: 'pix' }]);

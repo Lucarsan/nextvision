@@ -61,10 +61,10 @@ test('quiosque: cadastro completo, aba Clientes, Fechar caixa no topo e unidade 
     await page.locator('#sellers [data-s]').first().click();
     for (const k of '4321') await page.click(`#keys [data-k="${k}"]`);
     await page.waitForFunction(() => !document.getElementById('pinDlg').open);
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /CPF inválido/.test(document.getElementById('saleMsg').textContent));
     await page.fill('#nc_cpf', '090.961.743-05');
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => document.querySelectorAll('#items tr').length === 0 || /Venda/.test(document.body.innerText), null, { timeout: 10000 });
     await page.waitForTimeout(500);
     const row = (await f.db.query("SELECT cpf,to_char(birth_date,'YYYY-MM-DD') b,email,postal_code,address FROM customers WHERE name='Maria Souza'")).rows[0];

@@ -68,7 +68,19 @@ test('quiosque: desconto só numa peça, em % e em R$, com o desconto da venda p
     await page.waitForFunction(() => /R\$\s*142,20/.test(document.getElementById('total').textContent));
     await page.click('#pay [data-m="cash"]');
     await page.screenshot(shot('quiosque-desconto-por-peca'));
+    // Conferência: janela por cima do caixa com peças, descontos, total e pagamento; "Voltar" não grava nada.
     await page.click('#finish');
+    await page.waitForFunction(() => document.getElementById('rvDlg').open);
+    const rv = await page.textContent('#rvBody');
+    assert.match(rv, /Brinco Gota/); assert.match(rv, /desconto nesta peça: − R\$\s*9,00/); assert.match(rv, /Colar Elos/);
+    assert.match(rv, /Desconto da venda\s*− R\$\s*15,80/); assert.match(rv, /2 peças\s*R\$\s*142,20/);
+    assert.match(rv, /Pagamento: Dinheiro/); assert.match(rv, /Vendedora: Bia/);
+    await page.screenshot(shot('quiosque-conferencia'));
+    await page.click('#rvBack');
+    assert.equal(await page.evaluate(() => document.getElementById('rvDlg').open), false);
+    assert.equal((await f.db.query('SELECT count(*)::int n FROM sales WHERE tenant_id=$1', [tenant])).rows[0].n, 0, 'voltar não grava a venda');
+    assert.match(await page.textContent('#total'), /R\$\s*142,20/, 'a venda continua montada');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /registrada/.test(document.getElementById('doneBox').textContent), null, { timeout: 15000 });
 
     const sale = (await f.db.query('SELECT id,total_cents,discount_cents,receipt_code FROM sales WHERE tenant_id=$1', [tenant])).rows[0];

@@ -75,6 +75,11 @@ test('rede de lojas: central monta a rede, dono da rede vê o faturamento por un
     assert.equal(ov.alerts.canceled.length, 1); assert.equal(ov.alerts.canceled[0].unit, 'Maracanaú');
     assert.equal(ov.alerts.canceled[0].reason, 'Lançada em dobro'); assert.equal(ov.alerts.canceled[0].canceled_by, 'Owner');
     assert.deepEqual(ov.alerts.duplicates, []); assert.deepEqual(ov.alerts.low_stock, []);
+    // Cancelamentos por consultora: cupom fiscal cancelado conta à parte (cupom de teste não conta).
+    assert.deepEqual(ov.alerts.canceled_sellers, [{ unit: 'Maracanaú', seller: 'Owner', count: 1, total_cents: 5000, with_nfce: 0 }]);
+    await db.query("INSERT INTO fiscal_documents(tenant_id,sale_id,env,series,number,status,payload,is_test) VALUES($1,$2,'producao',10,1,'canceled','{}',false),($1,$2,'homologacao',10,2,'canceled','{}',true)", [tenant, dup.sale.id]);
+    assert.equal((await api('/network/overview', { token: netToken })).alerts.canceled_sellers[0].with_nfce, 1);
+    await db.query('DELETE FROM fiscal_documents WHERE sale_id=$1', [dup.sale.id]);
 
     // Meta do mês da loja, cobrança repetida e estoque baixo.
     await db.query("INSERT INTO store_goals(tenant_id, month, target_cents) VALUES($1, date_trunc('month', now() AT TIME ZONE 'America/Fortaleza')::date, 50000)", [tenant]);

@@ -342,6 +342,14 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users cu ON cu.id = s.canceled_by LEFT JOIN users sl ON sl.id = s.seller_id
       WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
       ORDER BY s.canceled_at DESC LIMIT 50`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
+    // Cancelamentos por consultora (quem vendeu), sem limite de linhas: base para a gestão ver quem mais erra lançamento.
+    // with_nfce: cancelada depois do cupom fiscal sair; gasta 2 créditos do emissor (emissão + cancelamento).
+    const canceledSellers = await q(`
+      SELECT coalesce(t.unit_label, t.name) unit, coalesce(sl.name, 'Sem vendedora') seller, count(*)::int count, coalesce(sum(s.total_cents), 0)::bigint total_cents,
+             count(*) FILTER (WHERE EXISTS (SELECT 1 FROM fiscal_documents f WHERE f.sale_id = s.id AND NOT f.is_test AND f.status = 'canceled'))::int with_nfce
+      FROM sales s JOIN tenants t ON t.id = s.tenant_id LEFT JOIN users sl ON sl.id = s.seller_id
+      WHERE t.network_id = $1 AND ($5::uuid[] IS NULL OR t.id = ANY($5)) AND s.canceled_at IS NOT NULL AND (s.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      GROUP BY 1, 2 ORDER BY 3 DESC, 2`, [req.user.network_id, from, to, STORE_TZ, scope(req)]);
     // Descontos dados no período (o quiosque permite até 50%): para a supervisão acompanhar.
     const discounted = await q(`
       SELECT coalesce(t.unit_label, t.name) unit, s.sale_number, s.total_cents, s.discount_cents, sl.name seller, s.payment_method,
@@ -397,6 +405,7 @@ export function registerStoreNetworks(app, { q, auth, roles, route, bad, valid, 
       econf_pending: econf.rows,
       duplicates: dup.rows.map(d => ({ unit: d.unit, total_cents: d.total_cents, payment_method: d.payment_method, at: d.at, seconds: d.seconds })),
       canceled: canceled.rows.map(c => ({ unit: c.unit, sale_number: c.sale_number, seller: c.seller || '', total_cents: c.total_cents, reason: c.reason, canceled_by: c.canceled_by || '', at: c.at })),
+      canceled_sellers: canceledSellers.rows.map(c => ({ unit: c.unit, seller: c.seller, count: c.count, total_cents: Number(c.total_cents), with_nfce: c.with_nfce })),
       discounted: discounted.rows.map(d => ({ unit: d.unit, sale_number: d.sale_number, seller: d.seller || '', total_cents: d.total_cents, discount_cents: d.discount_cents, pct: d.pct, payment_method: d.payment_method, at: d.at })),
       backdated: backdated.rows,
       exchanges: exchanges.rows,

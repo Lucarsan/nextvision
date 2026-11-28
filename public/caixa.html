@@ -83,6 +83,14 @@
   dialog{border:0;border-radius:16px;padding:22px;width:320px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
   dialog::backdrop{background:rgba(23,24,29,.55)}
   .dots{display:flex;justify-content:center;gap:12px;margin:14px 0}.dots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--ink)}.dots i.f{background:var(--ink)}
+  /* Conferência antes de finalizar */
+  #rvDlg{width:440px;max-width:94vw;max-height:90vh;overflow:auto;text-transform:uppercase}#rvDlg button{text-transform:uppercase}
+  .rv{width:100%;border-collapse:collapse;font-size:14px;margin:6px 0}.rv td{padding:6px 0;border-bottom:1px solid var(--line,#ece9e1);vertical-align:top}.rv td.n{text-align:right;white-space:nowrap;padding-left:10px}
+  .rv .d{display:block;font-size:12px;color:var(--red)}.rv .q{color:var(--muted);font-size:12px}
+  .rvtot{display:flex;justify-content:space-between;align-items:baseline;margin:10px 0 4px;font-size:15px}.rvtot strong{font-size:24px;color:var(--ink)}
+  .rvpay{background:#f6f3ec;border:1px solid #e8dfcc;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:14px}.rvpay b{font-size:16px}
+  .rvsub{font-size:13px;color:var(--muted);margin:4px 0}.rvwarn{background:#fff6df;border:1px solid #f0d58a;color:#7a5a00;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:8px 0}
+  .rvbtns{display:flex;gap:8px;margin-top:12px}.rvbtns .go{margin:0}.rvbtns .back{flex:0 0 auto;padding:14px 16px;border:1px solid var(--line,#dcd8cd);border-radius:10px;background:#fff;font-weight:600;cursor:pointer;font-size:14px}
   .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.keys button{padding:14px;border:1px solid var(--line);border-radius:10px;background:#faf9f6;font-size:20px;font-weight:600;cursor:pointer}
   /* Meu dia */
   #dpBar[hidden],#dpCustom[hidden]{display:none!important}
@@ -350,6 +358,12 @@
   <p class="msg" id="cpMsg"></p>
   <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="go" id="cpSave" style="margin:0">Salvar</button><button type="button" class="linkbtn" id="cpCancel">Cancelar</button></div>
   <p class="sub" style="margin-top:10px">Esqueceu o PIN? Peça um novo ao supervisor ou à gestão.</p></form></dialog>
+<dialog id="rvDlg">
+  <h2 style="margin:0;font-size:18px">Confira antes de finalizar</h2>
+  <p class="rvsub" style="margin:2px 0 8px">Veja peças, valor e forma de pagamento. Venda cancelada depois gasta mais um crédito da nota fiscal.</p>
+  <div id="rvBody"></div>
+  <div class="rvbtns"><button type="button" class="back" id="rvBack">Voltar e corrigir</button><button type="button" class="go" id="rvOk">Está tudo certo, finalizar</button></div>
+</dialog>
 <dialog id="pinDlg">
   <h2 style="margin:0;font-size:18px;color:var(--ink)" id="pinTitle">PIN</h2>
   <p class="sub" style="margin:4px 0 0">Digite o seu PIN de 4 dígitos</p>
@@ -609,8 +623,34 @@
     $('pinDlg').showModal();
   }
 
+  // ---------- Conferir antes de finalizar ----------
+  // Janela por cima do caixa com peças, descontos, total e pagamento. A venda só segue depois de "Está tudo certo".
+  // Não abre de novo quando o pinpad já aprovou e a venda só falhou ao gravar (a vendedora já conferiu).
+  function reviewHtml() {
+    const rows = items.map(x => { const d = itemDisc(x); return '<tr><td>' + safe(x.name) + (x.qty > 1 ? ' <span class="q">× ' + x.qty + '</span>' : '') + (d ? '<span class="d">desconto nesta peça: − ' + brl(d) + '</span>' : '') + '</td><td class="n">' + brl(lineGross(x) - d) + '</td></tr>'; }).join('');
+    const extra = [[discountCents(), 'Desconto da venda'], [cbUseCents(), 'Cashback usado'], [crUseCents(), 'Crédito de troca usado']].filter(([c]) => c > 0)
+      .map(([c, l]) => '<tr><td>' + l + '</td><td class="n" style="color:var(--red)">− ' + brl(c) + '</td></tr>').join('');
+    const inst = payMethods().includes('credit') && Number($('inst').value) > 1 ? ' em ' + Number($('inst').value) + 'x' : '';
+    const pay = paidByCredit() ? 'Pago todo com crédito de troca'
+      : method === 'split' ? 'Dividido: ' + splitMerged().map(p => METHOD[p.method] + ' ' + brl(p.amount_cents) + (p.method === 'credit' ? inst : '')).join(' + ')
+      : (METHOD[method] || method) + inst;
+    const offline = $('offline').checked && !paidByCredit() && payMethods().some(m => m !== 'cash');
+    const n = items.reduce((a, x) => a + x.qty, 0);
+    return '<table class="rv">' + rows + extra + '</table>'
+      + '<div class="rvtot"><span>' + n + (n === 1 ? ' peça' : ' peças') + '</span><strong>' + brl(total()) + '</strong></div>'
+      + '<div class="rvpay">Pagamento: <b>' + safe(pay) + '</b>' + (offline ? '<div class="rvsub">Maquininha sem TEF (passa fora do sistema)</div>' : '') + '</div>'
+      + '<p class="rvsub">Cliente: <b>' + safe(customer ? customer.name : (!$('newCust').hidden && $('nc_name').value.trim() ? $('nc_name').value.trim() + ' (cadastro novo)' : 'sem cadastro')) + '</b> · Vendedora: <b>' + safe(seller ? seller.name.split(' ')[0] : '—') + '</b></p>'
+      + (backOn() ? '<div class="rvwarn">Venda lançada no dia ' + dmyS($('backDate').value) + ' (fora da data de hoje).</div>' : '');
+  }
+  $('rvBack').onclick = () => $('rvDlg').close();
+  $('rvOk').onclick = () => { $('rvDlg').close(); finishSale(); };
+  $('finish').onclick = () => {
+    if (paidTx) return finishSale();
+    $('rvBody').innerHTML = reviewHtml(); $('rvDlg').showModal(); $('rvOk').focus();
+  };
+
   // ---------- Finalizar ----------
-  $('finish').onclick = async () => {
+  async function finishSale() {
     $('finish').disabled = true; $('saleMsg').textContent = ''; $('saleMsg').className = 'msg';
     const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty, ...(itemDisc(x) ? { discount_cents: itemDisc(x) } : {}) })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
     if (method === 'split') { const m = splitMerged(); delete body.payment_method; if (m.length === 1) body.payment_method = m[0].method; else body.payments = m; }
@@ -683,7 +723,7 @@
       $('saleMsg').textContent = (paidTx ? 'O pagamento foi APROVADO no pinpad, mas a venda não gravou: ' : '') + e.message + (paidTx ? ' Corrija e toque em Finalizar de novo (não cobra outra vez).' : '');
       $('saleMsg').className = 'msg err'; draw();
     }
-  };
+  }
   function resetSale() {
     items = []; seller = null; sellerPin = ''; method = 'credit'; splitRows = []; discMode = 'pct'; $('discBrl').value = ''; $('discPct').value = ''; $('inst').value = '1'; $('doneBox').hidden = true; $('st1').classList.remove('done');
     $('custClear').onclick(); cfFill('nc'); $('newCust').hidden = true; draw(); $('scan').focus();

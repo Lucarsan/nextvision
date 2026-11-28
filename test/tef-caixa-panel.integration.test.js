@@ -49,7 +49,7 @@ test('caixa: cobrança no pinpad (simulador) antes de gravar a venda', {
       await page.locator('#sellers button', { hasText: 'Ana' }).click();
       for (const k of '1234') await page.keyboard.press(k);
       await page.waitForSelector('#pinOk:not([hidden])');
-      await page.locator('#finish').click();
+      await page.locator('#finish').click(); await page.locator('#rvOk').click();
     };
 
     // 1) Crédito aprovado: grava a venda com a cobrança do pinpad.
@@ -70,7 +70,7 @@ test('caixa: cobrança no pinpad (simulador) antes de gravar a venda', {
     await page.locator('[data-del="0"]').click();
     await page.locator('#scan').fill('000053'); await page.locator('#scan').press('Enter');
     await page.waitForFunction(() => document.getElementById('items').textContent.includes('000053'));
-    await page.locator('#finish').click();
+    await page.locator('#finish').click(); await page.locator('#rvOk').click();
     await page.waitForFunction(() => /não respondeu/.test(document.getElementById('saleMsg').textContent), null, { timeout: 20000 });
     await page.screenshot(shot('tef-sem-resposta'));
 
@@ -80,7 +80,7 @@ test('caixa: cobrança no pinpad (simulador) antes de gravar a venda', {
     await page.waitForFunction(() => document.getElementById('items').textContent.includes('000077'));
     await page.locator('#pay button', { hasText: 'Pix' }).click();
     assert.equal(await page.locator('#instRow').isVisible(), false);
-    await page.locator('#finish').click();
+    await page.locator('#finish').click(); await page.locator('#rvOk').click();
     await page.waitForFunction(() => /Pix: R\$ 20,00/.test(document.getElementById('tefBox').textContent), null, { timeout: 20000 });
     await page.screenshot(shot('tef-pix-qr'));
     await page.waitForSelector('#doneBox:not([hidden])', { timeout: 20000 });

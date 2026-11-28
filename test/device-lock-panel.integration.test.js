@@ -19,7 +19,7 @@ test('acesso: rede travada abre o caixa só com a ponte local do agente', {
     await api(`/master/tenants/${tenant}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'senha-benfica' } });
     const code = await api(`/master/tenants/${tenant}/activation-codes`, { method: 'POST', token: masterToken }, 201);
     const pc = await api('/connect/activate', { method: 'POST', token: null, body: { activation_code: code.activation_code, device_name: 'PC Benfica' } }, 201);
-    await api(`/master/networks/${net.id}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } });
+    await api(`/master/tenants/${tenant}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } });
 
     const require = createRequire(import.meta.url);
     let pw; try { pw = require('playwright'); } catch { pw = require('playwright-core'); }

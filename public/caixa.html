@@ -376,7 +376,11 @@
 <script src="/tef-client.js?v=4"></script>
 <script>
 (() => {
-  let token = ''; try { token = localStorage.getItem('fp_kiosk_token') || ''; } catch { }
+  // Suporte da central: /caixa#sup=<token> abre esta aba com a sessão de suporte (só nesta aba; não apaga o caixa deste PC).
+  const supHash = /[#&]sup=([^&]+)/.exec(location.hash || '');
+  if (supHash) { sessionStorage.setItem('nv_token', decodeURIComponent(supHash[1])); sessionStorage.setItem('fp_sup', '1'); history.replaceState(null, '', location.pathname); }
+  const support = sessionStorage.getItem('fp_sup') === '1';
+  let token = ''; if (!support) { try { token = localStorage.getItem('fp_kiosk_token') || ''; } catch { } }
   token = token || sessionStorage.getItem('nv_token') || '';
   if (!token) { location.replace('/acesso'); return; }
   const $ = id => document.getElementById(id);
@@ -387,7 +391,7 @@
   const api = async (path, method = 'GET', body) => {
     const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
     const d = await r.json().catch(() => ({}));
-    if (r.status === 401 && !/PIN/.test(d.error || '')) { try { localStorage.removeItem('fp_kiosk_token'); } catch { } sessionStorage.removeItem('nv_token'); location.replace('/acesso'); throw Error('Sessão encerrada'); }
+    if (r.status === 401 && !/PIN/.test(d.error || '')) { if (!support) { try { localStorage.removeItem('fp_kiosk_token'); } catch { } } sessionStorage.removeItem('nv_token'); sessionStorage.removeItem('fp_sup'); location.replace(support ? '/central.html' : '/acesso'); throw Error('Sessão encerrada'); }
     if (!r.ok) throw Error(d.error || 'Erro');
     return d;
   };

@@ -22,6 +22,7 @@
         + '<label>Porta do pinpad<input id="tfPort" value="' + safe(t.pinpad_port || '') + '" placeholder="automática" style="width:110px"></label>'
         + '<label>Endereço do Slim<input id="tfUrl" value="' + safe(t.local_url || '') + '" placeholder="http://127.0.0.1:8000" style="width:190px"></label>'
         + '<button type="button" class="ct-btn" id="tfSave">Salvar</button></div>'
+        + '<p class="ct-muted" style="margin:4px 0 0">Nome da aplicação (Partner name): <b>' + safe(t.partner_name || 'FICOUPRONTO 1.0') + '</b></p>'
         + (t.last.length ? '<p class="ct-muted" style="margin:6px 0 0">Últimas cobranças: ' + t.last.map(x => safe(ST[x.status] || x.status) + ' ' + brl(x.amount_cents) + (x.mode === 'simulator' ? ' (simulador)' : '')).join(' · ') + '</p>' : '')
         + '<p id="tfMsg" class="ct-muted" style="min-height:1.2em;margin-top:8px"></p>';
       el('tfUnit').onchange = e => { unitId = e.target.value; sessionStorage.setItem('tef_unit', unitId); load(); };

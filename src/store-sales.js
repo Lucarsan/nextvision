@@ -1088,7 +1088,8 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Item de produto (preço do cadastro, ou unit_price_cents se o vendedor mudou) ou linha avulsa (nome + preço).
       items: z.array(z.union([
         // gift: brinde dado junto com um serviço desta venda (película aplicada de graça): preço zero, baixa no estoque.
-        z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999), unit_price_cents: cents.optional(), variant_name: z.string().trim().min(1).max(80).optional(), gift: z.boolean().optional() }).strict(),
+        // discount_cents: desconto só nesta peça (em centavos, sobre a linha inteira: preço × quantidade).
+        z.object({ product_id: uuid, quantity: z.number().int().min(1).max(9999), unit_price_cents: cents.optional(), variant_name: z.string().trim().min(1).max(80).optional(), gift: z.boolean().optional(), discount_cents: cents.optional() }).strict(),
         z.object({ name: z.string().trim().min(1).max(120), quantity: z.number().int().min(1).max(9999), unit_price_cents: cents }).strict(),
         // Serviço: preço cobrado, custo, fornecedor, aparelho e garantia. part_id = peça do estoque usada (baixa 1).
         // catalog_id: serviço cadastrado (pet shop: adicional ou principal, para comissão e metas).
@@ -1142,6 +1143,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (!v.customer_id === !v.new_customer) return bad(res, 400, 'Escolha o cliente (venda a receber precisa de cliente)');
     if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
     if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os itens');
+    if (v.items?.some(it => it.discount_cents)) return bad(res, 400, 'Desconto por peça não vale na venda a receber: use o desconto da venda.');
     if (req.user.access_level === 'basic' && v.discount_cents) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
     const c = await db.connect();
     try {
@@ -1271,6 +1273,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
   app.post('/api/store/sales/pending/:id/add-items', ...guard, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Venda inválida');
     const v = valid(z.object({ items: saleSchema.shape.items.unwrap(), description: z.string().trim().max(300).optional() }).strict(), req, res); if (!v) return;
+    if (v.items.some(it => it.discount_cents)) return bad(res, 400, 'Desconto por peça não vale na venda a receber: use o desconto da venda.');
     const c = await db.connect();
     try {
       await c.query('BEGIN');
@@ -1364,7 +1367,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
     if (v.items && v.total_cents != null) return bad(res, 400, 'Com produtos, o total é calculado pelos itens');
     if (!v.items && v.total_cents == null) return bad(res, 400, 'Informe o valor da venda ou os produtos');
     if (v.discount_cents && !v.items) return bad(res, 400, 'Desconto é só para venda com produtos; sem produtos, digite o valor final');
-    if (req.user.access_level === 'basic' && v.discount_cents) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
+    if (req.user.access_level === 'basic' && (v.discount_cents || v.items?.some(it => it.discount_cents))) return bad(res, 403, 'Operador novato não pode dar desconto. Peça a um operador livre ou ao dono.');
     // Venda de outro dia: fora do caixa de hoje, sem pinpad, sem maquininha pendente, sem cashback e sem NFC-e.
     const back = !!v.sold_on;
     if (back) {
@@ -1405,7 +1408,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       // Itens: nome, código e custo vêm do cadastro; o preço é o do cadastro, a não ser que o vendedor
       // tenha mudado (unit_price_cents). O mesmo produto com o mesmo preço soma. O desconto geral é
       // distribuído entre os itens, para cada linha mostrar o valor de fato cobrado.
-      let items = [], total = v.total_cents, description = v.description;
+      let items = [], total = v.total_cents, description = v.description, saleDisc = 0;
       if (v.items) {
         const ids = [...new Set(v.items.filter(it => it.product_id).map(it => it.product_id))];
         const p = ids.length ? await c.query('SELECT id,name,barcode,price_cents,cost_cents,ask_variant,variant_stock,cashback FROM products WHERE tenant_id=$1 AND active AND id=ANY($2::uuid[])', [tid(req), ids]) : { rows: [], rowCount: 0 };
@@ -1450,17 +1453,30 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
           if (prod?.ask_variant && !variant) { await c.query('ROLLBACK'); return bad(res, 400, `Informe o modelo de "${prod.name}".`); }
           const key = prod ? prod.id + ':' + (variant || '').toLowerCase() + ':' + unit + (it.gift ? ':g' : '') : 'l:' + it.name.toLowerCase() + ':' + unit;
           const cur = merged.get(key);
-          if (cur) cur.quantity += it.quantity;
-          else merged.set(key, prod ? { id: prod.id, name: prod.name, variant, barcode: prod.barcode, cost_cents: prod.cost_cents, list_price_cents: prod.price_cents, unit_price_cents: unit, quantity: it.quantity, gift: !!it.gift, total_stock: prod.ask_variant && prod.variant_stock === 'total', no_cb: !prod.cashback }
+          const lineDisc = it.gift ? 0 : it.discount_cents || 0;
+          if (it.gift && it.discount_cents) { await c.query('ROLLBACK'); return bad(res, 400, 'Brinde já sai de graça: tire o desconto dele.'); }
+          if (cur) { cur.quantity += it.quantity; cur.item_disc = (cur.item_disc || 0) + lineDisc; }
+          else merged.set(key, prod ? { id: prod.id, name: prod.name, variant, barcode: prod.barcode, cost_cents: prod.cost_cents, list_price_cents: prod.price_cents, unit_price_cents: unit, quantity: it.quantity, gift: !!it.gift, total_stock: prod.ask_variant && prod.variant_stock === 'total', no_cb: !prod.cashback, item_disc: lineDisc }
             : { id: null, name: it.name, barcode: null, cost_cents: null, list_price_cents: null, unit_price_cents: unit, quantity: it.quantity });
         }
         items = [...merged.values()].map((x, position) => ({ ...x, total_cents: x.unit_price_cents * x.quantity, position }));
+        // Desconto por peça (ex.: só no brinco) sai da linha dela; o desconto da venda vale sobre o que sobrou.
+        // sales.discount_cents guarda os dois somados, para relatórios, comprovante e NFC-e seguirem iguais.
         const gross = items.reduce((a, x) => a + x.total_cents, 0), disc = v.discount_cents || 0;
-        total = gross - disc;
+        const itemDisc = items.reduce((a, x) => a + (x.item_disc || 0), 0);
+        const badLine = items.find(x => x.item_disc && x.item_disc >= x.total_cents);
+        if (badLine) { await c.query('ROLLBACK'); return bad(res, 400, `O desconto de "${badLine.name}" não pode ser igual ou maior que o valor dela`); }
         // Quiosque: desconto até 50% em qualquer forma de pagamento (Audace, 27/11: Black Friday até 40%, funcionária 50%).
-        if (req.user.kiosk && disc > Math.floor(gross * KIOSK_MAX_DISCOUNT_PCT / 100)) { await c.query('ROLLBACK'); return bad(res, 403, `Desconto acima do limite: até ${KIOSK_MAX_DISCOUNT_PCT}% da venda`); }
+        // Vale para cada peça e para a venda toda (peças + desconto da venda).
+        const overLine = req.user.kiosk && items.find(x => x.item_disc > Math.floor(x.total_cents * KIOSK_MAX_DISCOUNT_PCT / 100));
+        if (overLine) { await c.query('ROLLBACK'); return bad(res, 403, `Desconto acima do limite em "${overLine.name}": até ${KIOSK_MAX_DISCOUNT_PCT}% da peça`); }
+        if (req.user.kiosk && itemDisc + disc > Math.floor(gross * KIOSK_MAX_DISCOUNT_PCT / 100)) { await c.query('ROLLBACK'); return bad(res, 403, `Desconto acima do limite: até ${KIOSK_MAX_DISCOUNT_PCT}% da venda`); }
+        for (const x of items) if (x.item_disc) x.total_cents -= x.item_disc;
+        const net = gross - itemDisc;
+        total = net - disc;
         if (items.some(x => x.quantity > 9999 || x.total_cents > 100000000) || total < 1 || total > 100000000) { await c.query('ROLLBACK'); return bad(res, 400, disc ? 'O desconto não pode ser igual ou maior que o valor dos itens' : 'Total da venda inválido (confira preços e quantidades)'); }
-        if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / gross)); x.total_cents -= cut; left -= cut; }); }
+        if (disc) { let left = disc; items.forEach((x, i) => { const cut = i === items.length - 1 ? left : Math.min(left, Math.round(disc * x.total_cents / net)); x.total_cents -= cut; left -= cut; }); }
+        saleDisc = itemDisc + disc;
         // Modelo (película/capinha): acha ou cria, com o nome já salvo (fica para sugerir nas próximas vendas).
         for (const x of items) if (x.variant) { const vr = await upsertVariant((sql, params) => c.query(sql, params), tid(req), x.id, x.variant); x.variant = vr.name; x.vid = vr.id; }
         // Serviço: fornecedor e aparelho entram (ou sobem) na lista de sugestões, com o nome como já está salvo.
@@ -1527,7 +1543,7 @@ export function registerStoreSales(app, { q, db, auth, roles, route, bad, valid,
       const n = (await c.query('SELECT coalesce(max(sale_number),0)+1 n FROM sales WHERE tenant_id=$1', [tid(req)])).rows[0].n;
       const sale = (await c.query(`INSERT INTO sales(tenant_id,session_id,sale_number,customer_id,order_id,total_cents,discount_cents,payment_method,description,created_by,seller_id,cashback_used_cents,created_at,backdated_at,backdated_by,credit_used_cents)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $13::date IS NULL THEN now() ELSE ($13::date + time '12:00') AT TIME ZONE $14 END,CASE WHEN $13::date IS NULL THEN NULL ELSE now() END,CASE WHEN $13::date IS NULL THEN NULL ELSE $11::uuid END,$15) RETURNING *`,
-        [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? v.discount_cents || 0 : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed, back ? v.sold_on : null, TZ, crUsed])).rows[0];
+        [tid(req), s.rows[0].id, n, customerId, v.order_id || null, total, v.items ? saleDisc : 0, v.payments ? 'mixed' : v.payment_method, description, req.user.id, sellerId, cbUsed, back ? v.sold_on : null, TZ, crUsed])).rows[0];
       if (v.payments) { sale.payments = v.payments; await c.query('UPDATE sales SET payments=$2 WHERE id=$1', [sale.id, JSON.stringify(v.payments)]); }
       sale.receipt_code = (await c.query('UPDATE sales SET receipt_code=$2 WHERE id=$1 RETURNING receipt_code', [sale.id, newReceiptCode()])).rows[0].receipt_code;
       if (tefRows.length) {

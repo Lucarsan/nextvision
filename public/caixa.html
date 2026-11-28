@@ -53,6 +53,8 @@
   .pay{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
   .split{margin-top:10px;border:1px solid #e6e2d8;border-radius:8px;padding:8px 10px}.split .sr{display:flex;gap:6px;align-items:center;margin:4px 0}.split select{width:auto;padding:5px 8px}.split input{width:110px;padding:5px 8px;text-align:right}
   .splitfoot{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:13px}.splitfoot .ok{color:var(--green);font-weight:600}.splitfoot .bad{color:var(--red);font-weight:600}
+  .idisc{display:flex;gap:6px;align-items:center;margin-top:5px;font-size:12px;color:var(--muted)}.idisc input{width:62px;padding:3px 6px;border:1px solid #dcd8cd;border-radius:6px;font:12px Inter,sans-serif;text-align:right}.idisc .bad{color:var(--red)}
+  .was{display:block;color:var(--muted);font-size:12px;font-weight:400;text-decoration:line-through}.dlink{border:0;background:none;padding:0;margin-top:3px;font-size:12px;color:var(--gold,#9a7a2a);cursor:pointer;display:block}
   .dmode{display:inline-flex;border:1px solid #dcd8cd;border-radius:6px;overflow:hidden}.dmode button{border:0;background:#fff;padding:4px 9px;font-size:12px;cursor:pointer;color:var(--ink)}.dmode button.on{background:var(--ink);color:#fff}
   .pay button{border:1px solid #dcd8cd;border-radius:8px;background:#fff;padding:12px 4px;font-weight:600;cursor:pointer;color:var(--ink)}
   .pay button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
@@ -378,22 +380,30 @@
   const subtotal = () => items.reduce((a, x) => a + x.price_cents * x.qty, 0);
   // Desconto em % na hora do pagamento: até 50% em qualquer forma (o servidor confere o mesmo limite).
   const DISC_MAX = 50;
+  // Desconto por peça (ex.: só no brinco): em % ou em R$, sobre a linha (preço × quantidade), até 50% da peça.
+  // O desconto da venda (embaixo, no pagamento) vale sobre o que sobrou; os dois juntos vão até 50% da venda.
+  const lineGross = x => x.price_cents * x.qty;
+  const itemDiscRaw = x => { const t = String(x.dVal || '').trim(); if (!t) return 0; const n = Number(t.replace(/\./g, '').replace(',', '.')) || 0; return Math.max(0, x.dMode === 'brl' ? Math.round(n * 100) : Math.floor(lineGross(x) * Math.floor(n) / 100)); };
+  const itemDiscMax = x => Math.floor(lineGross(x) * DISC_MAX / 100);
+  const itemDisc = x => Math.min(itemDiscRaw(x), itemDiscMax(x));
+  const itemsDisc = () => items.reduce((a, x) => a + itemDisc(x), 0);
+  const net = () => subtotal() - itemsDisc();
   const discPct = () => Math.max(0, Math.min(DISC_MAX, Math.floor(Number($('discPct').value) || 0)));
   let discMode = 'pct';
-  const discMax = () => Math.floor(subtotal() * DISC_MAX / 100);
+  const discMax = () => Math.max(0, Math.floor(subtotal() * DISC_MAX / 100) - itemsDisc());
   const discBrlCents = () => Math.max(0, Math.round((Number(String($('discBrl').value).replace(/\./g, '').replace(',', '.')) || 0) * 100));
   // Em R$: até 50% da venda (passou disso, vale o máximo e a tela avisa).
-  const discountCents = () => discMode === 'brl' ? Math.min(discBrlCents(), discMax()) : Math.floor(subtotal() * discPct() / 100);
+  const discountCents = () => Math.min(discMode === 'brl' ? discBrlCents() : Math.floor(net() * discPct() / 100), discMax());
   const cbAvailable = () => customer?.cashback?.balance_cents || 0;
   const cbUseCents = () => {
     if (!$('cbUse').checked || !cbAvailable()) return 0;
-    const base = subtotal() - discountCents(), max = Math.floor(base * (Number(cfg.cashback_max_use_percent) || 0) / 100);
+    const base = net() - discountCents(), max = Math.floor(base * (Number(cfg.cashback_max_use_percent) || 0) / 100);
     return Math.max(0, Math.min(cbAvailable(), max, base - 1));
   };
   // Crédito de troca (separado do cashback): sem limite por compra; pode pagar a venda inteira.
   const crAvailable = () => customer?.cashback?.credit_cents || 0;
-  const crUseCents = () => !$('crUse').checked || !crAvailable() ? 0 : Math.max(0, Math.min(crAvailable(), subtotal() - discountCents() - cbUseCents()));
-  const total = () => subtotal() - discountCents() - cbUseCents() - crUseCents();
+  const crUseCents = () => !$('crUse').checked || !crAvailable() ? 0 : Math.max(0, Math.min(crAvailable(), net() - discountCents() - cbUseCents()));
+  const total = () => net() - discountCents() - cbUseCents() - crUseCents();
   const paidByCredit = () => crUseCents() > 0 && total() === 0;
   // Pagamento dividido: várias formas que somam o total. A mesma forma em duas linhas é somada ao gravar.
   let splitRows = [];
@@ -424,10 +434,24 @@
   const dmyS = s => s.split('-').reverse().join('/');
 
   function draw() {
-    $('items').innerHTML = items.map((x, i) => '<tr><td class="code">' + safe(x.barcode || '—') + '</td><td>' + safe(x.name) + '</td><td><span class="qty"><button type="button" data-dec="' + i + '">−</button>' + x.qty + '<button type="button" data-inc="' + i + '">+</button></span></td><td class="n"><strong>' + brl(x.price_cents * x.qty) + '</strong></td><td><button type="button" class="x" data-del="' + i + '" aria-label="Tirar">×</button></td></tr>').join('');
+    $('items').innerHTML = items.map((x, i) => {
+      const d = itemDisc(x), over = itemDiscRaw(x) > itemDiscMax(x);
+      const box = x.dOpen ? '<div class="idisc">Desconto nesta peça <span class="dmode"><button type="button" data-dm="' + i + '" data-d="pct"' + (x.dMode !== 'brl' ? ' class="on"' : '') + '>%</button><button type="button" data-dm="' + i + '" data-d="brl"' + (x.dMode === 'brl' ? ' class="on"' : '') + '>R$</button></span>'
+        + '<input data-di="' + i + '" inputmode="decimal" autocomplete="off" placeholder="' + (x.dMode === 'brl' ? '0,00' : '0') + '" value="' + safe(x.dVal || '') + '">'
+        + (over ? '<span class="bad">máx. ' + DISC_MAX + '%: ' + brl(itemDiscMax(x)) + '</span>' : d ? '<span>− ' + brl(d) + '</span>' : '') + '<button type="button" class="x" data-dx="' + i + '" aria-label="Tirar desconto da peça">×</button></div>'
+        : '<button type="button" class="dlink" data-do="' + i + '">+ desconto nesta peça</button>';
+      return '<tr><td class="code">' + safe(x.barcode || '—') + '</td><td>' + safe(x.name) + box + '</td><td><span class="qty"><button type="button" data-dec="' + i + '">−</button>' + x.qty + '<button type="button" data-inc="' + i + '">+</button></span></td><td class="n">' + (d ? '<span class="was">' + brl(lineGross(x)) + '</span>' : '') + '<strong>' + brl(lineGross(x) - d) + '</strong></td><td><button type="button" class="x" data-del="' + i + '" aria-label="Tirar">×</button></td></tr>';
+    }).join('');
+    $('items').querySelectorAll('[data-do]').forEach(b => b.onclick = () => { const x = items[+b.dataset.do]; x.dOpen = true; x.dMode = x.dMode || 'pct'; draw(); $('items').querySelector('[data-di="' + b.dataset.do + '"]')?.focus(); });
+    $('items').querySelectorAll('[data-dx]').forEach(b => b.onclick = () => { const x = items[+b.dataset.dx]; x.dOpen = false; x.dVal = ''; draw(); });
+    $('items').querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const x = items[+b.dataset.dm]; if (x.dMode !== b.dataset.d) { x.dMode = b.dataset.d; x.dVal = ''; } draw(); $('items').querySelector('[data-di="' + b.dataset.dm + '"]')?.focus(); });
+    $('items').querySelectorAll('[data-di]').forEach(e => {
+      e.oninput = () => { const i = e.dataset.di, pos = e.selectionStart; items[+i].dVal = e.value; draw(); const n = $('items').querySelector('[data-di="' + i + '"]'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch { } } };
+      e.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); e.blur(); $('scan').focus(); } };
+    });
     const n = items.reduce((a, x) => a + x.qty, 0);
-    $('itemsInfo').textContent = n ? n + (n === 1 ? ' peça' : ' peças') + ' · baixa automática no estoque da unidade' : 'Nenhuma peça na venda';
-    $('subtotal').textContent = brl(subtotal());
+    $('itemsInfo').textContent = n ? n + (n === 1 ? ' peça' : ' peças') + (itemsDisc() ? ' · desconto nas peças − ' + brl(itemsDisc()) : ' · baixa automática no estoque da unidade') : 'Nenhuma peça na venda';
+    $('subtotal').textContent = brl(net());
     document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { items.splice(+b.dataset.del, 1); draw(); });
     document.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { items[+b.dataset.inc].qty++; draw(); });
     document.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => { const x = items[+b.dataset.dec]; if (x.qty > 1) x.qty--; else items.splice(+b.dataset.dec, 1); draw(); });
@@ -436,8 +460,8 @@
     $('discPct').hidden = discMode !== 'pct'; $('discPctSign').hidden = discMode !== 'pct'; $('discBrl').hidden = discMode !== 'brl';
     $('splitAdd').onclick = () => { if (splitRows.length < 6) { splitRows.push({ method: 'credit', cents: 0 }); draw(); } };
   $('discMode').querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', b.dataset.d === discMode));
-    const over = discMode === 'brl' && discBrlCents() > discMax();
-    $('discInfo').textContent = over ? 'Máximo de ' + DISC_MAX + '%: ' + brl(discMax()) : discountCents() ? '− ' + brl(discountCents()) + (discMode === 'brl' && subtotal() ? ' (' + (Math.round(discountCents() * 1000 / subtotal()) / 10).toString().replace('.', ',') + '%)' : '') + ' · de ' + brl(subtotal()) + ' para ' + brl(subtotal() - discountCents()) : 'até ' + DISC_MAX + '%';
+    const over = (discMode === 'brl' ? discBrlCents() : Math.floor(net() * discPct() / 100)) > discMax();
+    $('discInfo').textContent = over ? 'Máximo de ' + DISC_MAX + '%: ' + brl(discMax()) : discountCents() ? '− ' + brl(discountCents()) + (discMode === 'brl' && net() ? ' (' + (Math.round(discountCents() * 1000 / net()) / 10).toString().replace('.', ',') + '%)' : '') + ' · de ' + brl(net()) + ' para ' + brl(net() - discountCents()) : itemsDisc() ? (discMax() ? 'até ' + brl(discMax()) + ' (junto com o das peças, até ' + DISC_MAX + '% da venda)' : 'as peças já estão com o máximo de ' + DISC_MAX + '%') : 'até ' + DISC_MAX + '%';
     $('discInfo').style.color = over ? 'var(--red)' : '';
     $('discQuick').querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', Number(b.dataset.p) === discPct() && (discPct() > 0 || $('discPct').value !== '')));
     const back = $('backOn').checked;
@@ -466,7 +490,7 @@
     $('pinOk').hidden = !seller;
     const cbu = cbUseCents();
     $('cbUseInfo').textContent = cbu ? '(− ' + brl(cbu) + ')' : '';
-    $('totalLabel').textContent = (paidByCredit() ? 'Pago com crédito de troca' : method === 'split' ? 'Dividido' : METHOD[method]) + (crUseCents() && !paidByCredit() ? ' · crédito ' + brl(crUseCents()) : '') + (discountCents() ? ' · desconto ' + brl(discountCents()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
+    $('totalLabel').textContent = (paidByCredit() ? 'Pago com crédito de troca' : method === 'split' ? 'Dividido' : METHOD[method]) + (crUseCents() && !paidByCredit() ? ' · crédito ' + brl(crUseCents()) : '') + (discountCents() + itemsDisc() ? ' · desconto ' + brl(discountCents() + itemsDisc()) : '') + (cbu ? ' · cashback ' + brl(cbu) : '');
     $('total').textContent = brl(total());
     const earn = customer && cfg.cashback_enabled ? Math.round(total() * (Number(cfg.cashback_percent) || 0) / 100) : 0;
     $('st3t').textContent = earn ? 'Cashback de ' + brl(earn) + ' no WhatsApp' : 'Cashback pelo WhatsApp';
@@ -582,7 +606,7 @@
   // ---------- Finalizar ----------
   $('finish').onclick = async () => {
     $('finish').disabled = true; $('saleMsg').textContent = ''; $('saleMsg').className = 'msg';
-    const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
+    const body = { items: items.map(x => ({ product_id: x.id, quantity: x.qty, ...(itemDisc(x) ? { discount_cents: itemDisc(x) } : {}) })), payment_method: method, seller_id: seller.id, seller_pin: sellerPin };
     if (method === 'split') { const m = splitMerged(); delete body.payment_method; if (m.length === 1) body.payment_method = m[0].method; else body.payments = m; }
     if (discountCents()) body.discount_cents = discountCents();
     if (cbUseCents()) body.cashback_use_cents = cbUseCents();

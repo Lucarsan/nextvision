@@ -82,6 +82,11 @@ test('acesso só no PC da unidade: trava por unidade e da gestão; senha + prova
     assert.ok(panel.denied.length >= 2);
     assert.equal((await request('/store/settings', { token: foreignToken })).status, 200);
 
+    // Painel da rede: o dono vê as tentativas recusadas e quais unidades estão travadas.
+    const seen = await api('/network/access-denied', { token: owner.data.token });
+    assert.ok(seen.denied.length >= 2); assert.ok(seen.denied.some(x => x.unit === 'Benfica'));
+    assert.deepEqual(seen.units, [{ unit: 'Benfica', locked: true }, { unit: 'Solares', locked: false }]);
+
     // PC revogado: a sessão aberta nele cai e ele não consegue mais provas.
     await api(`/master/tenants/${tenant}/devices/${pcBenfica.id}/revoke`, { method: 'POST', token: masterToken });
     const revoked = await request('/store/kiosk/sellers', { token: kioskSession });

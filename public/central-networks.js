@@ -219,6 +219,7 @@
       + '<p class="ct-muted">Ligada, quem tem login da gestão só entra num PC de unidade com o Ficou Pronto (não entra pelo celular nem de casa).</p>'
       + '<p><b>' + (d.enabled ? 'Ligada' : 'Desligada') + '</b> '
       + (anyPc || d.enabled ? '<button type="button" class="ct-btn' + (d.enabled ? ' ghost' : '') + '" id="lockToggle" style="height:34px;margin-left:8px">' + (d.enabled ? 'Desligar' : 'Ligar') + '</button>' : '<span class="ct-muted">(precisa de pelo menos um PC de unidade ativado)</span>') + '</p>'
+      + '<h3 style="margin-top:16px">PCs de suporte</h3><p class="ct-muted">Computador do suporte (com o Ficou Pronto instalado e ativado em qualquer loja) que entra pelo login normal em todas as unidades travadas e na gestão da rede.</p><div id="supDevs" class="ct-muted">Carregando…</div>'
       + (d.denied.length ? '<h3 style="margin-top:14px">Tentativas recusadas</h3><ul>' + d.denied.map(x => '<li>' + when(x.created_at) + ' · ' + safe(x.actor || 'desconhecido') + (x.unit ? ' · ' + safe(x.unit) : '') + '</li>').join('') + '</ul>' : '');
     const run = async (fn, done) => { try { await fn(); msg(done); await drawLock(net); } catch (e) { msg(e.message); } };
     box.querySelectorAll('.lockUnit').forEach(b => b.onclick = () => {
@@ -237,6 +238,15 @@
       try { const r = await api('/master/tenants/' + b.dataset.id + '/support-session', 'POST'); if (tab) tab.location.href = r.panel + '#sup=' + encodeURIComponent(r.token); else location.href = r.panel + '#sup=' + encodeURIComponent(r.token); }
       catch (e) { if (tab) tab.close(); msg(e.message); }
     });
+    // PCs de suporte: marcar/tirar entre os PCs ativados (de qualquer loja).
+    api('/master/support-devices').then(list => {
+      const sup = list.filter(x => x.support), other = list.filter(x => !x.support);
+      el('supDevs').innerHTML = (sup.length ? '<ul>' + sup.map(x => '<li><b>' + safe(x.name) + '</b> · ' + safe(x.store) + ' · último sinal ' + when(x.last_seen_at) + ' <button type="button" class="ct-btn ghost supOff" data-id="' + safe(x.id) + '" style="height:28px;margin-left:6px">Tirar</button></li>').join('') + '</ul>' : '<p>Nenhum PC de suporte.</p>')
+        + (other.length ? '<div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>Computador<select id="supPick">' + other.map(x => '<option value="' + safe(x.id) + '">' + safe(x.name) + ' · ' + safe(x.store) + '</option>').join('') + '</select></label><button type="button" class="ct-btn" id="supOn" style="height:34px">Marcar como PC de suporte</button></div>' : '');
+      el('supDevs').classList.remove('ct-muted');
+      if (el('supOn')) el('supOn').onclick = () => { if (confirm('Liberar este computador em todas as unidades travadas e na gestão da rede?')) run(() => api('/master/devices/' + el('supPick').value + '/support', 'PATCH', { enabled: true }), 'PC de suporte liberado.'); };
+      el('supDevs').querySelectorAll('.supOff').forEach(b => b.onclick = () => run(() => api('/master/devices/' + b.dataset.id + '/support', 'PATCH', { enabled: false }), 'PC de suporte retirado.'));
+    }).catch(e => { el('supDevs').textContent = e.message; });
     box.querySelectorAll('.lockRevoke').forEach(b => b.onclick = () => {
       if (!confirm('Revogar este computador? Ele deixa de abrir o sistema e o agente para. Se a trava da unidade estiver ligada, o caixa só volta a abrir com outro PC ativado (ou desligando a trava).')) return;
       run(() => api('/master/tenants/' + b.dataset.unit + '/devices/' + b.dataset.id + '/revoke', 'POST'), 'Computador revogado.');

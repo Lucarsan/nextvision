@@ -8,15 +8,23 @@
   window.tefCard = function tefCard(box, units) {
     if (!box) return;
     if (!units.length) { box.innerHTML = '<h2>Pinpad Stone (TEF)</h2><p class="ct-muted">Ligue uma unidade à rede primeiro.</p>'; return; }
+    // Lojas com caixa fora de qualquer rede (ex.: Loja teste) também aparecem, para testes e homologação da Stone.
+    let extra = [];
     let unitId = sessionStorage.getItem('tef_unit') || units[0].id;
-    if (!units.some(u => u.id === unitId)) unitId = units[0].id;
+    const all = () => units.concat(extra);
+    async function start() {
+      try { extra = (await api('/master/tenants')).filter(t => t.sales_enabled && !t.network_id && !units.some(u => u.id === t.id)); } catch { extra = []; }
+      if (!all().some(u => u.id === unitId)) unitId = units[0].id;
+      load();
+    }
+    const opt = u => '<option value="' + safe(u.id) + '"' + (u.id === unitId ? ' selected' : '') + '>' + safe(u.unit_label || u.name) + '</option>';
     async function load() {
       box.innerHTML = '<h2>Pinpad Stone (TEF)</h2><p class="ct-muted">Carregando…</p>';
       let t; try { t = await api('/master/tenants/' + unitId + '/tef'); } catch (e) { box.innerHTML = '<h2>Pinpad Stone (TEF)</h2><p class="ct-muted">' + safe(e.message) + '</p>'; return; }
       box.innerHTML = '<h2>Pinpad Stone (TEF)</h2>'
         + '<p class="ct-muted">O caixa do quiosque manda o valor para o pinpad pelo programa AutoTEF (Slim) instalado no computador da loja. Sandbox e produção pedem o Stone Code da conta da unidade (o de teste é diferente do de produção).</p>'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:8px 0">'
-        + '<label>Unidade<select id="tfUnit">' + units.map(u => '<option value="' + safe(u.id) + '"' + (u.id === unitId ? ' selected' : '') + '>' + safe(u.unit_label || u.name) + '</option>').join('') + '</select></label>'
+        + '<label>Unidade<select id="tfUnit">' + units.map(opt).join('') + (extra.length ? '<optgroup label="Fora da rede (testes)">' + extra.map(opt).join('') + '</optgroup>' : '') + '</select></label>'
         + '<label>Modo<select id="tfMode">' + Object.entries(MODES).map(([k, l]) => '<option value="' + k + '"' + (t.mode === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>'
         + '<label>Stone Code<input id="tfCode" value="' + safe(t.stone_code || '') + '" inputmode="numeric" style="width:130px"></label>'
         + '<label>Porta do pinpad<input id="tfPort" value="' + safe(t.pinpad_port || '') + '" placeholder="automática" style="width:110px"></label>'
@@ -34,6 +42,6 @@
         } catch (e) { el('tfMsg').textContent = e.message; el('tfMsg').style.color = '#b42318'; }
       };
     }
-    load();
+    start();
   };
 })();

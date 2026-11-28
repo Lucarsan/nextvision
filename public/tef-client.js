@@ -129,7 +129,7 @@
     // Estorno no pinpad (cartão): pede ao Slim com os dados guardados e marca no servidor.
     async function reverse(txId, onStep) {
       const d = await api('/store/tef/transactions/' + txId + '/cancel-data');
-      onStep && onStep('Estorno: insira ou aproxime o MESMO cartão no pinpad…');
+      onStep && onStep('Estornando no pinpad… Se ele pedir o cartão, use o MESMO da compra.');
       await ready();
       let r;
       try { r = await call('/api/Cancel/', d.request, 180000); } catch { throw Error('O pinpad não respondeu ao estorno. A cobrança continua em Pendências do pinpad.'); }

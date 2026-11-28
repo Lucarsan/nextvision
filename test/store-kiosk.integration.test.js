@@ -105,6 +105,15 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     const md = await api('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234' } });
     assert.equal(md.today.count, 1); assert.equal(md.today.total_cents, 4410); assert.equal(md.store_today.count, 1);
     assert.equal(JSON.stringify(md).includes('cost'), false);
+    // Período escolhido pela vendedora: só as vendas dela, com total por dia.
+    const pToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+    const pYest = new Date(Date.now() - 864e5).toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+    const mp = await api('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pYest, to: pToday } });
+    assert.equal(mp.period.count, 1); assert.equal(mp.period.total_cents, 4410); assert.equal(mp.period.days.length, 1); assert.equal(mp.period.sales.length, 1);
+    assert.equal(md.period, null);
+    assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pToday, to: pYest } })).status, 400);
+    assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pToday } })).status, 400);
+    assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: '2024-01-01', to: pToday } })).status, 400, 'até 1 ano');
 
     // Pinpad fora do ar: venda na maquininha avulsa fica pendente de conciliação no painel da rede.
     const off = await api('/store/sales', { method: 'POST', token: kt, body: { ...item, anonymous: true, payment_method: 'debit', offline_payment: true, offline_auth: 'AUT123', seller_id: ana.id, seller_pin: '1234' } }, 201);

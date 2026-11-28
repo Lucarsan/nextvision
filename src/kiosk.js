@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { passwordMatches } from './password-input.js';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { gateLogin, proofField, networkLocked } from './device-lock.js';
+import { gateLogin, proofField, retryField, networkLocked } from './device-lock.js';
 
 const OWN_HOSTS = new Set(['ficoupronto.com', 'www.ficoupronto.com', 'app.ficoupronto.com']);
 export const PIN = z.string().regex(/^\d{4}$/, 'PIN de 4 dígitos');
@@ -53,7 +53,7 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
 
   // Abre a unidade: senha do quiosque → caixa; senha de dono/supervisor da rede → painel da rede.
   app.post('/api/auth/unit', limiter(15), route(async (req, res) => {
-    const v = valid(z.object({ unit_id: uuid, password: z.string().min(1).max(200), device_proof: proofField }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ unit_id: uuid, password: z.string().min(1).max(200), device_proof: proofField, device_retry: retryField }).strict(), req, res); if (!v) return;
     const unit = (await q("SELECT id, network_id, status, device_lock FROM tenants WHERE id = $1 AND network_id IS NOT NULL", [v.unit_id])).rows[0];
     const fail = () => bad(res, 401, 'Senha incorreta para esta unidade');
     if (!unit) return fail();
@@ -68,7 +68,7 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
       if (u.login_kind === 'kiosk') {
         if (!['trial', 'active'].includes(unit.status)) return bad(res, 403, 'Unidade bloqueada. Fale com a central.');
         // Rede travada: o caixa só abre no PC desta unidade (prova do agente Ficou Pronto).
-        const g = await gateLogin(q, res, { locked: unit.device_lock, networkId: unit.network_id, unitId: unit.id, proof: v.device_proof, actorId: u.id }); if (!g.ok) return;
+        const g = await gateLogin(q, res, { locked: unit.device_lock, networkId: unit.network_id, unitId: unit.id, proof: v.device_proof, retry: v.device_retry, actorId: u.id }); if (!g.ok) return;
         const token = jwt.sign({ id: u.id, tenant_id: u.tenant_id, role: u.role, ...(g.dev ? { dev: g.dev } : {}) }, secret, { algorithm: 'HS256', expiresIn: '16h' });
         await q("INSERT INTO audit_events(tenant_id, actor_id, action, target_type, target_id) VALUES($1,$2,'kiosk_open','tenant',$3)", [unit.id, u.id, unit.id]);
         return res.json({ token, panel: '/caixa', user: { id: u.id, name: u.name, role: u.role, tenant_id: u.tenant_id, kiosk: true } });
@@ -76,7 +76,7 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
       // Supervisor só abre pelo quiosque das unidades que acompanha.
       if (u.network_access === 'supervisor' && !(u.network_unit_ids || []).includes(unit.id)) continue;
       // Gestão da rede pela tela da unidade: com a trava da gestão, precisa ser o PC desta unidade.
-      const g = await gateLogin(q, res, { locked: await networkLocked(q, unit.network_id), networkId: unit.network_id, unitId: unit.id, proof: v.device_proof, actorId: u.id, tenantId: unit.id }); if (!g.ok) return;
+      const g = await gateLogin(q, res, { locked: await networkLocked(q, unit.network_id), networkId: unit.network_id, unitId: unit.id, proof: v.device_proof, retry: v.device_retry, actorId: u.id, tenantId: unit.id }); if (!g.ok) return;
       const token = jwt.sign({ id: u.id, tenant_id: null, network_id: u.network_id, role: 'network', ...(g.dev ? { dev: g.dev } : {}) }, secret, { algorithm: 'HS256', expiresIn: '8h' });
       return res.json({ token, panel: '/rede.html', user: { id: u.id, name: u.name, role: 'network', network_id: u.network_id } });
     }

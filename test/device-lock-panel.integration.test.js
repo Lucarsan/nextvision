@@ -30,7 +30,7 @@ test('acesso: rede travada abre o caixa só com a ponte local do agente', {
 
     // Sem o agente: aviso claro, continua na tela.
     await login();
-    await page.waitForFunction(() => document.getElementById('unitError').textContent.length > 0);
+    await page.waitForFunction(() => /computador da unidade/.test(document.getElementById('unitError').textContent));
     assert.match(await page.textContent('#unitError'), /computador da unidade/);
 
     // Ponte local (como a do agente): CORS só para a página da rede; pede a prova à central com a credencial do PC.

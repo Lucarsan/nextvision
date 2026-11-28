@@ -19,10 +19,11 @@ test('monitoramento: lojas, alertas, resolução e rotas da central', { skip, ti
       VALUES($1,$2,'PC balcão',$3,true,$4,$5,$6,'0.5.1')`, [dev, f.tenant, crypto.randomBytes(32).toString('hex'), new Date(MONDAY_10H - 60 * 60000),
       { components: { disk: { state: 'degraded', detail: '1,5 GB livres' }, tunnel: { state: 'ok' }, publisher: { state: 'down', detail: 'sem imagem' } }, cameras: [{ id: 'c1', state: 'down', detail: 'senha errada' }] }, MONDAY_10H]);
 
-    // Segunda 10h, servidor acordado há 1 h: PC sem sinal há 1 h é crítico; disco e câmera também aparecem.
+    // Segunda 10h, servidor acordado há 1 h: PC que estava ligado hoje e parou não avisa; disco e câmera aparecem.
     const r = await dbChecks(q, MONDAY_10H, { awakeMinutes: 60 });
     const by = Object.fromEntries(r.items.map(x => [x.key, x]));
-    assert.equal(by['device.offline.' + dev].severity, 'critical');
+    assert.equal(by['device.offline.' + dev], undefined);
+    assert.equal(r.items.some(x => x.key.startsWith('device.notstarted.' + dev)), false);
     assert.equal(by['device.disk.' + dev].severity, 'critical');
     assert.equal(by['device.publisher.' + dev].severity, 'critical');
     assert.equal(by['camera.c1'].severity, 'warn');

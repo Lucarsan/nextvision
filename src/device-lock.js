@@ -19,6 +19,7 @@ export const DEVICE_MSG = 'Este acesso só funciona no computador da unidade, co
 const PROOF = /^nvlp_[a-f0-9]{64}$/;
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 export const proofField = z.string().max(80).optional();
+export const retryField = z.boolean().optional();
 
 // Gestão da rede travada? (networkId null: nunca)
 export async function networkLocked(q, networkId) {
@@ -46,11 +47,12 @@ export async function consumeProof(q, { proof, networkId, unitId = null }) {
 // Usado no login. locked: a trava que vale para quem está entrando (unidade ou gestão da rede).
 // Travado sem prova válida → 403 com code device_required (a página pede a prova e tenta de novo).
 // Devolve { ok: true, dev } (dev = ID do PC ou undefined sem trava) ou { ok: false } já respondido.
-export async function gateLogin(q, res, { locked, networkId = null, unitId = null, proof, actorId = null, tenantId = null }) {
+// retry: segunda tentativa da página (a primeira vai sempre sem prova e não conta como recusa).
+export async function gateLogin(q, res, { locked, networkId = null, unitId = null, proof, retry = false, actorId = null, tenantId = null }) {
   if (!locked) return { ok: true };
   const device = await consumeProof(q, { proof, networkId, unitId });
   if (device) return { ok: true, dev: device.id };
-  await q("INSERT INTO audit_events(tenant_id, actor_id, action, target_type, target_id) VALUES($1, $2, 'device_lock_denied', 'network', $3)",
+  if (retry || proof) await q("INSERT INTO audit_events(tenant_id, actor_id, action, target_type, target_id) VALUES($1, $2, 'device_lock_denied', 'network', $3)",
     [tenantId || unitId, actorId, networkId || unitId]).catch(() => {});
   res.status(403).json({ error: DEVICE_MSG, code: DEVICE_REQUIRED, had_proof: !!proof });
   return { ok: false };

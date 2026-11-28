@@ -59,6 +59,12 @@ test('ACBr: cadastro da empresa, certificado repassado sem gravar e cupom de tes
 
     await api(`/master/tenants/${tenant}/acbr/nfce-config`, { method: 'PUT', token: masterToken, body: {} });
     assert.deepEqual(fake.seen.at(-1).body, { CRT: 1, ambiente: 'homologacao', sefaz: { id_csc: 0, csc: '' } });
+    // Com o servidor em sandbox, produção é recusada e nada vai para a ACBr.
+    const sentBefore = fake.seen.length;
+    const prodTry = await request(`/master/tenants/${tenant}/acbr/nfce-config`, { method: 'PUT', token: masterToken, body: { ambiente: 'producao' } });
+    assert.equal(prodTry.status, 409); assert.match(prodTry.data.error, /ACBR_AMBIENTE/);
+    assert.equal(fake.seen.length, sentBefore);
+    assert.equal((await db.query('SELECT fiscal_env FROM tenants WHERE id=$1', [tenant])).rows[0].fiscal_env, 'homologacao');
 
     // Cupom de teste no crédito: série 10, número 1 da homologação, grupo card completo.
     const t1 = await api(`/master/tenants/${tenant}/acbr/test-nfce`, { method: 'POST', token: masterToken, body: { method: 'credit' } });
@@ -82,5 +88,32 @@ test('ACBr: cadastro da empresa, certificado repassado sem gravar e cupom de tes
 
     st = await api(`/master/tenants/${tenant}/acbr`, { token: masterToken });
     assert.equal(st.tests.length, 2); assert.deepEqual(st.problems, []); assert.ok(st.company);
+  } finally { await f.cleanup(); await fake.close(); }
+});
+
+test('ACBr: com o servidor em produção, a central configura a unidade em produção (sem cupom de teste)', { skip, timeout: 60000 }, async () => {
+  const fake = await fakeAcbr();
+  const f = await createStoreFixture({ env: { ACBR_CLIENT_ID: 'cid', ACBR_CLIENT_SECRET: 'csec', ACBR_AMBIENTE: 'producao', ACBR_API_URL: fake.url, ACBR_AUTH_URL: fake.url + '/token' } });
+  try {
+    const { api, request, tenant, masterToken, db } = f;
+    await db.query("UPDATE tenants SET cnpj='46383376000123' WHERE id=$1", [tenant]);
+    const st = await api(`/master/tenants/${tenant}/acbr`, { token: masterToken });
+    assert.equal(st.environment, 'producao'); assert.equal(st.fiscal.fiscal_env, 'homologacao');
+
+    // CSC de produção: vai para a ACBr com ambiente producao e a unidade passa a montar o cupom em produção.
+    const r = await api(`/master/tenants/${tenant}/acbr/nfce-config`, { method: 'PUT', token: masterToken, body: { id_csc: 1, csc: 'CSC-PRODUCAO', ambiente: 'producao' } });
+    assert.equal(r.ambiente, 'producao');
+    assert.deepEqual(fake.seen.at(-1).body, { CRT: 1, ambiente: 'producao', sefaz: { id_csc: 1, csc: 'CSC-PRODUCAO' } });
+    assert.equal((await db.query('SELECT fiscal_env FROM tenants WHERE id=$1', [tenant])).rows[0].fiscal_env, 'producao');
+    assert.equal((await db.query("SELECT count(*)::int n FROM audit_events WHERE action='acbr_nfce_config_producao'")).rows[0].n, 1);
+
+    // Cupom de teste continua só na homologação do servidor.
+    const t = await request(`/master/tenants/${tenant}/acbr/test-nfce`, { method: 'POST', token: masterToken, body: { method: 'cash' } });
+    assert.equal(t.status, 409);
+    assert.equal(fake.seen.filter(s => s.method === 'POST' && s.url === '/nfce').length, 0, 'nenhum cupom transmitido');
+
+    // Voltar para homologação também é possível (ex.: refazer um teste).
+    await api(`/master/tenants/${tenant}/acbr/nfce-config`, { method: 'PUT', token: masterToken, body: { ambiente: 'homologacao' } });
+    assert.equal((await db.query('SELECT fiscal_env FROM tenants WHERE id=$1', [tenant])).rows[0].fiscal_env, 'homologacao');
   } finally { await f.cleanup(); await fake.close(); }
 });

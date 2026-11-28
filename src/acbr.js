@@ -1,6 +1,9 @@
 // Emissor ACBr API (https://dev.acbr.api.br): token, cadastro da empresa e emissão de NFC-e.
 // Credenciais só no ambiente do servidor: ACBR_CLIENT_ID, ACBR_CLIENT_SECRET e ACBR_AMBIENTE (sandbox | producao).
-// Nesta etapa só a homologação está liberada: cupom de teste, sem venda e sem valor fiscal.
+// Cupom de teste só na homologação (ACBR_AMBIENTE=sandbox). Com ACBR_AMBIENTE=producao a central pode configurar a
+// NFC-e de cada unidade em produção; a emissão nas vendas do caixa ainda não está ligada.
+// Sandbox e produção da ACBr têm endereços separados (hom./prod.); confirmar com o suporte se empresa e certificado
+// passam sozinhos ou precisam ser cadastrados de novo em produção (a central mostra o que falta em cada unidade).
 // Regras confirmadas com o suporte (25/11/2026): a ACBr assina com o certificado cadastrado nela; recebe só JSON;
 // série e número vão no payload (nós controlamos); em timeout não reenviar, consultar depois.
 import { z } from 'zod';
@@ -171,7 +174,7 @@ export function registerAcbr(app, { q, db, auth, roles, route, bad, valid, audit
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
     const t = await loadTenant(req.params.id); if (!t) return bad(res, 404, 'Loja não encontrada');
     const out = { configured: acbrConfigured(), environment: env(), cities: CITIES,
-      fiscal: { cnpj: t.cnpj, legal_name: t.legal_name, state_registration: t.state_registration, tax_regime: t.tax_regime, nfce_series: t.nfce_series, nfce_hom_next_number: t.nfce_hom_next_number, payment_terminal_id: t.payment_terminal_id, fiscal_address: t.fiscal_address, fiscal_email: t.fiscal_email },
+      fiscal: { cnpj: t.cnpj, legal_name: t.legal_name, state_registration: t.state_registration, tax_regime: t.tax_regime, nfce_series: t.nfce_series, nfce_hom_next_number: t.nfce_hom_next_number, fiscal_env: t.fiscal_env, payment_terminal_id: t.payment_terminal_id, fiscal_address: t.fiscal_address, fiscal_email: t.fiscal_email },
       problems: [...(t.cnpj ? [] : ['Unidade sem CNPJ']), ...(t.legal_name ? [] : ['Unidade sem razão social']), ...(t.state_registration ? [] : ['Unidade sem inscrição estadual (IE)']), ...addressProblems(t.fiscal_address)],
       company: null, certificate: null, nfce: null, error: null };
     out.tests = (await q("SELECT id,number,status,access_key,error,created_at,payload->'infNFe'->'pag'->'detPag'->0->>'tPag' tpag FROM fiscal_documents WHERE tenant_id=$1 AND is_test ORDER BY created_at DESC LIMIT 10", [t.id])).rows;
@@ -233,16 +236,21 @@ export function registerAcbr(app, { q, db, auth, roles, route, bad, valid, audit
     } catch (e) { fail(res, e); }
   }));
 
-  // Configuração da NFC-e na ACBr (homologação). QR Code v3 (NT 2025.001) dispensa CSC: id_csc 0 e csc vazio.
+  // Configuração da NFC-e na ACBr. QR Code v3 (NT 2025.001) dispensa CSC: id_csc 0 e csc vazio.
+  // Ambiente: homologação (padrão) ou produção. Produção só com ACBR_AMBIENTE=producao no servidor, e grava
+  // tenants.fiscal_env junto, para o cupom montado (tpAmb) seguir o mesmo ambiente configurado na ACBr.
+  // Isto só configura: nenhuma venda emite cupom por aqui.
   app.put('/api/master/tenants/:id/acbr/nfce-config', ...master, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'ID inválido');
-    const v = valid(z.object({ id_csc: z.number().int().min(0).max(999999).default(0), csc: z.string().trim().max(60).default('') }).strict(), req, res); if (!v) return;
+    const v = valid(z.object({ id_csc: z.number().int().min(0).max(999999).default(0), csc: z.string().trim().max(60).default(''), ambiente: z.enum(['homologacao', 'producao']).default('homologacao') }).strict(), req, res); if (!v) return;
     if (v.id_csc > 0 && !v.csc) return bad(res, 400, 'Informe o CSC junto com o ID do CSC');
+    if (v.ambiente === 'producao' && env() !== 'producao') return bad(res, 409, 'Produção só depois de trocar ACBR_AMBIENTE para producao no Render');
     const t = await loadTenant(req.params.id); if (!t?.cnpj) return bad(res, 400, 'Unidade sem CNPJ');
     try {
-      await call(`/empresas/${t.cnpj}/nfce`, { method: 'PUT', body: { CRT: t.tax_regime ?? 1, ambiente: 'homologacao', sefaz: { id_csc: v.id_csc, csc: v.csc } } });
-      await audit(req, 'acbr_nfce_config', 'tenant', t.id, t.id);
-      res.json({ ok: true, qrcode: v.id_csc === 0 ? 'v3 (sem CSC)' : 'v2 (com CSC)' });
+      await call(`/empresas/${t.cnpj}/nfce`, { method: 'PUT', body: { CRT: t.tax_regime ?? 1, ambiente: v.ambiente, sefaz: { id_csc: v.id_csc, csc: v.csc } } });
+      await q('UPDATE tenants SET fiscal_env=$2 WHERE id=$1', [t.id, v.ambiente]);
+      await audit(req, v.ambiente === 'producao' ? 'acbr_nfce_config_producao' : 'acbr_nfce_config', 'tenant', t.id, t.id);
+      res.json({ ok: true, ambiente: v.ambiente, qrcode: v.id_csc === 0 ? 'v3 (sem CSC)' : 'v2 (com CSC)' });
     } catch (e) { fail(res, e); }
   }));
 

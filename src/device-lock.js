@@ -39,8 +39,8 @@ export async function consumeProof(q, { proof, networkId, unitId = null }) {
   const r = await q(`UPDATE device_login_proofs p SET used_at = now()
       FROM shop_devices d JOIN tenants t ON t.id = d.tenant_id
      WHERE p.proof_hash = $1 AND p.used_at IS NULL AND p.expires_at > now() AND d.id = p.device_id
-       AND d.enabled AND d.revoked_at IS NULL AND t.status IN ('trial', 'active') AND ($2::uuid IS NULL OR t.network_id = $2::uuid)
-       AND ($3::uuid IS NULL OR d.tenant_id = $3::uuid)
+       AND d.enabled AND d.revoked_at IS NULL AND t.status IN ('trial', 'active')
+       AND (d.support OR (($2::uuid IS NULL OR t.network_id = $2::uuid) AND ($3::uuid IS NULL OR d.tenant_id = $3::uuid)))
      RETURNING d.id, d.tenant_id, d.name`, [digest(proof), networkId, unitId]);
   return r.rows[0] || null;
 }
@@ -130,6 +130,21 @@ export function registerDeviceLock(app, { q, auth, roles, route, bad, valid, aud
     const token = jwt.sign({ id: k.id, tenant_id: k.tenant_id, role: k.role, sup: req.user.id }, secret, { algorithm: 'HS256', expiresIn: '4h' });
     await audit(req, 'support_open', 'tenant', req.params.id, req.params.id);
     res.set('Cache-Control', 'no-store').json({ token, unit: k.unit, panel: '/caixa' });
+  }));
+
+  // PCs de suporte: qualquer PC com o agente ativado (de qualquer loja) que a central libera em todas as unidades.
+  app.get('/api/master/support-devices', ...master, route(async (_req, res) => {
+    const r = await q(`SELECT d.id, d.name, d.support, d.last_seen_at, coalesce(t.unit_label, t.name) store FROM shop_devices d JOIN tenants t ON t.id = d.tenant_id
+      WHERE d.enabled AND d.revoked_at IS NULL ORDER BY d.support DESC, lower(coalesce(t.unit_label, t.name)), lower(d.name)`);
+    res.set('Cache-Control', 'no-store').json(r.rows);
+  }));
+  app.patch('/api/master/devices/:id/support', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Computador inválido');
+    const v = valid(z.object({ enabled: z.boolean() }).strict(), req, res); if (!v) return;
+    const r = await q('UPDATE shop_devices SET support = $2 WHERE id = $1 AND revoked_at IS NULL RETURNING id, tenant_id, support', [req.params.id, v.enabled]);
+    if (!r.rowCount) return bad(res, 404, 'Computador não encontrado');
+    await audit(req, v.enabled ? 'support_device_on' : 'support_device_off', 'shop_device', req.params.id, r.rows[0].tenant_id);
+    res.json({ support: r.rows[0].support });
   }));
 
   // Trava de uma unidade: só liga com PC ativado nela (senão o caixa daquela loja não abre mais).

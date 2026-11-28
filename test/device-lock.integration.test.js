@@ -87,6 +87,17 @@ test('acesso só no PC da unidade: trava por unidade e da gestão; senha + prova
     assert.ok(seen.denied.length >= 2); assert.ok(seen.denied.some(x => x.unit === 'Benfica'));
     assert.deepEqual(seen.units, [{ unit: 'Benfica', locked: true }, { unit: 'Solares', locked: false }]);
 
+    // PC de suporte (ativado em outra loja): entra pela senha normal em unidade travada e na gestão; tirar a marca desfaz.
+    const pcSup = await activate(f.foreignTenant, 'PC do Lucas');
+    assert.equal((await unitLogin({ device_proof: await proofOf(pcSup) })).status, 403);
+    assert.deepEqual(await api(`/master/devices/${pcSup.id}/support`, { method: 'PATCH', token: masterToken, body: { enabled: true } }), { support: true });
+    assert.ok((await api('/master/support-devices', { token: masterToken })).some(x => x.id === pcSup.id && x.support));
+    const supUnit = await unitLogin({ device_proof: await proofOf(pcSup) });
+    assert.equal(supUnit.status, 200, supUnit.data.error);
+    assert.equal((await email({ device_proof: await proofOf(pcSup) })).status, 200);
+    await api(`/master/devices/${pcSup.id}/support`, { method: 'PATCH', token: masterToken, body: { enabled: false } });
+    assert.equal((await request('/store/kiosk/sellers', { token: supUnit.data.token })).status, 401);
+
     // Suporte da central: abre o caixa travado fora do PC, sem a senha; outro papel não consegue.
     const sup = await api(`/master/tenants/${tenant}/support-session`, { method: 'POST', token: masterToken });
     assert.equal(sup.panel, '/caixa');

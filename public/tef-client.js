@@ -66,27 +66,41 @@
     const code = b => (b && (b.responseCode || b.ResponseCode)) || '';
     const hint = 'Confira se o pinpad está no USB e se o programa AutoTEF (Slim) está rodando neste computador.';
 
+    // Porta do pinpad: o Windows pode trocar o número (COM7 → COM8) quando o cabo vai para outra entrada USB.
+    // A ativação tenta a porta que funcionou da última vez neste PC, depois a da central e, por fim, deixa o
+    // AutoTEF procurar sozinho (sem connectionName). A porta que funcionar fica guardada neste navegador.
+    const PORT_KEY = 'fp_tef_port';
+    const learned = () => { try { return localStorage.getItem(PORT_KEY) || null; } catch { return null; } };
+    const remember = p => { try { if (p) localStorage.setItem(PORT_KEY, p); } catch { } };
+    let port = null;
+    async function activate() {
+      const tries = [...new Set([learned(), cfg.pinpad_port].filter(Boolean)), null];
+      let last = null;
+      for (const p of tries) {
+        let a;
+        try { a = await call('/api/Activate', { stoneCode: cfg.stone_code || '000000000', partnerName: cfg.partner_name, ...(p ? { connectionName: p } : {}) }, 60000); }
+        catch { throw Error('O pinpad não respondeu na ativação. ' + hint); }
+        if (a.status === 200) {
+          serial = a.body.serialNumber || serial; port = a.body.connectionName || p || null; remember(port);
+          return { stone_code: a.body.stoneCode || cfg.stone_code, serial: a.body.serialNumber || null, port, at: new Date() };
+        }
+        if (code(a.body) === 'A001') throw Error('Stone Code não combina com o ambiente do AutoTEF (teste x produção). Avise o suporte.');
+        last = a;
+      }
+      throw Error(code(last && last.body) === 'N404' ? 'Pinpad não encontrado em nenhuma porta. ' + hint : 'Não foi possível ativar o pinpad (' + (code(last && last.body) || (last && last.status)) + '). ' + hint);
+    }
     // Garante o Slim ativado (Stone Code + pinpad). Chamado antes de cada cobrança.
     async function ready() {
       let h;
       try { h = await call('/api/Healthcheck', undefined, 8000); } catch { throw Error('O pinpad não respondeu. ' + hint); }
       if (h.status === 200 && serial) return;
       if (h.status !== 200 && code(h.body) !== 'G002' && code(h.body) !== 'N404') throw Error('Pinpad com problema (' + (code(h.body) || h.status) + '). ' + hint);
-      let a;
-      try { a = await call('/api/Activate', { stoneCode: cfg.stone_code || '000000000', partnerName: cfg.partner_name, ...(cfg.pinpad_port ? { connectionName: cfg.pinpad_port } : {}) }, 60000); }
-      catch { throw Error('O pinpad não respondeu na ativação. ' + hint); }
-      if (a.status !== 200) throw Error(code(a.body) === 'N404' ? 'Pinpad não encontrado. ' + hint : code(a.body) === 'A001' ? 'Stone Code não combina com o ambiente do AutoTEF (teste x produção). Avise o suporte.' : 'Não foi possível ativar o pinpad (' + (code(a.body) || a.status) + ').');
-      serial = a.body.serialNumber || serial;
+      await activate();
     }
     // Inicialização manual (logon + carga de tabelas): força uma nova ativação do pinpad.
-    async function initialize() {
-      let a;
-      try { a = await call('/api/Activate', { stoneCode: cfg.stone_code || '000000000', partnerName: cfg.partner_name, ...(cfg.pinpad_port ? { connectionName: cfg.pinpad_port } : {}) }, 60000); }
-      catch { throw Error('O pinpad não respondeu na ativação. ' + hint); }
-      if (a.status !== 200) throw Error(code(a.body) === 'N404' ? 'Pinpad não encontrado. ' + hint : code(a.body) === 'A001' ? 'Stone Code não combina com o ambiente do AutoTEF (teste x produção). Avise o suporte.' : 'Não foi possível ativar o pinpad (' + (code(a.body) || a.status) + ').');
-      serial = a.body.serialNumber || serial;
-      return { stone_code: a.body.stoneCode || cfg.stone_code, serial: a.body.serialNumber || null, port: a.body.connectionName || cfg.pinpad_port || null, at: new Date() };
-    }
+    const initialize = () => activate();
+    // Pinpad sumiu da porta (N404) ou erro indefinido (G999): a próxima cobrança ativa de novo e procura a porta.
+    const lostPinpad = r => { if (r && r.status !== 200 && ['N404', 'G999'].includes(code(r.body))) serial = null; };
     const report = (id, kind, r) => api('/store/tef/transactions/' + id + '/result', 'POST', { kind, http: r ? r.status : 0, body: r ? r.body : null, ...(serial ? { terminal_serial: String(serial).slice(0, 40) } : {}) });
 
     // Cartão (crédito/débito). onStep(texto) atualiza a tela. Devolve a cobrança como o servidor registrou.
@@ -99,6 +113,7 @@
       try {
         r = await call('/api/Pay', { amount: reais(amount_cents), accountType: method, installment: installments > 1 ? { type: 2, number: installments } : { type: 1, number: 0 }, hasAlcoholicDrink: false }, 180000);
       } catch { return report(tx.id, 'lost', null); }
+      lostPinpad(r);
       return report(tx.id, 'card', r);
     }
 
@@ -137,6 +152,6 @@
       return api('/store/tef/transactions/' + txId + '/reversed', 'POST', { body: r.body && typeof r.body === 'object' && !Array.isArray(r.body) ? r.body : null });
     }
 
-    return { mode: cfg.mode, ready, initialize, payCard, payPix, reverse, get serial() { return serial; } };
+    return { mode: cfg.mode, ready, initialize, payCard, payPix, reverse, get serial() { return serial; }, get port() { return port; } };
   };
 })();

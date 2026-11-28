@@ -70,6 +70,7 @@ export function interpretSlim(kind, http, body) {
       };
     }
     // DECL = recusada pelo emissor/Stone. Demais (TECH, N404 pinpad, N401 vencido, G002 sem ativação) = erro.
+    if (code === 'N404' || code === 'G999') return { status: 'error', error_code: code, message: 'pinpad desconectado ou em outra entrada USB (' + code + '). Clique em Finalizar de novo: o caixa procura o pinpad sozinho' };
     return { status: code === 'DECL' ? 'declined' : 'error', error_code: code, message: display || reason || (http === 200 ? 'Resposta sem identificador da transação' : 'Erro no pinpad') };
   }
   if (kind === 'pix_created') {

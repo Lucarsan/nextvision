@@ -242,7 +242,9 @@ a{color:#1E3A5F}a:hover{color:#0F2440}
 @media(min-width:861px){
   .hb-slide .hb-wrap{align-items:flex-start}
   .hb-slide .hb-copy{padding-top:56px}
-  .hb-under{grid-area:1/1;align-self:end;justify-self:start;width:min(500px,40%);margin:0;position:relative;z-index:1}
+  .hb-under{grid-area:1/1;align-self:end;justify-self:center;width:100%;max-width:1280px;margin:0;position:relative;z-index:1;pointer-events:none}
+  .hb-under>*{pointer-events:auto}
+  .hb-under .hb-facts,.hb-under .en-note{width:min(500px,40%)}
 }
 .mk-os{padding-left:calc(24px + 32%)}
 .mk-os .mk-row,.mk-os .mk-foot{padding-left:0}

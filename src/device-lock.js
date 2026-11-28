@@ -75,6 +75,20 @@ export function registerDeviceLock(app, { q, auth, roles, route, bad, valid, aud
     res.set('Cache-Control', 'no-store').json({ origins: host ? ['https://' + host] : [] });
   }));
 
+  // Painel da rede: tentativas de entrar fora do PC da unidade. Dono vê a rede toda; supervisor, só as unidades dele.
+  app.get('/api/network/access-denied', auth, roles('network'), route(async (req, res) => {
+    const all = req.user.network_access === 'owner', ids = req.user.network_unit_ids || [];
+    const r = await q(`SELECT a.created_at, u.name actor, coalesce(t.unit_label, t.name) unit FROM audit_events a
+        LEFT JOIN users u ON u.id = a.actor_id LEFT JOIN tenants t ON t.id = a.tenant_id
+      WHERE a.action = 'device_lock_denied' AND a.created_at > now() - interval '30 days'
+        AND (a.target_id = $1::text OR t.network_id = $1::uuid)
+        AND ($2::boolean OR a.tenant_id = ANY($3::uuid[]))
+      ORDER BY a.created_at DESC LIMIT 100`, [req.user.network_id, all, ids]);
+    const locks = await q(`SELECT coalesce(unit_label, name) unit, device_lock locked FROM tenants
+      WHERE network_id = $1 AND status IN ('trial', 'active') AND ($2::boolean OR id = ANY($3::uuid[])) ORDER BY 1`, [req.user.network_id, all, ids]);
+    res.set('Cache-Control', 'no-store').json({ denied: r.rows, units: locks.rows });
+  }));
+
   // Central: situação da trava e os PCs de cada unidade.
   app.get('/api/master/networks/:id/device-lock', ...master, route(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Rede inválida');

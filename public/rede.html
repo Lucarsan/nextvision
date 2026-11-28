@@ -227,6 +227,7 @@
         <div class="actions"><button type="button" class="btn" id="pnSave">Cadastrar</button></div></div></section>
       <section class="card block" id="pcCard"><header class="bh"><button type="button" class="btog" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><h2>Pessoas</h2><span class="hint"></span></header><div class="bb"><div class="wrap"><table><thead><tr><th>Nome</th><th>Função</th><th>Unidade(s)</th><th>Situação</th><th></th></tr></thead><tbody id="pcRows"></tbody></table></div><p class="soft" id="pcMsg"></p></div></section>
       <section class="card block" id="bKiosk"><header class="bh"><button type="button" class="btog" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><h2>Senha do computador do quiosque</h2><span class="hint">A senha antiga para de valer na hora</span></header><div class="bb"><div class="wrap"><table class="narrow"><tbody id="kpRows"></tbody></table></div></div></section>
+      <section class="card block" id="bDenied"><header class="bh"><button type="button" class="btog" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><h2>Tentativas de acesso recusadas</h2><span class="hint">Senha usada fora do computador da unidade (últimos 30 dias)</span></header><div class="bb"><p class="soft" id="dnLocks"></p><div class="wrap"><table class="narrow"><thead><tr><th>Quando</th><th>Quem</th><th>Unidade</th></tr></thead><tbody id="dnRows"></tbody></table></div></div></section>
     </div>
 
     <div class="page" data-page="relatorios" hidden>
@@ -610,6 +611,14 @@
   $('mxFam').onchange = $('mxOnly').onchange = () => loadMatrix().catch(() => { });
   $('mxMore').onclick = () => loadMatrix(true).catch(() => { });
 
+  // Quem tentou entrar fora do PC da unidade (unidades com a trava ligada na central).
+  async function loadDenied() {
+    const d = await api('/network/access-denied');
+    const on = d.units.filter(u => u.locked).map(u => u.unit);
+    $('dnLocks').textContent = on.length ? 'Acesso só no computador da unidade: ' + on.join(', ') + '.' : 'Nenhuma unidade com acesso só no computador da unidade ainda.';
+    $('dnRows').innerHTML = d.denied.length ? d.denied.map(x => '<tr><td>' + new Date(x.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) + '</td><td>' + safe(x.actor || 'Desconhecido') + '</td><td>' + safe(x.unit || 'Login próprio') + '</td></tr>').join('')
+      : '<tr><td colspan="3" class="soft">Nenhuma tentativa recusada.</td></tr>';
+  }
   function showPage(p) {
     if (!document.querySelector('.page[data-page="' + p + '"]')) p = 'overview';
     page = p;
@@ -618,6 +627,7 @@
     if (p === 'loja') loadUnitDay().catch(e => { $('upMsg').textContent = e.message; });
     if (p === 'implantacao') { if (!window.fpNet.onb) window.fpNet.onb = window.fpOnboarding?.({ box: $('obBox'), mode: 'network', api, networkName: netName }); else window.fpNet.onb.reload(); }
     if (p === 'treinamento') { if (!window.fpNet.tr) window.fpNet.tr = window.fpTraining?.({ box: $('trBox'), mode: 'network', api }); else window.fpNet.tr.reload(); }
+    if (p === 'pessoas') loadDenied().catch(e => { $('dnLocks').textContent = e.message; });
     if (p === 'metas') loadGoals().catch(e => { $('gMsg').textContent = e.message; });
     if (p === 'estoque') { if (window.fpNet.stockTabs) window.fpNet.stockTabs.show(); else loadMatrix().catch(e => { $('mxInfo').textContent = e.message; }); }
     window.scrollTo(0, 0);

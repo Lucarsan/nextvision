@@ -20,7 +20,14 @@ export const MESSAGE_DEFAULTS = {
 };
 const TYPES = ['thanks', 'review', 'expiring', 'birthday', 'campaign'];
 const brl = c => (Number(c || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const dmy = d => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '';
+// Data como 25/02/2027. O pg devolve coluna date como Date (meia-noite local), e texto 'AAAA-MM-DD' também é aceito.
+const pad = n => String(n).padStart(2, '0');
+const dmy = d => {
+  if (!d) return '';
+  if (d instanceof Date) return Number.isNaN(d.getTime()) ? '' : pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? m[3] + '/' + m[2] + '/' + m[1] : '';
+};
 const base = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
 const first = n => String(n || '').trim().split(/\s+/)[0] || '';
 export const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => vars[k] ?? '').replace(/[ \t]+\n/g, '\n').trim();

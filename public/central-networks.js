@@ -196,31 +196,44 @@
     bindPeople(net, units, act);
   }
 
-  // Trava de acesso: com ela ligada, quiosque, dono, supervisor e gerente só entram no PC de uma unidade
-  // com o Ficou Pronto instalado e ativado (o agente dá a prova do PC). A central nunca é travada.
+  // Trava de acesso, ligada por unidade: o caixa (e os logins da loja) só abrem no PC daquela unidade.
+  // A gestão da rede (dono e supervisores) tem trava própria: só em PC de alguma unidade. A central nunca é travada.
+  // Unidade sem PC ativado não deixa ligar (senão o caixa dela para de abrir).
   async function drawLock(net) {
     const box = el('lockCard'), d = await api('/master/networks/' + net.id + '/device-lock');
     const when = t => t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'nunca';
-    const missing = d.units.filter(u => !u.devices.length);
+    const anyPc = d.units.some(u => u.devices.length);
+    const unitBtn = u => u.devices.length
+      ? '<button type="button" class="ct-btn' + (u.locked ? ' ghost' : '') + ' lockUnit" data-id="' + safe(u.id) + '" data-on="' + (u.locked ? '' : '1') + '" data-label="' + safe(u.label) + '" style="height:34px">' + (u.locked ? 'Desligar' : 'Ligar') + '</button>'
+      : '<span class="ct-muted">instale o PC primeiro</span>';
     box.innerHTML = '<h2>Acesso só no computador da unidade</h2>'
-      + '<p class="ct-muted">Com a trava ligada, a senha sozinha não basta: o caixa da unidade, o dono, os supervisores e os gerentes só entram num computador de unidade com o Ficou Pronto instalado e ativado. O caixa abre só no PC da própria unidade. Instale e ative o Ficou Pronto em cada PC antes de ligar.</p>'
-      + '<p><b>' + (d.enabled ? 'Ligada' : 'Desligada') + '</b> '
-      + '<button type="button" class="ct-btn' + (d.enabled ? ' ghost' : '') + '" id="lockToggle" style="height:34px;margin-left:8px">' + (d.enabled ? 'Desligar a trava' : 'Ligar a trava') + '</button></p>'
-      + (missing.length ? '<p class="ct-muted" style="color:#8f3f30">Sem PC ativado: ' + missing.map(u => safe(u.label)).join(', ') + '. Com a trava ligada, essas unidades não conseguem abrir o caixa.</p>' : '')
-      + '<div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Unidade</th><th>Computador</th><th>Último sinal</th><th></th></tr></thead><tbody>'
-      + d.units.map(u => u.devices.length ? u.devices.map(x => '<tr><td>' + safe(u.label) + '</td><td>' + safe(x.name) + '</td><td>' + when(x.last_seen_at) + '</td><td><button type="button" class="ct-btn ghost lockRevoke" data-unit="' + safe(u.id) + '" data-id="' + safe(x.id) + '" style="height:34px">Revogar</button></td></tr>').join('')
-        : '<tr><td>' + safe(u.label) + '</td><td class="ct-muted">Nenhum (instale o Ficou Pronto e ative com o código da loja)</td><td></td><td></td></tr>').join('')
+      + '<p class="ct-muted">Ligue unidade por unidade, depois de instalar e ativar o Ficou Pronto no PC dela. Com a trava ligada, a senha sozinha não basta: o caixa daquela unidade só abre no PC dela. As outras unidades não mudam.</p>'
+      + '<div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Unidade</th><th>Computador</th><th>Último sinal</th><th>Trava</th><th></th></tr></thead><tbody>'
+      + d.units.map(u => {
+        const pcs = u.devices.length ? u.devices.map(x => safe(x.name) + ' <button type="button" class="ct-btn ghost lockRevoke" data-unit="' + safe(u.id) + '" data-id="' + safe(x.id) + '" style="height:28px;margin-left:6px">Revogar</button>').join('<br>') : '<span class="ct-muted">Nenhum</span>';
+        const seen = u.devices.length ? u.devices.map(x => when(x.last_seen_at)).join('<br>') : '';
+        return '<tr><td><strong>' + safe(u.label) + '</strong></td><td>' + pcs + '</td><td>' + seen + '</td><td>' + (u.locked ? '<b>Ligada</b>' : 'Desligada') + '</td><td>' + unitBtn(u) + '</td></tr>';
+      }).join('')
       + '</tbody></table></div>'
-      + (d.denied.length ? '<h3 style="margin-top:14px">Tentativas recusadas (fora do PC da unidade)</h3><ul>' + d.denied.map(x => '<li>' + when(x.created_at) + ' · ' + safe(x.actor || 'desconhecido') + (x.unit ? ' · ' + safe(x.unit) : '') + '</li>').join('') + '</ul>' : '');
-    el('lockToggle').onclick = async () => {
+      + '<h3 style="margin-top:16px">Gestão da rede (dono e supervisores)</h3>'
+      + '<p class="ct-muted">Ligada, quem tem login da gestão só entra num PC de unidade com o Ficou Pronto (não entra pelo celular nem de casa).</p>'
+      + '<p><b>' + (d.enabled ? 'Ligada' : 'Desligada') + '</b> '
+      + (anyPc || d.enabled ? '<button type="button" class="ct-btn' + (d.enabled ? ' ghost' : '') + '" id="lockToggle" style="height:34px;margin-left:8px">' + (d.enabled ? 'Desligar' : 'Ligar') + '</button>' : '<span class="ct-muted">(precisa de pelo menos um PC de unidade ativado)</span>') + '</p>'
+      + (d.denied.length ? '<h3 style="margin-top:14px">Tentativas recusadas</h3><ul>' + d.denied.map(x => '<li>' + when(x.created_at) + ' · ' + safe(x.actor || 'desconhecido') + (x.unit ? ' · ' + safe(x.unit) : '') + '</li>').join('') + '</ul>' : '');
+    const run = async (fn, done) => { try { await fn(); msg(done); await drawLock(net); } catch (e) { msg(e.message); } };
+    box.querySelectorAll('.lockUnit').forEach(b => b.onclick = () => {
+      const on = !!b.dataset.on;
+      if (!confirm(on ? 'Ligar a trava de ' + b.dataset.label + '? O caixa dessa unidade só vai abrir no PC dela. Se o caixa estiver aberto em outro lugar, sai na hora. As outras unidades não mudam.' : 'Desligar a trava de ' + b.dataset.label + '? Volta a abrir de qualquer lugar com a senha.')) return;
+      run(() => api('/master/tenants/' + b.dataset.id + '/device-lock', 'PATCH', { enabled: on }), on ? 'Trava ligada em ' + b.dataset.label + '.' : 'Trava desligada em ' + b.dataset.label + '.');
+    });
+    if (el('lockToggle')) el('lockToggle').onclick = () => {
       const on = !d.enabled;
-      if (on && !confirm((missing.length ? 'Atenção: ' + missing.length + ' unidade(s) sem PC ativado não vão conseguir entrar.\n\n' : '') + 'Ligar a trava? Quem estiver conectado fora do PC de uma unidade (celular, casa) sai na hora.')) return;
-      if (!on && !confirm('Desligar a trava? Volta a dar para entrar de qualquer lugar com a senha.')) return;
-      try { await api('/master/networks/' + net.id + '/device-lock', 'PATCH', { enabled: on }); msg(on ? 'Trava ligada.' : 'Trava desligada.'); await drawLock(net); } catch (e) { msg(e.message); }
+      if (!confirm(on ? 'Ligar a trava da gestão? Dono e supervisores conectados pelo celular ou de casa saem na hora e só entram de novo num PC de unidade.' : 'Desligar a trava da gestão? Dono e supervisores voltam a entrar de qualquer lugar.')) return;
+      run(() => api('/master/networks/' + net.id + '/device-lock', 'PATCH', { enabled: on }), on ? 'Trava da gestão ligada.' : 'Trava da gestão desligada.');
     };
-    box.querySelectorAll('.lockRevoke').forEach(b => b.onclick = async () => {
-      if (!confirm('Revogar este computador? Ele deixa de abrir o sistema e o agente para. Para voltar, será preciso ativar de novo com um código novo.')) return;
-      try { await api('/master/tenants/' + b.dataset.unit + '/devices/' + b.dataset.id + '/revoke', 'POST'); msg('Computador revogado.'); await drawLock(net); } catch (e) { msg(e.message); }
+    box.querySelectorAll('.lockRevoke').forEach(b => b.onclick = () => {
+      if (!confirm('Revogar este computador? Ele deixa de abrir o sistema e o agente para. Se a trava da unidade estiver ligada, o caixa só volta a abrir com outro PC ativado (ou desligando a trava).')) return;
+      run(() => api('/master/tenants/' + b.dataset.unit + '/devices/' + b.dataset.id + '/revoke', 'POST'), 'Computador revogado.');
     });
   }
 

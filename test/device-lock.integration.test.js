@@ -4,7 +4,7 @@ import { createStoreFixture } from './helpers/store-fixture.js';
 
 const skip = !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL';
 
-test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar a trava ou revogar o PC', { skip }, async () => {
+test('acesso só no PC da unidade: trava por unidade e da gestão; senha + prova do agente; sessão cai ao ligar ou revogar', { skip }, async () => {
   const f = await createStoreFixture();
   try {
     const { api, request, tenant, masterToken, foreignToken } = f;
@@ -13,6 +13,10 @@ test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar
     await api(`/master/tenants/${tenant}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Benfica' } });
     await api(`/master/tenants/${solares.id}/network`, { method: 'PATCH', token: masterToken, body: { network_id: net.id, unit_label: 'Solares' } });
     await api(`/master/tenants/${tenant}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'senha-benfica' } });
+    await api(`/master/tenants/${solares.id}/kiosk-password`, { method: 'POST', token: masterToken, body: { password: 'senha-solares' } });
+    // Sem PC ativado: nem a unidade nem a gestão deixam ligar a trava.
+    assert.equal((await request(`/master/tenants/${tenant}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } })).status, 409);
+    assert.equal((await request(`/master/networks/${net.id}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } })).status, 409);
     await api(`/master/networks/${net.id}/people`, { method: 'POST', token: masterToken, body: { name: 'Gabriel', email: 'gabriel@audace.test', function: 'dono', password: 'senha-do-gabriel-1', pin: '9999' } }, 201);
 
     // Um PC ativado em cada unidade (agente Ficou Pronto).
@@ -30,8 +34,10 @@ test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar
     const oldSession = before.data.token;
     assert.equal((await request('/store/kiosk/sellers', { token: oldSession })).status, 200);
 
-    // Liga a trava: a sessão aberta sem PC cai na hora.
-    assert.deepEqual(await api(`/master/networks/${net.id}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } }), { enabled: true });
+    // Liga a trava só em Benfica: a sessão aberta sem PC cai na hora; Solares não muda.
+    assert.equal((await request(`/master/tenants/${f.foreignTenant}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } })).status, 409);
+    assert.deepEqual(await api(`/master/tenants/${tenant}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } }), { enabled: true });
+    assert.equal((await request('/auth/unit', { method: 'POST', token: null, body: { unit_id: solares.id, password: 'senha-solares' } })).status, 200);
     const dropped = await request('/store/kiosk/sellers', { token: oldSession });
     assert.equal(dropped.status, 401); assert.equal(dropped.data.code, 'device_required');
 
@@ -50,8 +56,12 @@ test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar
     assert.equal((await request('/store/kiosk/sellers', { token: kioskSession })).status, 200);
     assert.equal((await unitLogin({ device_proof: proof })).status, 403);
 
-    // Dono: login próprio só num PC de unidade da rede (qualquer unidade).
+    // Dono: sem a trava da gestão entra de qualquer lugar; com ela, só num PC de unidade da rede (qualquer unidade).
     const email = body => request('/auth/login', { method: 'POST', token: null, body: { email: 'gabriel@audace.test', password: 'senha-do-gabriel-1', ...body } });
+    const free = await email({});
+    assert.equal(free.status, 200, free.data.error);
+    await api(`/master/networks/${net.id}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: true } });
+    assert.equal((await request('/network/me', { token: free.data.token })).data.code, 'device_required');
     const phone = await email({});
     assert.equal(phone.status, 403); assert.equal(phone.data.code, 'device_required');
     const owner = await email({ device_proof: await proofOf(pcSolares) });
@@ -67,6 +77,7 @@ test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar
     // Central vê a trava, os PCs e as tentativas recusadas; central e lojas fora da rede não são travadas.
     const panel = await api(`/master/networks/${net.id}/device-lock`, { token: masterToken });
     assert.equal(panel.enabled, true);
+    assert.deepEqual(panel.units.map(u => u.locked), [true, false]);
     assert.deepEqual(panel.units.map(u => [u.label, u.devices.map(d => d.name)]), [['Benfica', ['PC Benfica']], ['Solares', ['PC Solares']]]);
     assert.ok(panel.denied.length >= 2);
     assert.equal((await request('/store/settings', { token: foreignToken })).status, 200);
@@ -78,7 +89,7 @@ test('acesso só no PC da unidade: senha + prova do agente; sessão cai ao ligar
     assert.equal((await request('/connect/login-proof', { method: 'POST', token: pcBenfica.device_token })).status, 403);
 
     // Desliga a trava: volta a entrar pelo link, só com a senha.
-    await api(`/master/networks/${net.id}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: false } });
+    await api(`/master/tenants/${tenant}/device-lock`, { method: 'PATCH', token: masterToken, body: { enabled: false } });
     assert.equal((await unitLogin({})).status, 200);
   } finally { await f.cleanup(); }
 });

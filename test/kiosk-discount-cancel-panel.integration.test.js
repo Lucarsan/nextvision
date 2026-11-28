@@ -63,7 +63,7 @@ test('quiosque: desconto de 40% no crédito e cancelamento com o PIN da vendedor
     await page.screenshot(shot('quiosque-desconto'));
     // Sem anônimo? escolhe "sem cadastro" se houver; senão a venda segue como a tela pedir.
     const anon = page.locator('#anonBtn, [data-anon]'); if (await anon.count()) await anon.first().click();
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => !document.getElementById('doneBox')?.hidden || /Venda/.test(document.getElementById('saleMsg').textContent), null, { timeout: 15000 });
     const sale = (await f.db.query('SELECT id,total_cents,discount_cents,payment_method,installments FROM sales WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 1', [tenant])).rows[0];
     assert.deepEqual([sale.total_cents, sale.discount_cents, sale.payment_method, sale.installments], [6000, 4000, 'credit', 3]);

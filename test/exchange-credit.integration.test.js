@@ -137,7 +137,7 @@ test('tela do quiosque: gerar crédito de troca com a peça voltando e usar na v
     for (const k of bia.pin) await page.click(`#keys [data-k="${k}"]`);
     await page.waitForFunction(() => !document.getElementById('pinDlg').open);
     await page.screenshot(shot('venda-com-credito-troca'));
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /registrada/.test(document.getElementById('doneBox').textContent), null, { timeout: 15000 });
     const last = (await db.query('SELECT total_cents, credit_used_cents, payment_method FROM sales WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 1', [f.tenant])).rows[0];
     assert.deepEqual(last, { total_cents: 0, credit_used_cents: 10000, payment_method: 'other' });

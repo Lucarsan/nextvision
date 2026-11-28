@@ -67,7 +67,7 @@ test('quiosque: desconto em R$, pagamento dividido e comprovante digital complet
     await page.waitForFunction(() => /Fechou/.test(document.getElementById('splitInfo').textContent));
     assert.ok(await page.isVisible('#instRow')); await page.selectOption('#inst', '3');
     await page.screenshot(shot('quiosque-dividido'));
-    await page.click('#finish');
+    await page.click('#finish'); await page.click('#rvOk');
     await page.waitForFunction(() => /registrada/.test(document.getElementById('doneBox').textContent), null, { timeout: 15000 });
     const sale = (await f.db.query('SELECT id,total_cents,discount_cents,payment_method,payments,installments,receipt_code FROM sales WHERE tenant_id=$1', [tenant])).rows[0];
     assert.equal(sale.total_cents, 19000); assert.equal(sale.discount_cents, 2000); assert.equal(sale.payment_method, 'mixed'); assert.equal(sale.installments, 3);

@@ -57,6 +57,7 @@
   .alert.ok{background:#f3f2ee}.alert.ok b{color:var(--muted)}
   .alert details summary{cursor:pointer;color:#1d4ed8;text-decoration:underline;font-size:13px;margin-top:6px}
   .alert ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+  .alert ul.cxs{list-style:none;padding:0}.alert ul.cxs li{padding:3px 0}.alert ul.cxs b{display:inline;color:var(--ink)}
   .feedback{color:var(--red);font-weight:600;margin:0 0 12px}.feedback:empty{display:none}
   .note{margin:10px 0 0;font-size:12px;color:var(--muted)}
   /* Seletor de unidade (o retângulo inteiro abre a lista) */
@@ -326,7 +327,14 @@
       + '<p class="soft" style="font-size:12px">Confira no caixa da unidade e cancele a repetida, se for o caso.</p></div>';
     if (can.length) {
       const total = can.reduce((a, c) => a + c.total_cents, 0);
-      h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>'
+      // Por consultora (quem vendeu), somando as unidades do filtro. Cupom fiscal cancelado = 2 créditos do emissor.
+      const bySeller = new Map();
+      for (const c of only(data.alerts.canceled_sellers || [])) { const x = bySeller.get(c.seller) || { seller: c.seller, count: 0, total_cents: 0, with_nfce: 0 }; x.count += c.count; x.total_cents += c.total_cents; x.with_nfce += c.with_nfce; bySeller.set(c.seller, x); }
+      const sellers = [...bySeller.values()].sort((a, b) => b.count - a.count || a.seller.localeCompare(b.seller));
+      const sellerTable = sellers.length ? '<details open><summary>Por consultora</summary><ul class="cxs">'
+        + sellers.map(s => '<li><b>' + safe(s.seller.split(' ')[0]) + '</b>: ' + plural(s.count, 'cancelada', 'canceladas') + ' · ' + brl(s.total_cents) + (s.with_nfce ? ' · ' + s.with_nfce + ' com cupom fiscal = ' + s.with_nfce * 2 + ' créditos (≈ ' + brl(s.with_nfce * 2 * 16) + ')' : ' · sem cupom fiscal') + '</li>').join('')
+        + '</ul><p class="soft" style="font-size:12px;margin:4px 0 0">Venda cancelada depois do cupom fiscal gasta 2 créditos do emissor: a nota e o cancelamento (cerca de R$ 0,16 cada).</p></details>' : '';
+      h += '<div class="alert red"><b>' + warn + plural(can.length, 'venda cancelada', 'vendas canceladas') + ' ' + RANGES[range].word + '</b><p>' + brl(total) + ' no total, com motivo e quem cancelou.</p>' + sellerTable
         + '<details><summary>Ver cancelamentos</summary><ul>' + can.map(c => '<li>' + safe(c.unit) + (c.sale_number ? ' · venda nº ' + c.sale_number : '') + ' · ' + brl(c.total_cents) + ' · cancelada ' + safe(c.at) + (c.canceled_by ? ' por ' + safe(c.canceled_by) : '') + (c.seller && c.seller !== c.canceled_by ? ' (vendida por ' + safe(c.seller) + ')' : '') + (c.reason ? ' — ' + safe(c.reason) : '') + '</li>').join('') + '</ul></details></div>';
     }
     const exch = only(data.alerts.exchanges || []);

@@ -97,7 +97,7 @@ test('central monta a rede e o dono da rede vê o painel', {
     const rows = await rp.textContent('#rows');
     assert.match(rows, /Maracanaú/); assert.match(rows, /88%/); assert.match(rows, /Aberto/); assert.match(rows, /Fechado/); assert.match(rows, /sem meta/);
     const alerts = await rp.textContent('#alerts');
-    assert.match(alerts, /Possível venda duplicada/); assert.match(alerts, /1 venda cancelada hoje/); assert.match(alerts, /Estoque baixo em Maracanaú/);
+    assert.match(alerts, /Possível venda duplicada/); assert.match(alerts, /1 venda cancelada hoje/); assert.match(alerts, /Por consultora/); await rp.locator('#alerts .alert.red', { hasText: 'cancelada' }).screenshot(shot('painel-rede-cancelamentos')); assert.match(alerts, /Estoque baixo em Maracanaú/);
     await rp.screenshot(shot('painel-rede'));
     // Filtro por unidade.
     await rp.click('#unitBtn'); await rp.click('#unitList li:has-text("Solares")');
@@ -130,7 +130,7 @@ test('central monta a rede e o dono da rede vê o painel', {
     for (const d of anaPin) await kp.click(`#keys [data-k="${d}"]`);
     await kp.waitForFunction(() => !document.getElementById('pinOk').hidden);
     await kp.screenshot(shot('caixa'));
-    await kp.click('#finish');
+    await kp.click('#finish'); await kp.click('#rvOk');
     await kp.waitForFunction(() => !document.getElementById('doneBox').hidden);
     assert.match(await kp.textContent('#doneBox'), /Venda nº \d+ registrada · R\$\s?268,00/);
     // Estoque da rede no quiosque: a lista já vem aberta, com uma coluna por unidade.

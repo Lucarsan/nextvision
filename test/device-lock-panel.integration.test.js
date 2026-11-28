@@ -48,6 +48,13 @@ test('acesso: rede travada abre o caixa só com a ponte local do agente', {
     await login();
     await page.waitForURL(/\/caixa/, { timeout: 15000 });
     assert.equal(asked, 1);
+
+    // Suporte da central: /caixa#sup= abre o caixa travado em outro PC, só naquela aba, e tira o token do endereço.
+    const sup = await api(`/master/tenants/${tenant}/support-session`, { method: 'POST', token: masterToken });
+    const tab = await (await browser.newContext()).newPage(); tab.on('pageerror', e => errors.push(e.message));
+    await tab.goto(base + '/caixa#sup=' + encodeURIComponent(sup.token));
+    await tab.waitForTimeout(2500);
+    assert.match(tab.url(), /\/caixa$/); assert.match(await tab.title(), /Benfica/);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();

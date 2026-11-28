@@ -13,6 +13,7 @@
 // Central (master) e técnico nunca são travados. Desligar a trava na central volta ao acesso pelo link.
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 
 export const DEVICE_REQUIRED = 'device_required';
 export const DEVICE_MSG = 'Este acesso só funciona no computador da unidade, com o Ficou Pronto instalado.';
@@ -58,7 +59,7 @@ export async function gateLogin(q, res, { locked, networkId = null, unitId = nul
   return { ok: false };
 }
 
-export function registerDeviceLock(app, { q, auth, roles, route, bad, valid, audit, uuid, rateLimit, deviceAuth }) {
+export function registerDeviceLock(app, { q, auth, roles, route, bad, valid, audit, uuid, rateLimit, deviceAuth, secret }) {
   const master = [auth, roles('master')];
 
   // Agente → central: prova de uso único para o login neste PC.
@@ -116,6 +117,19 @@ export function registerDeviceLock(app, { q, auth, roles, route, bad, valid, aud
     const r = await q('UPDATE store_networks SET device_lock = $2 WHERE id = $1 RETURNING id, device_lock', [req.params.id, v.enabled]);
     await audit(req, v.enabled ? 'device_lock_on' : 'device_lock_off', 'network', req.params.id, null);
     res.json({ enabled: r.rows[0].device_lock });
+  }));
+
+  // Central (suporte): abre o caixa de uma unidade no PC de quem está na central, sem a senha do quiosque
+  // e sem a trava. A sessão leva o ID de quem abriu (sup), vale 4 h, cai se essa conta deixar de ser master ativo,
+  // e fica registrada (support_open). Não mexe na sessão do PC da unidade.
+  app.post('/api/master/tenants/:id/support-session', ...master, route(async (req, res) => {
+    if (!uuid.safeParse(req.params.id).success) return bad(res, 400, 'Loja inválida');
+    const k = (await q(`SELECT u.id, u.tenant_id, u.role, coalesce(t.unit_label, t.name) unit FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.tenant_id = $1 AND u.login_kind = 'kiosk' AND u.active AND t.status IN ('trial', 'active')`, [req.params.id])).rows[0];
+    if (!k) return bad(res, 404, 'Esta unidade ainda não tem acesso de quiosque (crie a senha do quiosque).');
+    const token = jwt.sign({ id: k.id, tenant_id: k.tenant_id, role: k.role, sup: req.user.id }, secret, { algorithm: 'HS256', expiresIn: '4h' });
+    await audit(req, 'support_open', 'tenant', req.params.id, req.params.id);
+    res.set('Cache-Control', 'no-store').json({ token, unit: k.unit, panel: '/caixa' });
   }));
 
   // Trava de uma unidade: só liga com PC ativado nela (senão o caixa daquela loja não abre mais).

@@ -52,13 +52,16 @@ const auth=(req,res,next)=>{
  catch{return bad(res,401,'Sessão inválida');}
  // Rede travada no PC da unidade: a sessão precisa ter vindo de um PC ativo da rede (dev), e cai se o PC for revogado.
  const dev=uuid.safeParse(req.user.dev).success?req.user.dev:null;
- q(`SELECT u.active,u.role,u.tenant_id,u.network_id,u.network_access,u.network_unit_ids,u.password_changed_at,u.login_kind,u.access_level,u.admin_password_free,t.status,n.status network_status,(CASE WHEN u.role='network' THEN coalesce(n.device_lock,false) ELSE coalesce(t.device_lock,false) END) device_lock,(SELECT true FROM shop_devices d JOIN tenants dt ON dt.id=d.tenant_id WHERE d.id=$2::uuid AND d.enabled AND d.revoked_at IS NULL AND (CASE WHEN u.role='network' THEN dt.network_id=u.network_id ELSE d.tenant_id=u.tenant_id END)) device_ok FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1`,[req.user.id,dev]).then(async({rows})=>{
+ // Sessão de suporte aberta pela central (sup): não passa pela trava enquanto quem abriu for master ativo.
+ const sup=uuid.safeParse(req.user.sup).success?req.user.sup:null;
+ q(`SELECT u.active,u.role,u.tenant_id,u.network_id,u.network_access,u.network_unit_ids,u.password_changed_at,u.login_kind,u.access_level,u.admin_password_free,t.status,n.status network_status,(CASE WHEN u.role='network' THEN coalesce(n.device_lock,false) ELSE coalesce(t.device_lock,false) END) device_lock,(SELECT true FROM shop_devices d JOIN tenants dt ON dt.id=d.tenant_id WHERE d.id=$2::uuid AND d.enabled AND d.revoked_at IS NULL AND (CASE WHEN u.role='network' THEN dt.network_id=u.network_id ELSE d.tenant_id=u.tenant_id END)) device_ok,(SELECT true FROM users m WHERE m.id=$3::uuid AND m.role='master' AND m.active) sup_ok FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id LEFT JOIN store_networks n ON n.id=u.network_id WHERE u.id=$1`,[req.user.id,dev,sup]).then(async({rows})=>{
   const user=rows[0];if(!user?.active||user.role!==req.user.role||user.tenant_id!==req.user.tenant_id||(user.network_id||null)!==(req.user.network_id||null))return bad(res,403,'Conta sem autorização');
   // Dono da rede (role network): vê as unidades da sua rede; bloqueado se a rede for suspensa.
   if(user.role==='network'&&user.network_status!=='active')return blockedReply(res,{networkId:user.network_id},'Acesso da rede bloqueado. Entre em contato com a central.');
   // Senha trocada depois do login: a sessão antiga deixa de valer.
   if(user.password_changed_at&&(!req.user.iat||req.user.iat<Math.floor(new Date(user.password_changed_at).getTime()/1000)))return bad(res,401,'Sessão encerrada: a senha foi trocada. Entre de novo.');
-  if(user.device_lock&&['network','owner','operator'].includes(user.role)&&!user.device_ok)return res.status(401).json({error:DEVICE_MSG,code:DEVICE_REQUIRED});
+  if(sup&&!user.sup_ok)return bad(res,401,'Sessão de suporte encerrada');
+  if(user.device_lock&&['network','owner','operator'].includes(user.role)&&!user.device_ok&&!user.sup_ok)return res.status(401).json({error:DEVICE_MSG,code:DEVICE_REQUIRED});
   if(user.role==='network'){req.user.network_access=user.network_access;req.user.network_unit_ids=user.network_unit_ids||[];}
   // Vendedora (PIN) nunca tem sessão; o computador do quiosque tem (aberto com a senha da unidade).
   if(user.login_kind==='pin')return bad(res,403,'Conta sem autorização');
@@ -108,7 +111,7 @@ const deviceAuthWith=quietOk=>route(async(req,res,next)=>{
  next();
 });
 const deviceAuth=deviceAuthWith(false),deviceAuthQuiet=deviceAuthWith(true);
-registerStoreMedia(app,{q,db,auth,roles,deviceAuth,deviceAuthQuiet,route,bad,valid,audit,rateLimit,uuid});registerDeviceLock(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,deviceAuth});
+registerStoreMedia(app,{q,db,auth,roles,deviceAuth,deviceAuthQuiet,route,bad,valid,audit,rateLimit,uuid});registerDeviceLock(app,{q,auth,roles,route,bad,valid,audit,uuid,rateLimit,deviceAuth,secret});
 // Pedido ao vivo aberto pelo caixa (mesma gravação do /api/orders, dentro da transação da venda).
 const createLiveOrder=async(client,tenant,customerId,processId,details)=>{const token=crypto.randomBytes(12).toString('base64url');const r=await client.query("INSERT INTO orders(tenant_id,customer_id,process_id,public_token_hash,details) SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM processes WHERE id=$3 AND tenant_id=$1 AND archived_at IS NULL) RETURNING id,status,order_number,share_code",[tenant,customerId,processId,digestToken(token),JSON.stringify(details)]);return r.rowCount?{...r.rows[0],tracking_url:(process.env.PUBLIC_BASE_URL||'http://localhost:3000')+'/p/'+token}:null};
 registerStoreSales(app,{q,db,auth,roles,route,bad,valid,audit,uuid,orderDetails,createLiveOrder,savePetFromOrder});registerStoreQr(app,{q,auth,roles,route,bad,valid,audit});registerPartners(app,{q,auth,roles,route,bad,valid,audit});registerReports(app,{q,auth,roles,route,bad,valid,audit});registerLinkAnalytics(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken,tid});registerReviewLinks(app,{q,auth,roles,route,bad,valid,audit,rateLimit,digestToken});registerCustomerPets(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});registerLegacyImport(app,{q,auth,roles,route,valid,audit,tid});registerPetRecords(app,{q,auth,roles,route,bad,valid,audit,uuid,tid});

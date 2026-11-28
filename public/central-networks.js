@@ -212,7 +212,7 @@
       + d.units.map(u => {
         const pcs = u.devices.length ? u.devices.map(x => safe(x.name) + ' <button type="button" class="ct-btn ghost lockRevoke" data-unit="' + safe(u.id) + '" data-id="' + safe(x.id) + '" style="height:28px;margin-left:6px">Revogar</button>').join('<br>') : '<span class="ct-muted">Nenhum</span>';
         const seen = u.devices.length ? u.devices.map(x => when(x.last_seen_at)).join('<br>') : '';
-        return '<tr><td><strong>' + safe(u.label) + '</strong></td><td>' + pcs + '</td><td>' + seen + '</td><td>' + (u.locked ? '<b>Ligada</b>' : 'Desligada') + '</td><td>' + unitBtn(u) + '</td></tr>';
+        return '<tr><td><strong>' + safe(u.label) + '</strong></td><td>' + pcs + '</td><td>' + seen + '</td><td>' + (u.locked ? '<b>Ligada</b>' : 'Desligada') + '</td><td style="white-space:nowrap">' + unitBtn(u) + ' <button type="button" class="ct-btn ghost lockSup" data-id="' + safe(u.id) + '" style="height:34px" title="Abre o caixa desta unidade aqui, numa aba nova, como suporte (fica registrado)">Abrir caixa aqui</button></td></tr>';
       }).join('')
       + '</tbody></table></div>'
       + '<h3 style="margin-top:16px">Gestão da rede (dono e supervisores)</h3>'
@@ -231,6 +231,12 @@
       if (!confirm(on ? 'Ligar a trava da gestão? Dono e supervisores conectados pelo celular ou de casa saem na hora e só entram de novo num PC de unidade.' : 'Desligar a trava da gestão? Dono e supervisores voltam a entrar de qualquer lugar.')) return;
       run(() => api('/master/networks/' + net.id + '/device-lock', 'PATCH', { enabled: on }), on ? 'Trava da gestão ligada.' : 'Trava da gestão desligada.');
     };
+    // Suporte: abre o caixa da unidade neste PC (aba nova), sem a senha do quiosque e sem a trava; fica registrado.
+    box.querySelectorAll('.lockSup').forEach(b => b.onclick = async () => {
+      const tab = window.open('about:blank', '_blank');
+      try { const r = await api('/master/tenants/' + b.dataset.id + '/support-session', 'POST'); if (tab) tab.location.href = r.panel + '#sup=' + encodeURIComponent(r.token); else location.href = r.panel + '#sup=' + encodeURIComponent(r.token); }
+      catch (e) { if (tab) tab.close(); msg(e.message); }
+    });
     box.querySelectorAll('.lockRevoke').forEach(b => b.onclick = () => {
       if (!confirm('Revogar este computador? Ele deixa de abrir o sistema e o agente para. Se a trava da unidade estiver ligada, o caixa só volta a abrir com outro PC ativado (ou desligando a trava).')) return;
       run(() => api('/master/tenants/' + b.dataset.unit + '/devices/' + b.dataset.id + '/revoke', 'POST'), 'Computador revogado.');

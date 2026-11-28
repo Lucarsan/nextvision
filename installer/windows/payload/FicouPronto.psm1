@@ -22,7 +22,7 @@ $script:BackupDir = [IO.Path]::Combine($script:DataDir, 'backups')
 $script:BackupKeep = 30
 $script:MediaApi = 'http://127.0.0.1:9997'
 $script:Entropy = [Text.Encoding]::UTF8.GetBytes('ficoupronto-agent-v1')
-$script:AgentVersion = '0.6.0'
+$script:AgentVersion = '0.7.0'
 $script:DefaultApi = 'https://app.ficoupronto.com'
 # Atualizacao remota: so pacotes assinados por esta chave (a privada fica fora do repositorio e do instalador).
 $script:UpdateDir = [IO.Path]::Combine($script:DataDir, 'atualizacoes')

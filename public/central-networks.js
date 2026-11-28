@@ -99,6 +99,7 @@
       + '<section><h2>Implantação das unidades</h2><p class="ct-muted">Checklist "unidade pronta". A rede vê o mesmo quadro no painel dela (menu Implantação) e dá o aceite por lá.</p><div id="onbCard"></div></section>'
       + '<section id="acbrCard"></section>'
       + '<section id="tefCard"></section>'
+      + '<section id="lockCard"><h2>Acesso só no computador da unidade</h2><p class="ct-muted">Carregando…</p></section>'
       + '<section><h2>Resumo diário por e-mail</h2><p class="ct-muted">Todo dia às 8h, o resumo do dia anterior (vendas por unidade, formas de pagamento, cancelamentos e diferença de caixa).</p><div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap"><label>E-mails (separados por vírgula)<input id="netRepEmails" style="width:420px" value="' + safe((net.report_emails || []).join(', ')) + '"></label><button type="button" class="ct-btn" id="netRepSave">Salvar</button></div></section>'
       + '<section><h2>Comissão por faixa</h2><p class="ct-muted">A faixa alcançada pelas vendas do mês da vendedora vale sobre o total do mês. Ex.: 2% a partir de R$ 0, 3% a partir de R$ 20.000, 4% a partir de R$ 30.000.</p>'
       + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">' + [0, 1, 2].map(i => { const t = (net.commission_tiers || [])[i] || {}; return '<label>A partir de (R$)<input class="tierMin" inputmode="decimal" style="width:120px" value="' + (t.min_cents != null ? (t.min_cents / 100).toFixed(2).replace('.', ',') : '') + '"></label><label>%<input class="tierPct" inputmode="decimal" style="width:70px" value="' + (t.percent != null ? String(t.percent).replace('.', ',') : ['2', '3', '4'][i]) + '"></label>'; }).join('<span style="width:12px"></span>')
@@ -179,6 +180,7 @@
     window.fpOnboarding?.({ box: el('onbCard'), mode: 'master', api, networkId: net.id, networkName: net.name.split(/\s+/)[0] });
     window.acbrCard?.(el('acbrCard'), units);
     window.tefCard?.(el('tefCard'), units);
+    drawLock(net).catch(e => { el('lockCard').innerHTML = '<h2>Acesso só no computador da unidade</h2><p class="ct-muted">' + safe(e.message) + '</p>'; });
     api('/master/networks/' + net.id + '/fiscal-credits').then(fcShow).catch(e => { el('fcNow').textContent = e.message; });
     el('fcDate').value = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
     el('fcAdd').onclick = act(async () => { const c = await api('/master/networks/' + net.id + '/fiscal-credits/packages', 'POST', { provider: el('fcProv').value.trim(), operations: Number(el('fcOps').value), price_cents: Math.round(Number((el('fcPrice').value || '0').replace(/\./g, '').replace(',', '.')) * 100), purchased_on: el('fcDate').value }); fcShow(c); return 'Pacote registrado.'; });
@@ -192,6 +194,34 @@
       return 'Faixas de comissão salvas.';
     });
     bindPeople(net, units, act);
+  }
+
+  // Trava de acesso: com ela ligada, quiosque, dono, supervisor e gerente só entram no PC de uma unidade
+  // com o Ficou Pronto instalado e ativado (o agente dá a prova do PC). A central nunca é travada.
+  async function drawLock(net) {
+    const box = el('lockCard'), d = await api('/master/networks/' + net.id + '/device-lock');
+    const when = t => t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'nunca';
+    const missing = d.units.filter(u => !u.devices.length);
+    box.innerHTML = '<h2>Acesso só no computador da unidade</h2>'
+      + '<p class="ct-muted">Com a trava ligada, a senha sozinha não basta: o caixa da unidade, o dono, os supervisores e os gerentes só entram num computador de unidade com o Ficou Pronto instalado e ativado. O caixa abre só no PC da própria unidade. Instale e ative o Ficou Pronto em cada PC antes de ligar.</p>'
+      + '<p><b>' + (d.enabled ? 'Ligada' : 'Desligada') + '</b> '
+      + '<button type="button" class="ct-btn' + (d.enabled ? ' ghost' : '') + '" id="lockToggle" style="height:34px;margin-left:8px">' + (d.enabled ? 'Desligar a trava' : 'Ligar a trava') + '</button></p>'
+      + (missing.length ? '<p class="ct-muted" style="color:#8f3f30">Sem PC ativado: ' + missing.map(u => safe(u.label)).join(', ') + '. Com a trava ligada, essas unidades não conseguem abrir o caixa.</p>' : '')
+      + '<div class="ct-table-wrap"><table class="ct-table"><thead><tr><th>Unidade</th><th>Computador</th><th>Último sinal</th><th></th></tr></thead><tbody>'
+      + d.units.map(u => u.devices.length ? u.devices.map(x => '<tr><td>' + safe(u.label) + '</td><td>' + safe(x.name) + '</td><td>' + when(x.last_seen_at) + '</td><td><button type="button" class="ct-btn ghost lockRevoke" data-unit="' + safe(u.id) + '" data-id="' + safe(x.id) + '" style="height:34px">Revogar</button></td></tr>').join('')
+        : '<tr><td>' + safe(u.label) + '</td><td class="ct-muted">Nenhum (instale o Ficou Pronto e ative com o código da loja)</td><td></td><td></td></tr>').join('')
+      + '</tbody></table></div>'
+      + (d.denied.length ? '<h3 style="margin-top:14px">Tentativas recusadas (fora do PC da unidade)</h3><ul>' + d.denied.map(x => '<li>' + when(x.created_at) + ' · ' + safe(x.actor || 'desconhecido') + (x.unit ? ' · ' + safe(x.unit) : '') + '</li>').join('') + '</ul>' : '');
+    el('lockToggle').onclick = async () => {
+      const on = !d.enabled;
+      if (on && !confirm((missing.length ? 'Atenção: ' + missing.length + ' unidade(s) sem PC ativado não vão conseguir entrar.\n\n' : '') + 'Ligar a trava? Quem estiver conectado fora do PC de uma unidade (celular, casa) sai na hora.')) return;
+      if (!on && !confirm('Desligar a trava? Volta a dar para entrar de qualquer lugar com a senha.')) return;
+      try { await api('/master/networks/' + net.id + '/device-lock', 'PATCH', { enabled: on }); msg(on ? 'Trava ligada.' : 'Trava desligada.'); await drawLock(net); } catch (e) { msg(e.message); }
+    };
+    box.querySelectorAll('.lockRevoke').forEach(b => b.onclick = async () => {
+      if (!confirm('Revogar este computador? Ele deixa de abrir o sistema e o agente para. Para voltar, será preciso ativar de novo com um código novo.')) return;
+      try { await api('/master/tenants/' + b.dataset.unit + '/devices/' + b.dataset.id + '/revoke', 'POST'); msg('Computador revogado.'); await drawLock(net); } catch (e) { msg(e.message); }
+    });
   }
 
   function bindList() {

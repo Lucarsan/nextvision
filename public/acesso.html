@@ -72,6 +72,7 @@
   </form>
 </main>
 <script src="/senha-visivel.js" defer></script>
+<script src="/device-proof.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -109,8 +110,8 @@
     e.preventDefault();
     const btn = $('unitBtn'); btn.disabled = true; $('unitError').textContent = '';
     try {
-      const r = await fetch('/api/auth/unit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unit_id: $('unit').value, password: $('unitPass').value }) });
-      const d = await r.json().catch(() => ({}));
+      // Rede travada: só abre no PC da unidade (o agente Ficou Pronto do PC dá a prova).
+      const { r, d } = await fpLoginWithDevice('/api/auth/unit', { unit_id: $('unit').value, password: $('unitPass').value });
       if (!r.ok) throw Error(d.error || 'Não foi possível entrar');
       try { localStorage.setItem('fp_unit', $('unit').value); } catch { }
       // O caixa do quiosque continua aberto mesmo se o navegador for fechado; dono e supervisor, só nesta aba.
@@ -124,8 +125,7 @@
     e.preventDefault();
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
     try {
-      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
-      const d = await r.json().catch(() => ({}));
+      const { r, d } = await fpLoginWithDevice('/api/auth/login', { email: $('email').value.trim(), password: $('password').value });
       if (!r.ok) throw Error(d.error || 'Não foi possível entrar');
       sessionStorage.setItem('nv_token', d.token);
       location.replace(panelFor(d.user.role));

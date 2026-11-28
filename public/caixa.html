@@ -848,6 +848,8 @@
   async function loadTefToday() {
     if (!tef) return;
     $('tefCard').hidden = false;
+    // "Inicializar pinpad" é para suporte e homologação: no quiosque só aparece com ?suporte no endereço.
+    $('tefInit').hidden = isKiosk && !new URLSearchParams(location.search).has('suporte');
     let d; try { d = await api('/store/tef/today'); } catch { return; }
     $('tTef').innerHTML = d.items.map(t => '<tr><td>' + new Date(t.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Fortaleza' }) + '</td><td class="n">' + brl(t.amount_cents) + '</td><td>'
       + safe(METHOD[t.method] || t.method) + (t.installments > 1 ? ' ' + t.installments + 'x' : '') + (t.card_mask ? ' ' + safe(t.card_mask.slice(-4)) : '') + '</td><td>' + safe(TEFST[t.status] || t.status) + (t.sale_number ? ' · venda ' + t.sale_number : '') + (t.status === 'declined' || t.status === 'error' ? '<br><span class="sub">' + safe(t.message || '') + '</span>' : '')

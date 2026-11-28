@@ -32,6 +32,7 @@
 </main>
 <footer class="en-foot"><span>© <span id="year"></span> Ficou Pronto · Fortaleza, CE · LK INFORTECH LTDA · CNPJ 35.264.820/0001-75</span><a href="/fale-conosco">Fale com a gente</a></footer>
 <script src="/senha-visivel.js" defer></script>
+<script src="/device-proof.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -57,8 +58,7 @@
     e.preventDefault();
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
     try {
-      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
-      const data = await r.json().catch(() => ({}));
+      const { r, d: data } = await fpLoginWithDevice('/api/auth/login', { email: $('email').value.trim(), password: $('password').value });
       if (!r.ok) {
         // Bloqueio pela cobrança: mostra o link do Asaas para pagar e liberar.
         if (data.code === 'billing_blocked' && /^https:\/\//.test(data.pay_url || '')) {

@@ -55,6 +55,9 @@ $backupStatus = Get-FpBackupStatus
 $nextBackup = [datetime]::UtcNow.AddMinutes(2)
 # Atualizacao remota pedida pela central (ver Start-FpAgentUpdater).
 $updateJob = $null
+# Ponte local do navegador (ficoupronto-bridge.ps1): login no "PC da unidade". Vigiada a cada 10 s.
+$bridgeProc = $null
+$nextBridgeCheck = [datetime]::UtcNow
 Log ('Agente ' + $paths.Version + ' iniciado com ' + @($config.cameras).Count + ' camera(s).')
 
 try {
@@ -114,6 +117,17 @@ try {
         }
       }
     }
+
+    if (-not $blocked -and $now -ge $nextBridgeCheck) {
+      $nextBridgeCheck = $now.AddSeconds(10)
+      if ($null -eq $bridgeProc -or $bridgeProc.HasExited) {
+        try {
+          $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $bridgeProc = Start-Process -FilePath $ps -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'ficoupronto-bridge.ps1') + '" -ParentPid ' + $PID) -WindowStyle Hidden -PassThru
+        } catch { Log ('Ponte local: ' + $_.Exception.Message); $nextBridgeCheck = $now.AddSeconds(60) }
+      }
+    }
+    if ($blocked -and $null -ne $bridgeProc -and -not $bridgeProc.HasExited) { try { $bridgeProc.Kill() } catch { }; $bridgeProc = $null }
 
     # Gravacao: a cada 5 s confere com a central quais cameras gravam agora.
     if ($mode -ne 'management' -and -not $blocked -and $now -ge $nextRecordingSync) {
@@ -238,6 +252,7 @@ try {
   }
 } finally {
   foreach ($k in @($state.Keys)) { Stop-NvMedia $state[$k].Media }
+  if ($null -ne $bridgeProc -and -not $bridgeProc.HasExited) { try { $bridgeProc.Kill() } catch { } }
   Log 'Agente encerrado.'
   if ($lock) { $lock.Dispose() }
 }

@@ -88,10 +88,11 @@ export const MANUAL_PAGES = [
     ]
   },
   {
-    key: 'v-meudia', group: 'caixa', version: 1, audiences: ALL, title: 'Meu dia',
-    summary: 'Suas vendas de hoje, o faturamento da loja, a sua meta e a comissão prevista.',
+    key: 'v-meudia', group: 'caixa', version: 2, audiences: ALL, title: 'Meu dia',
+    summary: 'Suas vendas de hoje ou de um período, o faturamento da loja, a sua meta e a comissão prevista.',
     blocks: [
       { steps: ['Toque em "Meu dia" no menu.', 'Toque no seu nome e digite o seu PIN.', 'Veja: minhas vendas hoje, faturamento da loja hoje, comissão prevista no mês, a sua meta e a lista das suas vendas do dia.', 'Ao terminar, toque em "Sair do Meu dia" para a próxima colega não ver os seus números.'], img: 'v-meudia.png', cap: 'Meu dia' },
+      { h: 'Vendas de um período', steps: ['Em "Minhas vendas por período", toque em Ontem, Últimos 7 dias, Este mês ou Mês passado.', 'Ou escolha as datas em "De" e "Até" e toque em Ver (até 1 ano).', 'Aparecem o total, a quantidade de vendas, o total de cada dia e, em "Ver cada venda", a lista completa.'] },
       { p: 'A vendedora não vê custo, lucro nem a comissão das colegas. A comissão é uma previsão: o pagamento é feito pela rede.' },
       { tip: 'Venda que não aparece no seu "Meu dia" foi registrada com outro nome. Avise o supervisor: ele corrige a vendedora da venda pelo painel da rede.' }
     ]

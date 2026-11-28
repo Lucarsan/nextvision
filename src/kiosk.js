@@ -97,8 +97,10 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
   // Meu dia (p. 11): as vendas da vendedora, o faturamento da loja, a meta e a comissão prevista.
   // Não mostra custo, lucro nem a comissão das colegas.
   app.post('/api/store/kiosk/my-day', ...staff, limiter(60, 300000), route(async (req, res) => {
-    const v = valid(z.object({ seller_id: uuid, pin: PIN }).strict(), req, res); if (!v) return;
+    const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida');
+    const v = valid(z.object({ seller_id: uuid, pin: PIN, from: ymd.optional(), to: ymd.optional() }).strict(), req, res); if (!v) return;
     const tz = 'America/Fortaleza', tenant = req.user.tenant_id;
+    if (!!v.from !== !!v.to) return bad(res, 400, 'Escolha a data inicial e a final');
     const s = (await q("SELECT id, name, commission_percent FROM users WHERE id = $1 AND tenant_id = $2 AND active AND login_kind = 'pin'", [v.seller_id, tenant])).rows[0];
     if (!s || !(await pinOk({ query: q }, bcrypt, s.id, v.pin))) return bad(res, 401, 'PIN incorreto');
     const today = `(x.created_at AT TIME ZONE '${tz}')::date = (now() AT TIME ZONE '${tz}')::date`;
@@ -110,8 +112,23 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
     const monthMine = (await q(`SELECT coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE x.tenant_id = $1 AND x.seller_id = $2 AND x.canceled_at IS NULL AND ${month}`, [tenant, s.id])).rows[0];
     const goal = (await q(`SELECT nullif(target_cents, 0) target FROM store_goals WHERE tenant_id = $1 AND user_id = $2 AND month <= date_trunc('month', now() AT TIME ZONE '${tz}')::date ORDER BY month DESC LIMIT 1`, [tenant, s.id])).rows[0];
     const monthTotal = Number(monthMine.total), tier = tierFor(await tiersForTenant({ query: q }, tenant), monthTotal), pct = tier ? tier.percent : Number(s.commission_percent || 0);
+    // Período escolhido pela vendedora (só as vendas dela): até 1 ano, sem datas futuras.
+    let period = null;
+    if (v.from) {
+      const chk = (await q(`SELECT $1::date <= $2::date ok, $2::date - $1::date <= 366 short, $2::date <= (now() AT TIME ZONE '${tz}')::date past`, [v.from, v.to]).catch(() => ({ rows: [{}] }))).rows[0];
+      if (!chk.ok) return bad(res, 400, 'A data inicial precisa ser antes da final');
+      if (!chk.short) return bad(res, 400, 'Escolha um período de até 1 ano');
+      const where = `x.tenant_id = $1 AND x.seller_id = $2 AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date BETWEEN $3::date AND $4::date`;
+      const tot = (await q(`SELECT count(*)::int n, coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE ${where}`, [tenant, s.id, v.from, v.to])).rows[0];
+      const days = await q(`SELECT to_char((x.created_at AT TIME ZONE '${tz}')::date, 'YYYY-MM-DD') dia, count(*)::int n, sum(total_cents)::bigint total
+        FROM sales x WHERE ${where} GROUP BY 1 ORDER BY 1 DESC`, [tenant, s.id, v.from, v.to]);
+      const list = await q(`SELECT to_char(x.created_at AT TIME ZONE '${tz}', 'DD/MM HH24:MI') quando, c.name cliente, x.total_cents, x.payment_method
+        FROM sales x LEFT JOIN customers c ON c.id = x.customer_id WHERE ${where} ORDER BY x.created_at DESC LIMIT 200`, [tenant, s.id, v.from, v.to]);
+      period = { from: v.from, to: v.to, total_cents: Number(tot.total), count: tot.n,
+        days: days.rows.map(d => ({ day: d.dia, count: d.n, total_cents: Number(d.total) })), sales: list.rows, truncated: tot.n > list.rowCount };
+    }
     res.set('Cache-Control', 'no-store').json({
-      seller: { id: s.id, name: s.name },
+      seller: { id: s.id, name: s.name }, period,
       today: { total_cents: mine.rows.reduce((a, x) => a + x.total_cents, 0), count: mine.rows.length, sales: mine.rows },
       store_today: { total_cents: Number(store.total), count: store.n },
       month: { total_cents: monthTotal, goal_cents: goal?.target ?? null, goal_percent: goal?.target ? Math.round(monthTotal * 100 / goal.target) : null },

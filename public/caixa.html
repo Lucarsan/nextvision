@@ -98,7 +98,7 @@
   .tefpend{border:1px solid #e6c9c2;background:#fff7f5;border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:13px}
   .tefpend p{margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .tefpend button{border:1px solid #d9c6a6;background:#fff;border-radius:8px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
-  #stTabs .chip,#ctTabs .chip{border:0;cursor:pointer}
+  #stTabs .chip,#ctTabs .chip,#dpQuick .chip{border:0;cursor:pointer}
   .ctbar{display:flex;gap:8px;align-items:center}.ctbar #ctScan{flex:1}.ctq{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}.ctq input{width:80px}
   .ctprog{height:6px;background:#efede8;border-radius:3px;margin-top:10px;overflow:hidden}.ctprog div{height:100%;width:0;background:var(--green);transition:width .3s}
   input.cti{width:70px;text-align:right;padding:4px 6px}
@@ -221,6 +221,21 @@
         <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)">
           <div class="card"><h2 style="margin:0;font-size:15px;color:var(--ink)" id="dGoalT">Minha meta do mês</h2><div class="goalbar"><i id="dGoalBar" style="width:0"></i></div><p style="margin:0;font-size:13px" id="dGoalTxt"></p></div>
           <div class="card"><h2 style="margin:0;font-size:15px;color:var(--ink)">Minhas vendas de hoje</h2><table><thead><tr><th>Hora</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th></tr></thead><tbody id="dSales"></tbody></table></div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h2 style="margin:0 0 10px;font-size:15px;color:var(--ink)">Minhas vendas por período</h2>
+          <div class="chips" id="dpQuick"><button type="button" class="chip" data-q="yesterday">Ontem</button><button type="button" class="chip" data-q="7">Últimos 7 dias</button><button type="button" class="chip" data-q="month">Este mês</button><button type="button" class="chip" data-q="lastmonth">Mês passado</button></div>
+          <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:10px">
+            <label class="sub" style="margin:0">De<br><input class="field" type="date" id="dpFrom" style="width:auto;padding:5px 8px"></label>
+            <label class="sub" style="margin:0">Até<br><input class="field" type="date" id="dpTo" style="width:auto;padding:5px 8px"></label>
+            <button type="button" class="go" id="dpGo" style="margin:0;width:auto;padding:8px 16px">Ver</button></div>
+          <p class="msg" id="dpMsg"></p>
+          <div id="dpBox" hidden>
+            <div class="kpis" style="grid-template-columns:repeat(2,1fr);margin:10px 0"><div class="card kpi" style="box-shadow:none;border:1px solid #eee"><span id="dpLabel">No período</span><strong id="dpTotal"></strong><em id="dpCount"></em></div>
+              <div class="card kpi" style="box-shadow:none;border:1px solid #eee"><span>Média por dia com venda</span><strong id="dpAvg"></strong><em id="dpDays"></em></div></div>
+            <table><thead><tr><th>Dia</th><th class="n">Vendas</th><th class="n">Total</th></tr></thead><tbody id="dpRows"></tbody></table>
+            <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Ver cada venda</summary><table><thead><tr><th>Quando</th><th>Cliente</th><th class="n">Valor</th><th>Forma</th></tr></thead><tbody id="dpSales"></tbody></table></details>
+          </div>
         </div>
         <div class="protect">A vendedora não vê custo, lucro nem a comissão das colegas.</div>
         <button type="button" class="linkbtn" id="dayLock" style="margin-top:12px">Sair do Meu dia</button>
@@ -727,13 +742,15 @@
   };
 
   // ---------- Meu dia ----------
-  let dayTimer;
+  let dayTimer, dayAuth = null;
+  const dayIdle = () => { clearTimeout(dayTimer); dayTimer = setTimeout(drawDayPick, 120000); };
   function drawDayPick() {
+    dayAuth = null; $('dpBox').hidden = true; $('dpMsg').textContent = '';
     $('dayPick').hidden = false; $('dayBox').hidden = true; $('daySub').textContent = 'Toque no seu nome e digite o seu PIN';
     $('daySellers').innerHTML = sellers.map(s => '<button type="button" data-d="' + safe(s.id) + '">' + safe(s.name.split(' ')[0]) + '</button>').join('') || '<span class="sub">Nenhuma vendedora cadastrada.</span>';
     $('daySellers').querySelectorAll('[data-d]').forEach(b => b.onclick = () => {
       const s = sellers.find(x => x.id === b.dataset.d); let data;
-      askPin(s, () => showDay(data), async pin => { data = await api('/store/kiosk/my-day', 'POST', { seller_id: s.id, pin }); });
+      askPin(s, () => showDay(data), async pin => { data = await api('/store/kiosk/my-day', 'POST', { seller_id: s.id, pin }); dayAuth = { seller_id: s.id, pin }; });
     });
   }
   function showDay(d) {
@@ -748,8 +765,39 @@
     $('dGoalBar').style.width = Math.min(100, d.month.goal_percent || 0) + '%';
     $('dGoalTxt').innerHTML = '<strong>' + brl(d.month.total_cents) + '</strong> vendidos no mês.' + (d.month.goal_cents ? ' Meta: ' + brl(d.month.goal_cents) + ' (' + d.month.goal_percent + '%).' : ' Meta ainda não definida.');
     $('dSales').innerHTML = d.today.sales.map(x => '<tr><td>' + safe(x.hora) + '</td><td>' + safe(x.cliente || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + (METHOD[x.payment_method] || '') + '</td></tr>').join('') || '<tr><td colspan="4" class="sub">Nenhuma venda hoje ainda.</td></tr>';
-    // Sai sozinho depois de 1 minuto, para a próxima não ver os números da colega.
-    clearTimeout(dayTimer); dayTimer = setTimeout(drawDayPick, 60000);
+    // Sai sozinho depois de 2 minutos sem uso, para a próxima não ver os números da colega.
+    dayIdle();
+  }
+  // Período: datas no fuso de Fortaleza (AAAA-MM-DD).
+  const fzDay = (d = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
+  const addDays = (ymd, n) => { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const dmyD = ymd => ymd.slice(8, 10) + '/' + ymd.slice(5, 7) + '/' + ymd.slice(0, 4);
+  $('dpTo').max = $('dpFrom').max = fzDay();
+  $('dpQuick').querySelectorAll('[data-q]').forEach(b => b.onclick = () => {
+    const today = fzDay(), q = b.dataset.q; let f = today, t = today;
+    if (q === 'yesterday') f = t = addDays(today, -1);
+    else if (q === '7') f = addDays(today, -6);
+    else if (q === 'month') f = today.slice(0, 8) + '01';
+    else if (q === 'lastmonth') { t = addDays(today.slice(0, 8) + '01', -1); f = t.slice(0, 8) + '01'; }
+    $('dpFrom').value = f; $('dpTo').value = t; loadPeriod();
+  });
+  $('dpGo').onclick = () => loadPeriod();
+  async function loadPeriod() {
+    const m = $('dpMsg'); m.className = 'msg'; dayIdle();
+    if (!dayAuth) { drawDayPick(); return; }
+    const from = $('dpFrom').value, to = $('dpTo').value;
+    if (!from || !to) { m.className = 'msg err'; m.textContent = 'Escolha a data inicial e a final.'; return; }
+    m.textContent = 'Carregando…';
+    let d; try { d = await api('/store/kiosk/my-day', 'POST', { ...dayAuth, from, to }); } catch (e) { m.className = 'msg err'; m.textContent = e.message; return; }
+    const p = d.period; m.textContent = '';
+    $('dpLabel').textContent = from === to ? 'Em ' + dmyD(from) : 'De ' + dmyD(from) + ' a ' + dmyD(to);
+    $('dpTotal').textContent = brl(p.total_cents); $('dpCount').textContent = p.count + (p.count === 1 ? ' venda' : ' vendas');
+    $('dpAvg').textContent = p.days.length ? brl(Math.round(p.total_cents / p.days.length)) : '—';
+    $('dpDays').textContent = p.days.length + (p.days.length === 1 ? ' dia com venda' : ' dias com venda');
+    $('dpRows').innerHTML = p.days.map(x => '<tr><td>' + dmyD(x.day) + '</td><td class="n">' + x.count + '</td><td class="n">' + brl(x.total_cents) + '</td></tr>').join('') || '<tr><td colspan="3" class="sub">Nenhuma venda nesse período.</td></tr>';
+    $('dpSales').innerHTML = p.sales.map(x => '<tr><td>' + safe(x.quando) + '</td><td>' + safe(x.cliente || '—') + '</td><td class="n">' + brl(x.total_cents) + '</td><td>' + (METHOD[x.payment_method] || '') + '</td></tr>').join('')
+      + (p.truncated ? '<tr><td colspan="4" class="sub">Mostrando as 200 mais recentes.</td></tr>' : '');
+    $('dpBox').hidden = false;
   }
   $('dayLock').onclick = () => { clearTimeout(dayTimer); drawDayPick(); };
 

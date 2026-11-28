@@ -303,14 +303,15 @@ export async function dbChecks(q, now = new Date(), { awakeMinutes = 999 } = {})
     const who = d.store + ' · ' + d.name;
     const age = d.last_seen_at ? (now - new Date(d.last_seen_at)) / 60000 : null;
     if (age != null && age <= 15) online++;
-    // PC sem sinal, em três situações (a loja abre no horário dela, não às 6h45):
-    // - estava ligado hoje e parou há 15+ min → crítico (caiu durante o atendimento);
+    // PC sem sinal (a loja abre no horário dela, não às 6h45):
+    // - estava ligado hoje e parou → sem aviso (desligado por pedido do Lucas, 28/11/2026);
     // - não ligou hoje até 3 h depois da abertura da plataforma → atenção (uma vez por dia);
     // - parado há mais de 3 dias → só informação, sem aviso (PC de teste, loja parada).
     // Só avalia depois de 15 min acordado: de manhã o "visto por último" ainda é o da véspera.
     if (open && awakeMinutes >= 15 && age != null && age > 15) {
       const seenToday = new Date(d.last_seen_at).getTime() >= opening;
-      if (seenToday) items.push(alert('device.offline.' + d.id, 'critical', 'lojas', 'Computador da loja parou de responder: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. Estava ligado hoje e caiu: sem vídeo nem gravação. Ver: PC desligado, sem internet ou serviço parado.', d.tenant_id));
+      // Ligado hoje e parou: sem aviso (cada loja fecha num horário; desligar o PC cedo é normal).
+      if (seenToday) { /* sem aviso */ }
       else if (age > 3 * 24 * 60) items.push(alert('device.inactive.' + d.id, 'info', 'lojas', 'Computador parado há ' + Math.floor(age / 1440) + ' dias: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. Se for PC de teste ou loja desativada, desative o computador em Dispositivos.', d.tenant_id));
       else if (now - opening >= 3 * HOUR) items.push(alert('device.notstarted.' + d.id + '.' + localDay, 'warn', 'lojas', 'Computador da loja não ligou hoje: ' + who, 'Último sinal: ' + fmtDT(d.last_seen_at) + '. A loja pode não ter aberto, ou o PC está desligado/sem internet.', d.tenant_id));
     }
@@ -435,7 +436,8 @@ async function persist(q, items, scopes, now, notify) {
     if (seen.has(r.key) || !scopes.has(r.category)) continue;
     const t = await q("UPDATE platform_alerts SET status='resolved',resolved_at=now() WHERE key=$1 AND status='open' RETURNING title,severity,notified_at", [r.key]);
     const row = t.rows[0];
-    if (notify && row?.notified_at && row.severity !== 'info') notes.push({ type: 'resolved', alert: { key: r.key, title: row.title, severity: row.severity } });
+    // "PC parou de responder" foi desligado: os que ficaram abertos fecham sem avisar "resolvido".
+    if (notify && row?.notified_at && row.severity !== 'info' && !r.key.startsWith('device.offline.')) notes.push({ type: 'resolved', alert: { key: r.key, title: row.title, severity: row.severity } });
   }
   return notes;
 }

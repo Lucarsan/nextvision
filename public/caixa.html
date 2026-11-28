@@ -800,6 +800,9 @@
   // ---------- Comprovante e cobranças do dia (TEF) ----------
   const TEFST = { approved: 'Aprovada', reversed: 'Estornada', declined: 'Recusada', error: 'Erro', pending: 'Aguardando', unknown: 'Sem resposta', expired: 'Pix expirado' };
   const fz = d => d ? new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Fortaleza' }) : '';
+  // Via da Stone: o AutoTEF devolve marcadores do parceiro ([[NSUPARCEIRO]], [[PDVPARCEIRO]]) para o sistema preencher.
+  const via = (txt, r) => String(txt).replace(/\r/g, '').replace(/\[\[NSUPARCEIRO\]\]/g, r.sale_number ? 'VENDA ' + r.sale_number : String(r.id).slice(0, 8).toUpperCase())
+    .replace(/\[\[PDVPARCEIRO\]\]/g, 'FICOUPRONTO ' + (r.terminal_serial || '')).replace(/\[\[[A-Z]+\]\]/g, '');
   async function showTefReceipt(id) {
     let r; try { r = await api('/store/tef/transactions/' + id + '/receipt'); } catch (e) { alert(e.message); return; }
     const kind = r.method === 'pix' ? 'PIX' : (r.method === 'debit' ? 'DÉBITO' : 'CRÉDITO') + (r.method === 'credit' ? (r.installments > 1 ? ' PARCELADO ' + r.installments + 'X SEM JUROS' : ' À VISTA') : '');
@@ -811,8 +814,8 @@
       r.sale_number ? 'VENDA Nº ' + r.sale_number : '', r.mode !== 'production' ? '(' + r.mode + ')' : '',
       ...(r.reversal ? ['', '*** ESTORNO ***', 'DATA/HORA DO ESTORNO: ' + (r.reversal.datetime ? fz(r.reversal.datetime + (/[zZ]|[+-]\d\d:?\d\d$/.test(r.reversal.datetime) ? '' : 'Z')) : fz(r.reversed_at)),
         r.reversal.atk ? 'ATK DO ESTORNO: ' + r.reversal.atk : '', r.reversal.auth_code ? 'AUT. DO ESTORNO: ' + r.reversal.auth_code : ''] : []),
-      ...(r.client_receipt ? ['', '----- VIA DA STONE (CLIENTE) -----', r.client_receipt.replace(/\r/g, '')] : []),
-      ...(r.reversal && r.reversal.receipt ? ['', '----- VIA DA STONE (ESTORNO) -----', r.reversal.receipt.replace(/\r/g, '')] : [])];
+      ...(r.client_receipt ? ['', '----- VIA DA STONE (CLIENTE) -----', via(r.client_receipt, r)] : []),
+      ...(r.reversal && r.reversal.receipt ? ['', '----- VIA DA STONE (ESTORNO) -----', via(r.reversal.receipt, r)] : [])];
     $('tefRc').textContent = L.filter((x, i) => x !== '' || (i > 0 && L[i - 1] !== '')).join('\n').trim();
     $('tefDlg').showModal();
   }

@@ -120,11 +120,13 @@ export function registerKiosk(app, { q, auth, roles, route, bad, valid, audit, u
       if (!chk.short) return bad(res, 400, 'Escolha um período de até 1 ano');
       const where = `x.tenant_id = $1 AND x.seller_id = $2 AND x.canceled_at IS NULL AND (x.created_at AT TIME ZONE '${tz}')::date BETWEEN $3::date AND $4::date`;
       const tot = (await q(`SELECT count(*)::int n, coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE ${where}`, [tenant, s.id, v.from, v.to])).rows[0];
+      const shop = (await q(`SELECT count(*)::int n, coalesce(sum(total_cents), 0)::bigint total FROM sales x WHERE x.tenant_id = $1 AND x.canceled_at IS NULL
+        AND (x.created_at AT TIME ZONE '${tz}')::date BETWEEN $2::date AND $3::date`, [tenant, v.from, v.to])).rows[0];
       const days = await q(`SELECT to_char((x.created_at AT TIME ZONE '${tz}')::date, 'YYYY-MM-DD') dia, count(*)::int n, sum(total_cents)::bigint total
         FROM sales x WHERE ${where} GROUP BY 1 ORDER BY 1 DESC`, [tenant, s.id, v.from, v.to]);
       const list = await q(`SELECT to_char(x.created_at AT TIME ZONE '${tz}', 'DD/MM HH24:MI') quando, c.name cliente, x.total_cents, x.payment_method
         FROM sales x LEFT JOIN customers c ON c.id = x.customer_id WHERE ${where} ORDER BY x.created_at DESC LIMIT 200`, [tenant, s.id, v.from, v.to]);
-      period = { from: v.from, to: v.to, total_cents: Number(tot.total), count: tot.n,
+      period = { from: v.from, to: v.to, total_cents: Number(tot.total), count: tot.n, store: { total_cents: Number(shop.total), count: shop.n },
         days: days.rows.map(d => ({ day: d.dia, count: d.n, total_cents: Number(d.total) })), sales: list.rows, truncated: tot.n > list.rowCount };
     }
     res.set('Cache-Control', 'no-store').json({

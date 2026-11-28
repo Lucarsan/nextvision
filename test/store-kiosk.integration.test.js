@@ -109,7 +109,7 @@ test('quiosque: senha da unidade abre o caixa, vendedora confirma com PIN e dono
     const pToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
     const pYest = new Date(Date.now() - 864e5).toLocaleDateString('en-CA', { timeZone: 'America/Fortaleza' });
     const mp = await api('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pYest, to: pToday } });
-    assert.equal(mp.period.count, 1); assert.equal(mp.period.total_cents, 4410); assert.equal(mp.period.days.length, 1); assert.equal(mp.period.sales.length, 1);
+    assert.equal(mp.period.count, 1); assert.equal(mp.period.total_cents, 4410); assert.equal(mp.period.days.length, 1); assert.equal(mp.period.sales.length, 1); assert.equal(mp.period.store.count, 1);
     assert.equal(md.period, null);
     assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pToday, to: pYest } })).status, 400);
     assert.equal((await request('/store/kiosk/my-day', { method: 'POST', token: kt, body: { seller_id: ana.id, pin: '1234', from: pToday } })).status, 400);

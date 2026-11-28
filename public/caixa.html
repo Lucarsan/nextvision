@@ -808,7 +808,11 @@
       r.reading ? 'LEITURA: ' + r.reading : '', 'VALOR: ' + brl(r.amount_cents) + (r.installments > 1 ? ' (' + r.installments + 'x de ' + brl(Math.floor(r.amount_cents / r.installments)) + ')' : ''), '',
       'DATA/HORA: ' + (r.transaction_datetime ? fz(r.transaction_datetime + 'Z') : fz(r.finished_at || r.created_at)), r.auth_code ? 'AUT: ' + r.auth_code : '', r.atk ? 'ATK: ' + r.atk : '', r.itk ? 'ITK: ' + r.itk : '', r.e2e_id ? 'E2E: ' + r.e2e_id : '',
       'SITUAÇÃO: ' + (TEFST[r.status] || r.status) + (r.status === 'reversed' && r.reversed_at ? ' em ' + fz(r.reversed_at) : '') + (r.status !== 'approved' && r.status !== 'reversed' && r.message ? ' · ' + r.message : ''),
-      r.sale_number ? 'VENDA Nº ' + r.sale_number : '', r.mode !== 'production' ? '(' + r.mode + ')' : ''];
+      r.sale_number ? 'VENDA Nº ' + r.sale_number : '', r.mode !== 'production' ? '(' + r.mode + ')' : '',
+      ...(r.reversal ? ['', '*** ESTORNO ***', 'DATA/HORA DO ESTORNO: ' + (r.reversal.datetime ? fz(r.reversal.datetime + (/[zZ]|[+-]\d\d:?\d\d$/.test(r.reversal.datetime) ? '' : 'Z')) : fz(r.reversed_at)),
+        r.reversal.atk ? 'ATK DO ESTORNO: ' + r.reversal.atk : '', r.reversal.auth_code ? 'AUT. DO ESTORNO: ' + r.reversal.auth_code : ''] : []),
+      ...(r.client_receipt ? ['', '----- VIA DA STONE (CLIENTE) -----', r.client_receipt.replace(/\r/g, '')] : []),
+      ...(r.reversal && r.reversal.receipt ? ['', '----- VIA DA STONE (ESTORNO) -----', r.reversal.receipt.replace(/\r/g, '')] : [])];
     $('tefRc').textContent = L.filter((x, i) => x !== '' || (i > 0 && L[i - 1] !== '')).join('\n').trim();
     $('tefDlg').showModal();
   }

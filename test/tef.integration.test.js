@@ -103,7 +103,10 @@ test('TEF Stone: cobrança registrada antes do pinpad, venda só com aprovação
     assert.deepEqual(cx.tef_to_reverse, [{ id: t1.id, method: 'credit', amount_cents: 4900 }]);
     pend = (await api('/store/tef/pending', { token: kt })).items;
     assert.deepEqual(pend.map(p => [p.id, p.reason, p.sale_number]), [[t1.id, 'sale_canceled', s1.data.sale.sale_number]]);
-    await api(`/store/tef/transactions/${t1.id}/reversed`, { method: 'POST', token: kt, body: {} });
+    await api(`/store/tef/transactions/${t1.id}/reversed`, { method: 'POST', token: kt, body: { body: { receipt: { acquirerTransactionKey: 'EST-777', transactionDateTime: '2026-11-28T13:00:00', clientVia: 'VIA ESTORNO' } } } });
+    const rv = await api(`/store/tef/transactions/${t1.id}/receipt`, { token: kt });
+    assert.equal(rv.reversal.atk, 'EST-777', 'comprovante mostra o ATK do estorno'); assert.equal(rv.reversal.receipt, 'VIA ESTORNO');
+    assert.equal((await db.query('SELECT reversal_response FROM tef_transactions WHERE id=$1', [t1.id])).rows[0].reversal_response.receipt.clientVia, undefined, 'via não vai para o jsonb');
 
     // Pix: QR criado → pago (endToEndId) → venda com Pix dinâmico; expirado não vira venda.
     const p1 = await tx({ method: 'pix', amount_cents: 4900 });

@@ -134,7 +134,7 @@
       let r;
       try { r = await call('/api/Cancel/', d.request, 180000); } catch { throw Error('O pinpad não respondeu ao estorno. A cobrança continua em Pendências do pinpad.'); }
       if (r.status !== 200) throw Error('Estorno não feito no pinpad (' + (code(r.body) || r.status) + '). A cobrança continua em Pendências do pinpad.');
-      return api('/store/tef/transactions/' + txId + '/reversed', 'POST', {});
+      return api('/store/tef/transactions/' + txId + '/reversed', 'POST', { body: r.body && typeof r.body === 'object' && !Array.isArray(r.body) ? r.body : null });
     }
 
     return { mode: cfg.mode, ready, initialize, payCard, payPix, reverse, get serial() { return serial; } };

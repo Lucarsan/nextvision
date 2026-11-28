@@ -70,3 +70,12 @@ test('comprovante montado com a resposta real (receipt/card)', async () => {
   assert.equal(r.reading, 'Aproximação (NFC)'); assert.equal(r.atk, '43163894321099'); assert.equal(r.itk, '717642271120261238153988');
   assert.equal(r.merchant_address, 'Av. X, 1'); assert.equal(r.merchant_document, '50926162000123'); assert.equal(r.transaction_datetime, '2026-11-27T15:38:56');
 });
+
+test('estorno: ATK, data e via do estorno vêm de "receipt" ou do topo', async () => {
+  const { reversalOf } = await import('../src/tef.js');
+  assert.deepEqual(reversalOf(null), { atk: null, datetime: null, auth_code: null, receipt: null });
+  const a = reversalOf({ receipt: { acquirerTransactionKey: '999', transactionDateTime: '2026-11-28T13:00:00', clientVia: 'VIA ESTORNO' } });
+  assert.equal(a.atk, '999'); assert.equal(a.datetime, '2026-11-28T13:00:00'); assert.equal(a.receipt, 'VIA ESTORNO');
+  assert.equal(reversalOf({ AcquirerTransactionKey: '888', merchantVia: 'VIA LOJA' }).atk, '888');
+  assert.equal(reversalOf({}).atk, null);
+});

@@ -12,6 +12,8 @@ import { z } from 'zod';
 
 // Stone Instituição de Pagamento S.A. (credenciadora): CNPJ que vai no grupo do cartão da NFC-e.
 export const STONE_CNPJ = '16501555000157';
+// Nome da aplicação (partnerName) que o caixa manda na ativação do pinpad: é o "Partner.name" da homologação.
+export const PARTNER_NAME = 'FICOUPRONTO 1.0';
 export const TEF_MODES = ['off', 'simulator', 'sandbox', 'production'];
 const digits = v => String(v ?? '').replace(/\D/g, '');
 const str = (v, max) => (v == null || v === '' ? null : String(v).trim().slice(0, max) || null);
@@ -100,6 +102,15 @@ export const tefForSale = t => ({
 
 const PUBLIC = 'id,sale_id,mode,method,amount_cents,installments,status,provider_tx,auth_code,brand_name,card_mask,e2e_id,error_code,message,created_at,finished_at,reversed_at,resolved_note';
 
+// Resposta do estorno (POST /api/Cancel/) → ATK, data/hora e via do estorno (lê "receipt" primeiro, como no pagamento).
+export function reversalOf(body) {
+  if (!body || typeof body !== 'object') return { atk: null, datetime: null, auth_code: null, receipt: null };
+  const rc = pick(body, 'receipt');
+  const get = (...k) => { const x = pick(rc, ...k); return x !== undefined && x !== null && x !== '' ? x : pick(body, ...k); };
+  return { atk: str(get('acquirerTransactionKey'), 80), datetime: str(get('transactionDateTime', 'cancellationDateTime'), 40),
+    auth_code: str(get('authorisationCode', 'authorizationCode'), 80), receipt: str(get('clientVia'), 8000) || str(get('merchantVia'), 8000) };
+}
+
 // Comprovante a partir da cobrança gravada (a resposta do Slim fica em response; os dados vêm dentro de "receipt"/"card").
 const READING = { EMVProximityReader: 'Aproximação (NFC)', EMVChip: 'Chip', EMV: 'Chip', MagneticStripe: 'Tarja magnética' };
 export function receiptOf(t) {
@@ -115,6 +126,7 @@ export function receiptOf(t) {
     transaction_datetime: str(get('transactionDateTime'), 40), auth_code: t.auth_code, atk: t.provider_tx, itk: str(get('initiatorTransactionKey'), 80),
     e2e_id: t.e2e_id, terminal_serial: t.terminal_serial, message: t.message, error_code: t.error_code,
     client_receipt: t.client_receipt, created_at: t.created_at, finished_at: t.finished_at, reversed_at: t.reversed_at,
+    reversal: t.reversed_at ? { ...reversalOf(t.reversal_response), receipt: t.reversal_receipt || null } : null,
   };
 }
 
@@ -136,7 +148,7 @@ export function registerTef(app, { q, auth, roles, route, bad, valid, audit, uui
     const t = await unitTef(req);
     res.set('Cache-Control', 'no-store').json({
       mode: t?.sales_enabled ? t.tef_mode : 'off', stone_code: t?.tef_stone_code || null, pinpad_port: t?.tef_pinpad_port || null,
-      local_url: t?.tef_local_url || 'http://127.0.0.1:8000', partner_name: 'FICOUPRONTO 1.0', cnpj: t?.cnpj || null,
+      local_url: t?.tef_local_url || 'http://127.0.0.1:8000', partner_name: PARTNER_NAME, cnpj: t?.cnpj || null,
     });
   }));
 
@@ -213,9 +225,13 @@ export function registerTef(app, { q, auth, roles, route, bad, valid, audit, uui
   app.post('/api/store/tef/transactions/:id/reversed', ...staff, route(async (req, res) => {
     if (!id(req, res)) return;
     if (req.user.access_level === 'basic' && !req.user.kiosk) return bad(res, 403, 'Seu acesso (operador novato) não permite estornar');
-    const r = await q(`UPDATE tef_transactions t SET status='reversed',reversed_at=now(),reversed_by=$3
+    // body: resposta do /api/Cancel/ do Slim, como veio (ATK, data e via do estorno para o comprovante).
+    const v = valid(z.object({ body: z.record(z.any()).nullable().default(null) }).strict(), req, res); if (!v) return;
+    const rv = reversalOf(v.body);
+    const raw = v.body ? JSON.stringify(JSON.parse(JSON.stringify(v.body, (k, x) => (/^(clientVia|merchantVia)$/i.test(k) ? undefined : x)))) : null;
+    const r = await q(`UPDATE tef_transactions t SET status='reversed',reversed_at=now(),reversed_by=$3,reversal_response=$4::jsonb,reversal_receipt=$5
       WHERE t.id=$1 AND t.tenant_id=$2 AND t.status='approved' AND t.method<>'pix'
-        AND (t.sale_id IS NULL OR EXISTS(SELECT 1 FROM sales s WHERE s.id=t.sale_id AND s.canceled_at IS NOT NULL)) RETURNING ${PUBLIC}`, [req.params.id, tid(req), req.user.id]);
+        AND (t.sale_id IS NULL OR EXISTS(SELECT 1 FROM sales s WHERE s.id=t.sale_id AND s.canceled_at IS NOT NULL)) RETURNING ${PUBLIC}`, [req.params.id, tid(req), req.user.id, raw, rv.receipt]);
     if (!r.rowCount) return bad(res, 409, 'Só dá para estornar cobrança aprovada sem venda ou de venda cancelada');
     await audit(req, 'tef_reversed', 'tef_transaction', req.params.id); res.json(r.rows[0]);
   }));
@@ -254,7 +270,7 @@ export function registerTef(app, { q, auth, roles, route, bad, valid, audit, uui
     const t = (await q('SELECT tef_mode mode,tef_stone_code stone_code,tef_pinpad_port pinpad_port,tef_local_url local_url FROM tenants WHERE id=$1', [req.params.id])).rows[0];
     if (!t) return bad(res, 404, 'Loja não encontrada');
     const last = (await q(`SELECT mode,method,status,amount_cents,created_at FROM tef_transactions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 5`, [req.params.id])).rows;
-    res.json({ ...t, last });
+    res.json({ ...t, partner_name: PARTNER_NAME, last });
   }));
   app.patch('/api/master/tenants/:id/tef', ...master, route(async (req, res) => {
     if (!id(req, res)) return;

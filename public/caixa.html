@@ -351,7 +351,7 @@
   <button type="button" class="linkbtn" id="pinCancel" style="display:block;margin:6px auto 0">Cancelar</button>
 </dialog>
 
-<script src="/tef-client.js?v=2"></script>
+<script src="/tef-client.js?v=3"></script>
 <script>
 (() => {
   let token = ''; try { token = localStorage.getItem('fp_kiosk_token') || ''; } catch { }
@@ -813,7 +813,7 @@
       'SITUAÇÃO: ' + (TEFST[r.status] || r.status) + (r.status === 'reversed' && r.reversed_at ? ' em ' + fz(r.reversed_at) : '') + (r.status !== 'approved' && r.status !== 'reversed' && r.message ? ' · ' + r.message : ''),
       r.sale_number ? 'VENDA Nº ' + r.sale_number : '', r.mode !== 'production' ? '(' + r.mode + ')' : '',
       ...(r.reversal ? ['', '*** ESTORNO ***', 'DATA/HORA DO ESTORNO: ' + (r.reversal.datetime ? fz(r.reversal.datetime + (/[zZ]|[+-]\d\d:?\d\d$/.test(r.reversal.datetime) ? '' : 'Z')) : fz(r.reversed_at)),
-        r.reversal.atk ? 'ATK DO ESTORNO: ' + r.reversal.atk : '', r.reversal.auth_code ? 'AUT. DO ESTORNO: ' + r.reversal.auth_code : ''] : []),
+        'ATK DO ESTORNO: ' + (r.reversal.atk || r.atk || '—'), r.reversal.auth_code ? 'AUT. DO ESTORNO: ' + r.reversal.auth_code : ''] : []),
       ...(r.client_receipt ? ['', '----- VIA DA STONE (CLIENTE) -----', via(r.client_receipt, r)] : []),
       ...(r.reversal && r.reversal.receipt ? ['', '----- VIA DA STONE (ESTORNO) -----', via(r.reversal.receipt, r)] : [])];
     $('tefRc').textContent = L.filter((x, i) => x !== '' || (i > 0 && L[i - 1] !== '')).join('\n').trim();
@@ -839,7 +839,7 @@
   async function reverseOne(id, method, cents) {
     if (method === 'pix') { alert('Pix de ' + brl(cents) + ': a devolução é feita pelo app da Stone. Depois, marque como resolvido em "Pendências do pinpad".'); return false; }
     if (!tef) { alert('O TEF não está ligado nesta unidade.'); return false; }
-    if (!confirm('Estornar ' + brl(cents) + ' no pinpad agora? Precisa do MESMO cartão da compra.')) return false;
+    if (!confirm('Estornar ' + brl(cents) + ' no pinpad agora? Se o pinpad pedir, use o MESMO cartão da compra.')) return false;
     try { await tef.reverse(id, t => { $('tefPend').hidden = false; $('tefPend').innerHTML = '<strong>' + safe(t) + '</strong>'; }); alert('Estorno de ' + brl(cents) + ' feito.'); showTefReceipt(id); loadTefToday(); return true; }
     catch (e) { alert(e.message); return false; } finally { loadTefPending(); }
   }
